@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,10 +33,10 @@ public class HeapOptions {
     @Option(help = "Use a card remembered set heap for GC")//
     public static final HostedOptionKey<Boolean> UseCardRememberedSetHeap = new HostedOptionKey<>(true);
 
-    @Option(help = "Print the shape of the heap before and after each collection.")//
+    @Option(help = "Print the shape of the heap before and after each collection, if +VerboseGC.")//
     public static final RuntimeOptionKey<Boolean> PrintHeapShape = new RuntimeOptionKey<>(false);
 
-    @Option(help = "Print the time for each of the phases of each collection.")//
+    @Option(help = "Print the time for each of the phases of each collection, if +VerboseGC.")//
     public static final RuntimeOptionKey<Boolean> PrintGCTimes = new RuntimeOptionKey<>(false);
 
     /** This produces a lot of output: be prepared to stream the output to a post-processor. */

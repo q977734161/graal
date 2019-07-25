@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -136,10 +138,10 @@ public class CloneTypeFlow extends TypeFlow<ValueNode> {
                 for (AnalysisObject originalObject : inputState.objects(type)) {
                     /* Link all the field flows of the original to the clone. */
                     for (AnalysisField field : type.getInstanceFields(true)) {
-                        FieldTypeFlow originalObjectFieldFlow = originalObject.getInstanceFieldFlow(bb, field, false);
+                        FieldTypeFlow originalObjectFieldFlow = originalObject.getInstanceFieldFlow(bb, this.method(), field, false);
 
                         for (AnalysisObject cloneObject : cloneState.objects(type)) {
-                            FieldTypeFlow cloneObjectFieldFlow = cloneObject.getInstanceFieldFlow(bb, field, true);
+                            FieldTypeFlow cloneObjectFieldFlow = cloneObject.getInstanceFieldFlow(bb, this.method(), field, true);
                             originalObjectFieldFlow.addUse(bb, cloneObjectFieldFlow);
                         }
                     }

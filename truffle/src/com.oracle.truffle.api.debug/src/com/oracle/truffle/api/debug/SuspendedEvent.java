@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
@@ -39,7 +55,10 @@ import com.oracle.truffle.api.debug.DebuggerNode.InputValuesProvider;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.Instrumenter;
+import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -114,7 +133,7 @@ public final class SuspendedEvent {
     private InsertableNode insertableNode;
     private List<Breakpoint> breakpoints;
     private InputValuesProvider inputValuesProvider;
-    private Object returnValue;
+    private volatile Object returnValue;
     private DebugException exception;
 
     private volatile boolean disposed;
@@ -225,7 +244,7 @@ public final class SuspendedEvent {
      */
     public SourceSection getSourceSection() {
         verifyValidState(true);
-        return sourceSection;
+        return session.resolveSection(sourceSection);
     }
 
     /**
@@ -307,12 +326,32 @@ public final class SuspendedEvent {
         return getTopStackFrame().wrapHeapValue(ret);
     }
 
+    Object getReturnObject() {
+        return returnValue;
+    }
+
+    /**
+     * Change the return value. When there is a {@link #getReturnValue() return value} at the
+     * current location, this method modifies the return value to a new one.
+     *
+     * @param newValue the new return value, can not be <code>null</code>
+     * @throws IllegalStateException when {@link #getReturnValue()} returns <code>null</code>
+     * @since 19.0
+     */
+    public void setReturnValue(DebugValue newValue) {
+        verifyValidState(false);
+        if (returnValue == null) {
+            throw new IllegalStateException("Can not set return value when there is no current return value.");
+        }
+        this.returnValue = newValue.get();
+    }
+
     /**
      * Returns the debugger representation of a guest language exception that caused this suspended
      * event (via an exception breakpoint, for instance). Returns <code>null</code> when no
      * exception occurred.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public DebugException getException() {
         return exception;
@@ -641,13 +680,17 @@ public final class SuspendedEvent {
             if (otherFrames == null) {
                 final List<DebugStackFrame> frameInstances = new ArrayList<>();
                 Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<FrameInstance>() {
-                    private int depth = -context.getStackDepth() - 1;
+                    private int depth = -context.getStackDepth() - 1 + getTopFrameIndex();
 
                     @Override
                     public FrameInstance visitFrame(FrameInstance frameInstance) {
                         if (isEvalRootStackFrame(session, frameInstance)) {
                             // we stop at eval root stack frames
                             return frameInstance;
+                        }
+                        Node callNode = frameInstance.getCallNode();
+                        if (callNode != null && !hasRootTag(callNode)) {
+                            return null;
                         }
                         if (++depth <= 0) {
                             return null;
@@ -661,10 +704,32 @@ public final class SuspendedEvent {
             return otherFrames;
         }
 
+        private boolean hasRootTag(Node callNode) {
+            Node node = callNode;
+            do {
+                if (node instanceof InstrumentableNode && ((InstrumentableNode) node).hasTag(RootTag.class)) {
+                    return true;
+                }
+                node = node.getParent();
+            } while (node != null);
+            return false;
+        }
+
+        private int getTopFrameIndex() {
+            if (context.getStackDepth() == 0) {
+                return 0;
+            }
+            if (hasRootTag(context.getInstrumentedNode())) {
+                return 0;
+            } else {
+                return 1; // Skip synthetic frame
+            }
+        }
+
         public Iterator<DebugStackFrame> iterator() {
             return new Iterator<DebugStackFrame>() {
 
-                private int index;
+                private int index = getTopFrameIndex();
                 private Iterator<DebugStackFrame> otherIterator;
 
                 public boolean hasNext() {

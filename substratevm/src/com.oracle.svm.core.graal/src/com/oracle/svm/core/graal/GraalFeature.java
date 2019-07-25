@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,14 +34,12 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.phases.util.Providers;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallLinkage;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
-
-import jdk.vm.ci.meta.MetaAccessProvider;
 
 public interface GraalFeature extends Feature {
 
@@ -50,7 +50,7 @@ public interface GraalFeature extends Feature {
      * @param providers Providers that the lowering can use.
      * @param snippetReflection Snippet reflection providers.
      * @param foreignCalls The foreign call registry to add to.
-     * @param hosted True if registering for ahead-of-time compilation, false if registering for
+     * @param hosted True if registering for ahead-of-time compilation, false otherwise
      */
     default void registerForeignCalls(RuntimeConfiguration runtimeConfig, Providers providers, SnippetReflectionProvider snippetReflection,
                     Map<SubstrateForeignCallDescriptor, SubstrateForeignCallLinkage> foreignCalls, boolean hosted) {
@@ -62,20 +62,21 @@ public interface GraalFeature extends Feature {
      * @param providers Providers that the lowering can use.
      * @param snippetReflection Snippet reflection providers.
      * @param invocationPlugins The invocation plugins to add to.
-     * @param hosted True if registering for ahead-of-time compilation, false if registering for
+     * @param analysis true if registering for analysis, false if registering for compilation
+     * @param hosted True if registering for ahead-of-time compilation, false otherwise
      */
-    default void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean hosted) {
+    default void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean analysis, boolean hosted) {
     }
 
     /**
      * Called to register Graal node plugins.
      *
-     * @param metaAccess MetaAccessProvider that the node plugins can use.
+     * @param providers Providers that the node plugins can use.
      * @param plugins The Plugins object where node plugins can be added to.
+     * @param analysis true if registering for analysis, false if registering for compilation
      * @param hosted true if registering for ahead-of-time compilation, false if registering for
-     * @param analysis true if registering for analysis, false if registering for compilaiton
      */
-    default void registerNodePlugins(MetaAccessProvider metaAccess, Plugins plugins, boolean analysis, boolean hosted) {
+    default void registerGraphBuilderPlugins(Providers providers, Plugins plugins, boolean analysis, boolean hosted) {
     }
 
     /**

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,8 +24,6 @@
  */
 package com.oracle.svm.core.heap;
 
-import org.graalvm.word.Pointer;
-
 /**
  * A generic walker which can be registered in the GC. Used to support regions of object references
  * which are not on the regular heap or stack.
@@ -37,9 +37,6 @@ public abstract class ObjectReferenceWalker extends AllocationFreeList.Element<O
 
     /** Walk over all object references and use referenceVisitor to visit each reference. */
     public abstract boolean walk(ObjectReferenceVisitor referenceVisitor);
-
-    /** For verification: Does the memory known to this walker contain this pointer? */
-    public abstract boolean containsPointer(Pointer p);
 
     /** For debugging. */
     public String getWalkerName() {

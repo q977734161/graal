@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,7 +26,6 @@ package com.oracle.svm.core.genscavenge;
 
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.log.Log;
 
 final class SpaceVerifierImpl implements Space.Verifier {
@@ -79,13 +80,6 @@ final class SpaceVerifierImpl implements Space.Verifier {
         final AlignedHeapChunk.AlignedHeader aChunk = space.getFirstAlignedHeapChunk();
         final UnalignedHeapChunk.UnalignedHeader uChunk = space.getFirstUnalignedHeapChunk();
         return (aChunk.isNonNull() || uChunk.isNonNull());
-    }
-
-    protected boolean containsObjects() {
-        coVisitor.prologue();
-        space.walkObjects(coVisitor);
-        coVisitor.epilogue();
-        return coVisitor.get();
     }
 
     /** Verify the chunk list structures, but not the chunks themselves. */
@@ -237,56 +231,10 @@ final class SpaceVerifierImpl implements Space.Verifier {
     }
 
     private SpaceVerifierImpl() {
-        super();
-        this.coVisitor = ContainsObjectVisitor.factory();
     }
 
     /*
      * State.
      */
     private Space space;
-    /* I need one of these during GC, so I allocate one statically. */
-    private final SpaceVerifierImpl.ContainsObjectVisitor coVisitor;
-
-    /**
-     * A visitor to check for any Objects.
-     */
-    public static class ContainsObjectVisitor implements ObjectVisitor {
-
-        /** A factory for an empty ContainsObjectVisitor that then needs to be initialized. */
-        public static SpaceVerifierImpl.ContainsObjectVisitor factory() {
-            return new ContainsObjectVisitor();
-        }
-
-        @Override
-        public boolean prologue() {
-            reset();
-            return true;
-        }
-
-        @Override
-        public boolean visitObject(Object o) {
-            /* Found an object! */
-            containsObject = true;
-            /* Stop any further visiting. */
-            return false;
-        }
-
-        public boolean get() {
-            return containsObject;
-        }
-
-        private SpaceVerifierImpl.ContainsObjectVisitor reset() {
-            containsObject = false;
-            return this;
-        }
-
-        ContainsObjectVisitor() {
-            super();
-            reset();
-        }
-
-        /* State. */
-        private boolean containsObject;
-    }
 }

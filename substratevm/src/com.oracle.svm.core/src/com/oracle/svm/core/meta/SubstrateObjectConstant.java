@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 import jdk.vm.ci.meta.Constant;
@@ -59,7 +62,7 @@ public final class SubstrateObjectConstant implements JavaConstant, Compressible
     }
 
     public static Object asObject(Constant constant) {
-        if (constant instanceof JavaConstant && ((JavaConstant) constant).isNull()) {
+        if (JavaConstant.isNull(constant)) {
             return null;
         }
         return ((SubstrateObjectConstant) constant).object;
@@ -76,7 +79,7 @@ public final class SubstrateObjectConstant implements JavaConstant, Compressible
     }
 
     public static Object asObject(ResolvedJavaType type, JavaConstant constant) {
-        if (constant.isNonNull()) {
+        if (constant.isNonNull() && constant instanceof SubstrateObjectConstant) {
             Object object = ((SubstrateObjectConstant) constant).object;
             if (type.isInstance(constant)) {
                 return object;
@@ -111,6 +114,9 @@ public final class SubstrateObjectConstant implements JavaConstant, Compressible
         this.object = object;
         this.compressed = compressed;
         assert object != null;
+        if (SubstrateUtil.isInLibgraal()) {
+            throw new InternalError();
+        }
     }
 
     public Object getObject() {

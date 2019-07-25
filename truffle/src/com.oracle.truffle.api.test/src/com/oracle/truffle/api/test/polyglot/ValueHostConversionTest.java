@@ -2,23 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
@@ -37,6 +55,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -47,25 +68,22 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.PolyglotException.StackFrame;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.Proxy;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.interop.ArityException;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.Message;
-import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.UnknownIdentifierException;
-import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.examples.TargetMappings;
 import com.oracle.truffle.api.test.polyglot.ValueAssert.Trait;
 
 /**
@@ -163,6 +181,11 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertTrue(context.asValue(new String[0]).hasArrayElements());
         assertTrue(context.asValue(new ArrayList<>()).isHostObject());
         assertTrue(context.asValue(new ArrayList<>()).hasArrayElements());
+    }
+
+    @Test
+    public void testBasicExamplesLambda() {
+        Assume.assumeFalse("Cannot get reflection data for a lambda", TruffleOptions.AOT);
         assertTrue(context.asValue((Supplier<Integer>) () -> 42).execute().asInt() == 42);
     }
 
@@ -209,7 +232,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertTrue(newInstance.getMetaObject().newInstance().asHostObject() instanceof JavaRecord);
         assertSame(JavaRecord.class, newInstance.getMetaObject().asHostObject());
 
-        assertValue(context, recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
     }
 
     @Test
@@ -234,7 +257,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertTrue(newInstance.getMetaObject().newInstance().asHostObject() instanceof JavaRecord);
         assertSame(JavaRecord.class, newInstance.getMetaObject().asHostObject());
 
-        assertValue(context, recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(recordClass, Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
 
         Value bigIntegerStatic = getStaticClass(BigInteger.class);
         assertTrue(bigIntegerStatic.hasMember("ZERO"));
@@ -257,26 +280,9 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
                 return Truffle.getRuntime().createCallTarget(new RootNode(languageInstance) {
                     @Override
                     public Object execute(VirtualFrame frame) {
-                        return getCurrentContext(ProxyLanguage.class).env.lookupHostSymbol(clazz.getName());
+                        return lookupContextReference(ProxyLanguage.class).get().env.lookupHostSymbol(clazz.getName());
                     }
                 });
-            }
-
-            @Override
-            protected Object findMetaObject(LanguageContext ctx, Object value) {
-                // TODO Value.getMetaObject() should call HostLanguage.findMetaObject instead
-                if (value instanceof TruffleObject) {
-                    try {
-                        return ForeignAccess.sendInvoke(Message.createInvoke(0).createNode(), (TruffleObject) value, "getClass");
-                    } catch (UnknownIdentifierException | UnsupportedMessageException | UnsupportedTypeException | ArityException e) {
-                    }
-                    try {
-                        Object instanceClass = ForeignAccess.sendRead(Message.READ.createNode(), (TruffleObject) value, "class");
-                        return ForeignAccess.sendInvoke(Message.createInvoke(0).createNode(), (TruffleObject) instanceClass, "getClass");
-                    } catch (UnknownIdentifierException | UnsupportedMessageException | UnsupportedTypeException | ArityException e) {
-                    }
-                }
-                return "";
             }
         });
         return context.asValue(context.eval(ProxyLanguage.ID, clazz.getName()));
@@ -299,8 +305,8 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertTrue(record.hasMember("wait"));
         assertTrue(record.hasMember("notifyAll"));
 
-        assertValue(context, record, Trait.MEMBERS, Trait.HOST_OBJECT);
-        assertValue(context, record.getMetaObject(), Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(record, Trait.MEMBERS, Trait.HOST_OBJECT);
+        assertValue(record.getMetaObject(), Trait.INSTANTIABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
     }
 
     @Test
@@ -905,6 +911,90 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertEquals("object", hierarchy.execute(false).asString());
     }
 
+    @SuppressWarnings("unused")
+    public static class PrimitiveHierarchy {
+        public String hierarchy(byte arg) {
+            return "byte";
+        }
+
+        public String hierarchy(short arg) {
+            return "short";
+        }
+
+        public String hierarchy(char arg) {
+            return "char";
+        }
+
+        public String hierarchy(int arg) {
+            return "int";
+        }
+
+        public String hierarchy(long arg) {
+            return "long";
+        }
+
+        public String hierarchy(double arg) {
+            return "double";
+        }
+
+        public String hierarchy(float arg) {
+            return "float";
+        }
+
+        public String hierarchy(boolean arg) {
+            return "boolean";
+        }
+    }
+
+    @Test
+    public void testStringToPrimitive() {
+        HostAccess hostAccess = TargetMappings.enableStringCoercions(HostAccess.newBuilder().allowPublicAccess(true)).build();
+        setupEnv(Context.newBuilder().allowAllAccess(true).allowHostAccess(hostAccess).build());
+
+        Value hierarchy = context.asValue(new PrimitiveHierarchy()).getMember("hierarchy");
+
+        assertEquals("int", hierarchy.execute(String.valueOf(Integer.MIN_VALUE)).asString());
+        assertEquals("int", hierarchy.execute(String.valueOf(Integer.MAX_VALUE)).asString());
+        assertEquals("int", hierarchy.execute(String.valueOf((long) Integer.MIN_VALUE)).asString());
+        assertEquals("int", hierarchy.execute(String.valueOf((long) Integer.MAX_VALUE)).asString());
+        assertEquals("byte", hierarchy.execute(String.valueOf(Byte.MIN_VALUE)).asString());
+        assertEquals("byte", hierarchy.execute(String.valueOf(Byte.MAX_VALUE)).asString());
+        assertEquals("short", hierarchy.execute(String.valueOf(Short.MIN_VALUE)).asString());
+        assertEquals("short", hierarchy.execute(String.valueOf(Short.MAX_VALUE)).asString());
+        assertEquals("long", hierarchy.execute(String.valueOf(Integer.MIN_VALUE - 1L)).asString());
+        assertEquals("long", hierarchy.execute(String.valueOf(Integer.MAX_VALUE + 1L)).asString());
+        assertEquals("long", hierarchy.execute(String.valueOf(Long.MIN_VALUE)).asString());
+        assertEquals("long", hierarchy.execute(String.valueOf(Long.MAX_VALUE)).asString());
+
+        assertEquals("float", hierarchy.execute(String.valueOf((float) -(Math.pow(2, 24) - 1))).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf((float) +(Math.pow(2, 24) - 1))).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf(Float.MIN_VALUE)).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf(Float.MAX_VALUE)).asString());
+
+        // lossy
+        assertEquals("float", hierarchy.execute(String.valueOf((float) Integer.MIN_VALUE)).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf((float) Integer.MAX_VALUE)).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf((double) Integer.MIN_VALUE)).asString());
+        assertEquals("float", hierarchy.execute(String.valueOf((double) Integer.MAX_VALUE)).asString());
+
+        assertEquals("double", hierarchy.execute(String.valueOf(Double.MIN_VALUE)).asString());
+        assertEquals("double", hierarchy.execute(String.valueOf(Double.MAX_VALUE)).asString());
+
+        assertEquals("boolean", hierarchy.execute(String.valueOf(false)).asString());
+        assertEquals("boolean", hierarchy.execute(String.valueOf(true)).asString());
+    }
+
+    @Test
+    public void testExecuteFunction() {
+        Value function = context.asValue(new Function<Object, Object>() {
+            public Object apply(Object t) {
+                return ((int) t) * 2;
+            }
+        });
+
+        assertEquals(2, function.execute(1).asInt());
+    }
+
     @Test
     public void testExceptionFrames1() {
         Value innerInner = context.asValue(new Function<Object, Object>() {
@@ -951,7 +1041,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
     public static class TestExceptionFrames2 {
 
         public void foo() {
-            throw new RuntimeException("foo");
+            throw new RuntimeException("message");
         }
 
     }
@@ -965,7 +1055,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         } catch (PolyglotException e) {
             assertTrue(e.isHostException());
             assertTrue(e.asHostException() instanceof RuntimeException);
-            assertEquals("foo", e.getMessage());
+            assertEquals("message", e.getMessage());
             Iterator<StackFrame> frameIterator = e.getPolyglotStackTrace().iterator();
             StackFrame frame;
             frame = frameIterator.next();
@@ -997,7 +1087,7 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         } catch (PolyglotException e) {
             assertTrue(e.isHostException());
             assertTrue(e.asHostException() instanceof RuntimeException);
-            assertEquals("foo", e.getMessage());
+            assertEquals("message", e.getMessage());
             Iterator<StackFrame> frameIterator = e.getPolyglotStackTrace().iterator();
             StackFrame frame;
             frame = frameIterator.next();
@@ -1013,6 +1103,133 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
             assertTrue(frame.isHostFrame());
             assertEquals("testExceptionFrames3", frame.toHostFrame().getMethodName());
         }
+    }
+
+    public static class TestExceptionFramesWithCallToMethodInvoke {
+
+        static final Method METHOD;
+        static {
+            try {
+                METHOD = TestExceptionFramesWithCallToMethodInvoke.class.getMethod("callCallback");
+            } catch (NoSuchMethodException e) {
+                throw new Error(e);
+            }
+        }
+
+        final Value callback;
+
+        public TestExceptionFramesWithCallToMethodInvoke(Value callback) {
+            this.callback = callback;
+        }
+
+        public void callCallback() {
+            callback.execute();
+        }
+
+        public void callReflectively() {
+            try {
+                METHOD.invoke(this);
+            } catch (InvocationTargetException e) {
+                throw (RuntimeException) e.getCause();
+            } catch (ReflectiveOperationException e) {
+                throw new Error(e);
+            }
+        }
+
+        public void foo() {
+            callReflectively();
+        }
+
+    }
+
+    @Test
+    public void testExceptionFramesWithCallToMethodInvoke() {
+        Value inner = context.asValue(new Supplier<Object>() {
+            public Object get() {
+                throw new RuntimeException("foobar");
+            }
+        });
+
+        Value value = context.asValue(new TestExceptionFramesWithCallToMethodInvoke(inner));
+        try {
+            value.getMember("foo").execute();
+            Assert.fail();
+        } catch (PolyglotException e) {
+            assertTrue(e.isHostException());
+            assertEquals(RuntimeException.class, e.asHostException().getClass());
+            assertEquals("foobar", e.getMessage());
+            Iterator<StackFrame> frameIterator = e.getPolyglotStackTrace().iterator();
+            StackFrame frame;
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("get", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("execute", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("callCallback", frame.toHostFrame().getMethodName());
+
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            StackFrame last = frame;
+            // Skip Method.invoke implementation classes
+            while (frame.toHostFrame().getMethodName().startsWith("invoke")) {
+                last = frame;
+                frame = frameIterator.next();
+                assertTrue(frame.isHostFrame());
+            }
+            assertEquals(Method.class.getName(), last.toHostFrame().getClassName());
+            assertEquals("invoke", last.toHostFrame().getMethodName());
+
+            assertTrue(frame.isHostFrame());
+            assertEquals("callReflectively", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("foo", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("execute", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("testExceptionFramesWithCallToMethodInvoke", frame.toHostFrame().getMethodName());
+        }
+
+    }
+
+    public static class TestExceptionFramesCallerSensitive {
+        public int testField;
+    }
+
+    // Methods annotated with @CallerSensitive use reflection, even on JVM, so we test that case.
+    @Test
+    public void testExceptionFramesCallerSensitive() throws NoSuchFieldException {
+        // We cannot easily mark a method as @CallerSensitive (the annotation moved between JDK 8
+        // and 9), so we use an existing method marked as @CallerSensitive, Field#get().
+        Field field = TestExceptionFramesCallerSensitive.class.getField("testField");
+        Value value = context.asValue(field);
+        try {
+            value.getMember("get").execute(new Object());
+            Assert.fail();
+        } catch (PolyglotException e) {
+            assertTrue(e.isHostException());
+            assertTrue(e.asHostException() instanceof IllegalArgumentException);
+            Iterator<StackFrame> frameIterator = e.getPolyglotStackTrace().iterator();
+            StackFrame frame = frameIterator.next();
+            while (!(frame.toHostFrame().getMethodName().equals("get") &&
+                            frame.toHostFrame().getClassName().equals(Field.class.getName()))) {
+                frame = frameIterator.next();
+            }
+            assertTrue(frame.isHostFrame());
+            assertEquals("get", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("execute", frame.toHostFrame().getMethodName());
+            frame = frameIterator.next();
+            assertTrue(frame.isHostFrame());
+            assertEquals("testExceptionFramesCallerSensitive", frame.toHostFrame().getMethodName());
+        }
+
     }
 
     public static class TestIllegalArgumentInt {
@@ -1034,26 +1251,18 @@ public class ValueHostConversionTest extends AbstractPolyglotTest {
         assertEquals(42, value.getMember("foo").execute((float) 42).asInt());
         assertEquals(42, value.getMember("foo").execute((double) 42).asInt());
 
-        assertHostPolyglotException(() -> value.getMember("foo").execute((Object) null),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute((Object) null),
                         IllegalArgumentException.class);
-        assertHostPolyglotException(() -> value.getMember("foo").execute(""),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute(""),
                         IllegalArgumentException.class);
-        assertHostPolyglotException(() -> value.getMember("foo").execute(42.2d),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute(42.2d),
                         IllegalArgumentException.class);
-        assertHostPolyglotException(() -> value.getMember("foo").execute(42.2f),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute(42.2f),
                         IllegalArgumentException.class);
-        assertHostPolyglotException(() -> value.getMember("foo").execute(Float.NaN),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute(Float.NaN),
                         IllegalArgumentException.class);
-        assertHostPolyglotException(() -> value.getMember("foo").execute(Double.NaN),
+        ValueAssert.assertFails(() -> value.getMember("foo").execute(Double.NaN),
                         IllegalArgumentException.class);
-    }
-
-    private static void assertHostPolyglotException(Runnable r, Class<?> hostExceptionType) {
-        try {
-            r.run();
-        } catch (Exception e) {
-            assertTrue(e.getClass().getName(), hostExceptionType.isInstance(e));
-        }
     }
 
 }

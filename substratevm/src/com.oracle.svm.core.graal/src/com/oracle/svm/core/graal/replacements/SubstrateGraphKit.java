@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -58,7 +60,7 @@ import org.graalvm.compiler.replacements.GraphKit;
 import org.graalvm.compiler.word.WordTypes;
 import org.graalvm.word.WordBase;
 
-import com.oracle.svm.core.graal.code.amd64.SubstrateCallingConventionType;
+import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.meta.SubstrateLoweringProvider;
 import com.oracle.svm.core.graal.nodes.DeoptEntryNode;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
@@ -129,7 +131,7 @@ public class SubstrateGraphKit extends GraphKit {
     }
 
     public ValueNode createLoadIndexed(ValueNode array, int index, JavaKind kind) {
-        ValueNode loadIndexed = LoadIndexedNode.create(null, array, ConstantNode.forInt(index, getGraph()), kind, getMetaAccess(), getConstantReflection());
+        ValueNode loadIndexed = LoadIndexedNode.create(null, array, ConstantNode.forInt(index, getGraph()), null, kind, getMetaAccess(), getConstantReflection());
         if (loadIndexed instanceof FixedNode) {
             return append((FixedNode) loadIndexed);
         }
@@ -156,12 +158,12 @@ public class SubstrateGraphKit extends GraphKit {
         return ConstantNode.forConstant(StampFactory.forKind(kind), value, getMetaAccess(), getGraph());
     }
 
-    public ValueNode createCFunctionCall(ValueNode targetAddress, ResolvedJavaMethod targetMethod, List<ValueNode> arguments, Signature signature, boolean emitTransition, boolean emitDeoptTarget) {
+    public ValueNode createCFunctionCall(ValueNode targetAddress, List<ValueNode> arguments, Signature signature, boolean emitTransition, boolean emitDeoptTarget) {
         if (emitTransition) {
             append(new CFunctionPrologueNode());
         }
 
-        InvokeNode invoke = createIndirectCall(targetAddress, targetMethod, arguments, signature, SubstrateCallingConventionType.NativeCall);
+        InvokeNode invoke = createIndirectCall(targetAddress, arguments, signature, SubstrateCallingConventionType.NativeCall);
 
         assert !emitDeoptTarget || !emitTransition : "cannot have transition for deoptimization targets";
         if (emitTransition) {
@@ -179,7 +181,7 @@ public class SubstrateGraphKit extends GraphKit {
         return getLoweringProvider().implicitLoadConvert(getGraph(), asKind(signature.getReturnType(null)), invoke);
     }
 
-    public InvokeNode createIndirectCall(ValueNode targetAddress, ResolvedJavaMethod targetMethod, List<ValueNode> arguments, Signature signature, CallingConvention.Type callType) {
+    public InvokeNode createIndirectCall(ValueNode targetAddress, List<ValueNode> arguments, Signature signature, CallingConvention.Type callType) {
         assert arguments.size() == signature.getParameterCount(false);
         frameState.clearStack();
 
@@ -187,7 +189,7 @@ public class SubstrateGraphKit extends GraphKit {
         int bci = bci();
 
         CallTargetNode callTarget = getGraph().add(
-                        new IndirectCallTargetNode(targetAddress, arguments.toArray(new ValueNode[arguments.size()]), StampPair.createSingle(stamp), signature.toParameterTypes(null), targetMethod,
+                        new IndirectCallTargetNode(targetAddress, arguments.toArray(new ValueNode[arguments.size()]), StampPair.createSingle(stamp), signature.toParameterTypes(null), null,
                                         callType, InvokeKind.Static));
         InvokeNode invoke = append(new InvokeNode(callTarget, bci));
 

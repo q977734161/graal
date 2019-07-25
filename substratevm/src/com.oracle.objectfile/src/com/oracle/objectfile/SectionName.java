@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -91,11 +93,12 @@ public abstract class SectionName {
     // not a typo!
     public static final SectionName APPLE_NAMESPACE = new ProgbitsSectionName("apple_namespac");
     public static final SectionName APPLE_OBJC = new ProgbitsSectionName("apple_objc");
+    public static final SectionName LLVM_STACKMAPS = new ProgbitsSectionName("llvm_stackmaps");
 
     private static final SectionName[] myValues;
 
     static {
-        myValues = new SectionName[]{DATA, RODATA, TEXT, BSS, APPLE_NAMES, APPLE_TYPES, APPLE_NAMESPACE, APPLE_OBJC};
+        myValues = new SectionName[]{DATA, RODATA, TEXT, BSS, APPLE_NAMES, APPLE_TYPES, APPLE_NAMESPACE, APPLE_OBJC, LLVM_STACKMAPS};
     }
 
     private static String getFormatPrefix(ObjectFile.Format f) {

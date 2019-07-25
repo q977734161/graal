@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,14 +34,9 @@ import org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 
-import com.oracle.graal.pointsto.AnalysisPolicy;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.HostedProviders;
-
-import jdk.vm.ci.meta.ResolvedJavaField;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * This is an interface for the functionality that the hosting VM must support.
@@ -48,11 +45,7 @@ public interface HostVM {
 
     OptionValues options();
 
-    AnalysisPolicy analysisPolicy();
-
     boolean isRelocatedPointer(Object originalObject);
-
-    boolean isCFunction(AnalysisMethod result);
 
     void clearInThread();
 
@@ -60,13 +53,11 @@ public interface HostVM {
 
     Object getConfiguration();
 
-    boolean platformSupported(ResolvedJavaField field);
+    void checkForbidden(AnalysisType type, AnalysisType.UsageKind kind);
 
-    boolean platformSupported(ResolvedJavaMethod method);
+    void registerType(AnalysisType newValue);
 
-    boolean platformSupported(ResolvedJavaType type);
-
-    void registerType(AnalysisType newValue, ResolvedJavaType hostType);
+    boolean isInitialized(AnalysisType type);
 
     Optional<AnalysisMethod> handleForeignCall(ForeignCallDescriptor foreignCallDescriptor, ForeignCallsProvider foreignCallsProvider);
 
@@ -76,4 +67,13 @@ public interface HostVM {
     String inspectServerContentPath();
 
     void warn(String message);
+
+    /**
+     * Gets the name of the native image being built.
+     *
+     * @return {@code null} if this VM is not being used in the context of building a native image
+     */
+    default String getImageName() {
+        return null;
+    }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,12 +36,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ForkJoinTask;
 
+import org.graalvm.collections.Pair;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.Indent;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 
@@ -59,17 +65,19 @@ import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.ExcludeFromReferenceMap;
+import com.oracle.svm.core.c.BoxedRelocatedPointer;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
+import com.oracle.svm.core.heap.InstanceReferenceMapEncoder;
 import com.oracle.svm.core.heap.ReferenceMapEncoder;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
+import com.oracle.svm.core.hub.ClassInitializationInfo.ClassInitializerFunctionPointerHolder;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.DynamicHubSupport;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.NativeImageOptions;
-import com.oracle.svm.hosted.base.NumUtil;
 import com.oracle.svm.hosted.config.HybridLayout;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.ComputedValueField;
@@ -78,8 +86,9 @@ import com.oracle.svm.hosted.substitute.DeletedMethod;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.ExceptionHandler;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.Signature;
+import jdk.vm.ci.meta.UnresolvedJavaType;
 
 public class UniverseBuilder {
 
@@ -142,7 +151,7 @@ public class UniverseBuilder {
             buildVTables();
             buildHubs();
 
-            setConstantFieldValues();
+            processFieldLocations();
 
             hUniverse.orderedMethods = new ArrayList<>(hUniverse.methods.values());
             Collections.sort(hUniverse.orderedMethods);
@@ -164,7 +173,8 @@ public class UniverseBuilder {
 
         String typeName = aType.getName();
 
-        assert !typeName.contains("/hotspot/") || typeName.contains("/jtt/hotspot/") : "HotSpot object in image " + typeName;
+        assert SubstrateUtil.isBuildingLibgraal() || !typeName.contains("/hotspot/") || typeName.contains("/jtt/hotspot/") || typeName.contains("/hotspot/shared/") : "HotSpot object in image " +
+                        typeName;
         assert !typeName.contains("/analysis/meta/") : "Analysis meta object in image " + typeName;
         assert !typeName.contains("/hosted/meta/") : "Hosted meta object in image " + typeName;
 
@@ -240,7 +250,12 @@ public class UniverseBuilder {
         ExceptionHandler[] sHandlers = new ExceptionHandler[aHandlers.length];
         for (int i = 0; i < aHandlers.length; i++) {
             ExceptionHandler h = aHandlers[i];
-            ResolvedJavaType catchType = makeType((AnalysisType) h.getCatchType());
+            JavaType catchType = h.getCatchType();
+            if (h.getCatchType() instanceof AnalysisType) {
+                catchType = makeType((AnalysisType) catchType);
+            } else {
+                assert catchType == null || catchType instanceof UnresolvedJavaType;
+            }
             sHandlers[i] = new ExceptionHandler(h.getStartBCI(), h.getEndBCI(), h.getHandlerBCI(), h.catchTypeCPI(), catchType);
         }
 
@@ -578,34 +593,47 @@ public class UniverseBuilder {
 //    }
     // @formatter:on
 
+    /**
+     * We want these types to be immutable so that they can be in the read-only part of the image
+     * heap. Moreover, all of them except for String *must* be read-only because they contain
+     * relocatable pointers.
+     */
+    private static final Set<Class<?>> IMMUTABLE_TYPES = new HashSet<>(Arrays.asList(
+                    String.class,
+                    DynamicHub.class,
+                    CEntryPointLiteral.class,
+                    BoxedRelocatedPointer.class,
+                    ClassInitializerFunctionPointerHolder.class));
+
     private void collectMonitorFieldInfo(BigBang bb) {
         if (!SubstrateOptions.MultiThreaded.getValue()) {
             /* No locking information needed in single-threaded mode. */
             return;
         }
 
+        Set<AnalysisType> immutableTypes = new HashSet<>();
+        for (Class<?> immutableType : IMMUTABLE_TYPES) {
+            Optional<AnalysisType> aType = aMetaAccess.optionalLookupJavaType(immutableType);
+            if (aType.isPresent()) {
+                immutableTypes.add(aType.get());
+            }
+        }
+
         TypeState allSynchronizedTypeState = bb.getAllSynchronizedTypeState();
         for (AnalysisType aType : allSynchronizedTypeState.types()) {
-            if (canHaveMonitorFields(aType)) {
+            if (!aType.isArray() && !immutableTypes.contains(aType)) {
+                /*
+                 * Monitor fields on arrays would increase the array header too much. Also, types
+                 * that must be immutable cannot have a monitor field.
+                 */
                 final HostedInstanceClass hostedInstanceClass = (HostedInstanceClass) hUniverse.lookup(aType);
                 hostedInstanceClass.setNeedMonitorField();
             }
         }
     }
 
-    private boolean canHaveMonitorFields(AnalysisType aType) {
-        if (aType.isArray()) {
-            /* Monitor fields on arrays would increase the array header too much. */
-            return false;
-        }
-        if (aType.equals(aMetaAccess.lookupJavaType(String.class)) || aType.equals(aMetaAccess.lookupJavaType(DynamicHub.class))) {
-            /*
-             * We want String and DynamicHub instances to be immutable so that they can be in the
-             * read-only part of the image heap.
-             */
-            return false;
-        }
-        return true;
+    public static boolean isKnownImmutableType(Class<?> clazz) {
+        return IMMUTABLE_TYPES.contains(clazz);
     }
 
     @SuppressWarnings("try")
@@ -676,8 +704,8 @@ public class UniverseBuilder {
 
         int startSize = superSize;
         if (clazz.getAnnotation(DeoptimizedFrame.ReserveDeoptScratchSpace.class) != null) {
-            assert startSize == ConfigurationValues.getObjectLayout().getFirstFieldOffset();
-            startSize += ConfigurationValues.getObjectLayout().getDeoptScratchSpace();
+            assert startSize <= DeoptimizedFrame.getScratchSpaceOffset();
+            startSize = DeoptimizedFrame.getScratchSpaceOffset() + ConfigurationValues.getObjectLayout().getDeoptScratchSpace();
         }
 
         if (HybridLayout.isHybrid(clazz)) {
@@ -697,7 +725,7 @@ public class UniverseBuilder {
             boolean progress = false;
             for (int i = 0; i < rawFields.size(); i++) {
                 HostedField field = rawFields.get(i);
-                int fieldSize = ConfigurationValues.getObjectLayout().sizeInBytes(field.getJavaKind());
+                int fieldSize = ConfigurationValues.getObjectLayout().sizeInBytes(field.getStorageKind());
 
                 if (nextOffset % fieldSize == 0) {
                     field.setLocation(nextOffset);
@@ -734,8 +762,8 @@ public class UniverseBuilder {
         // A reference to a {@link java.util.concurrent.locks.ReentrantLock for "synchronized" or
         // Object.wait() and Object.notify() and friends.
         if (clazz.needMonitorField()) {
-            final int referenceFieldAlignmentAndSize = ConfigurationValues.getObjectLayout().sizeInBytes(JavaKind.Object);
-            nextOffset = ObjectLayout.roundUp(nextOffset, referenceFieldAlignmentAndSize);
+            final int referenceFieldAlignmentAndSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+            nextOffset = NumUtil.roundUp(nextOffset, referenceFieldAlignmentAndSize);
             clazz.setMonitorFieldOffset(nextOffset);
             nextOffset += referenceFieldAlignmentAndSize;
         }
@@ -743,13 +771,13 @@ public class UniverseBuilder {
         // An int to hold the result for System.identityHashCode.
         if (clazz.needHashCodeField()) {
             int intFieldSize = ConfigurationValues.getObjectLayout().sizeInBytes(JavaKind.Int);
-            nextOffset = ObjectLayout.roundUp(nextOffset, intFieldSize);
+            nextOffset = NumUtil.roundUp(nextOffset, intFieldSize);
             clazz.setHashCodeFieldOffset(nextOffset);
             nextOffset += intFieldSize;
         }
 
         clazz.instanceFields = orderedFields.toArray(new HostedField[orderedFields.size()]);
-        clazz.instanceSize = nextOffset;
+        clazz.instanceSize = ConfigurationValues.getObjectLayout().alignUp(nextOffset);
 
         for (HostedType subClass : clazz.subTypes) {
             if (subClass.isInstanceClass()) {
@@ -784,13 +812,13 @@ public class UniverseBuilder {
         List<HostedField>[] fieldsOfTypes = (List<HostedField>[]) new ArrayList<?>[hUniverse.orderedTypes.size()];
 
         for (HostedField field : fields) {
-            if (!field.wrapped.isWritten()) {
+            if (!field.wrapped.isWritten() && !MaterializedConstantFields.singleton().contains(field.wrapped)) {
                 // Constant, does not require memory.
-            } else if (field.getType().getStorageKind() == JavaKind.Object) {
+            } else if (field.getStorageKind() == JavaKind.Object) {
                 field.setLocation(NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Object, nextObjectField)));
                 nextObjectField += 1;
             } else {
-                int fieldSize = layout.sizeInBytes(field.getJavaKind());
+                int fieldSize = layout.sizeInBytes(field.getStorageKind());
                 while (layout.getArrayElementOffset(JavaKind.Byte, nextPrimitiveField) % fieldSize != 0) {
                     // Insert padding byte for alignment
                     nextPrimitiveField++;
@@ -856,22 +884,81 @@ public class UniverseBuilder {
     }
 
     private void buildVTables() {
+        /*
+         * We want to pack the vtables as tight as possible, i.e., we want to avoid filler slots as
+         * much as possible. Filler slots are unavoidable because we use the vtable also for
+         * interface calls, i.e., an interface method needs a vtable index that is filled for all
+         * classes that implement that interface.
+         *
+         * Note that because of interface methods the same implementation method can be registered
+         * multiple times in the same vtable, with a different index used by different interface
+         * methods.
+         *
+         * The optimization goal is to reduce the overall number of vtable slots. To achieve a good
+         * result, we process types in three steps: 1) java.lang.Object, 2) interfaces, 3) classes.
+         */
+
+        /*
+         * The mutable vtables while this algorithm is running. Contains an ArrayList for each type,
+         * which is in the end converted to the vtable array.
+         */
         Map<HostedType, ArrayList<HostedMethod>> vtablesMap = new HashMap<>();
+
+        /*
+         * A bit set of occupied vtable slots for each type.
+         */
+
         Map<HostedType, BitSet> usedSlotsMap = new HashMap<>();
+        /*
+         * The set of vtable slots used for this method. Because of interfaces, one method can have
+         * multiple vtable slots. The assignment algorithm uses this table to find out if a suitable
+         * vtable index already exists for a method.
+         */
+        Map<HostedMethod, Set<Integer>> vtablesSlots = new HashMap<>();
+
         for (HostedType type : hUniverse.orderedTypes) {
             vtablesMap.put(type, new ArrayList<>());
             BitSet initialBitSet = new BitSet();
             usedSlotsMap.put(type, initialBitSet);
         }
 
-        assignImplementations(hUniverse.getObjectClass(), vtablesMap, usedSlotsMap);
+        /*
+         * 1) Process java.lang.Object first because the methods defined there (equals, hashCode,
+         * toString, clone) are in every vtable. We must not have filler slots before these methods.
+         */
+        assignImplementations(hUniverse.getObjectClass(), vtablesMap, usedSlotsMap, vtablesSlots);
+
+        /*
+         * 2) Process interfaces. Interface methods have higher constraints on vtable slots because
+         * the same slots need to be used in all implementation classes, which can be spread out
+         * across the type hierarchy. We assign an importance level to each interface and then sort
+         * by that number, to further reduce the filler slots.
+         */
+        List<Pair<HostedType, Integer>> interfaces = new ArrayList<>();
         for (HostedType type : hUniverse.orderedTypes) {
             if (type.isInterface()) {
-                assignImplementations(type, vtablesMap, usedSlotsMap);
+                /*
+                 * We use the number of subtypes as the importance for an interface: If an interface
+                 * is implemented often, then it can produce more unused filler slots than an
+                 * interface implemented rarely. We do not multiply with the number of methods that
+                 * the interface implements: there are usually no filler slots in between methods of
+                 * an interface, i.e., an interface that declares many methods does not lead to more
+                 * filler slots than an interface that defines only one method.
+                 */
+                int importance = collectSubtypes(type, new HashSet<>()).size();
+                interfaces.add(Pair.create(type, importance));
             }
         }
+        interfaces.sort((pair1, pair2) -> pair2.getRight() - pair1.getRight());
+        for (Pair<HostedType, Integer> pair : interfaces) {
+            assignImplementations(pair.getLeft(), vtablesMap, usedSlotsMap, vtablesSlots);
+        }
 
-        buildVTable(hUniverse.getObjectClass(), vtablesMap, usedSlotsMap);
+        /*
+         * 3) Process all implementation classes, starting with java.lang.Object and going
+         * depth-first down the tree.
+         */
+        buildVTable(hUniverse.getObjectClass(), vtablesMap, usedSlotsMap, vtablesSlots);
 
         for (HostedType type : hUniverse.orderedTypes) {
             if (type.vtable == null) {
@@ -890,8 +977,18 @@ public class UniverseBuilder {
         }
     }
 
-    private void buildVTable(HostedClass clazz, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap) {
-        assignImplementations(clazz, vtablesMap, usedSlotsMap);
+    /** Collects all subtypes of the provided type in the provided set. */
+    private static Set<HostedType> collectSubtypes(HostedType type, Set<HostedType> allSubtypes) {
+        if (allSubtypes.add(type)) {
+            for (HostedType subtype : type.subTypes) {
+                collectSubtypes(subtype, allSubtypes);
+            }
+        }
+        return allSubtypes;
+    }
+
+    private void buildVTable(HostedClass clazz, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap, Map<HostedMethod, Set<Integer>> vtablesSlots) {
+        assignImplementations(clazz, vtablesMap, usedSlotsMap, vtablesSlots);
 
         ArrayList<HostedMethod> vtable = vtablesMap.get(clazz);
         HostedMethod[] vtableArray = vtable.toArray(new HostedMethod[vtable.size()]);
@@ -900,40 +997,49 @@ public class UniverseBuilder {
 
         for (HostedType subClass : clazz.subTypes) {
             if (!subClass.isInterface()) {
-                buildVTable((HostedClass) subClass, vtablesMap, usedSlotsMap);
+                buildVTable((HostedClass) subClass, vtablesMap, usedSlotsMap, vtablesSlots);
             }
         }
     }
 
-    private void assignImplementations(HostedType type, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap) {
+    private void assignImplementations(HostedType type, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap, Map<HostedMethod, Set<Integer>> vtablesSlots) {
         for (HostedMethod method : type.getAllDeclaredMethods()) {
+            /* We only need to look at methods that the static analysis registred as invoked. */
             if (method.wrapped.isInvoked() || method.wrapped.isImplementationInvoked()) {
-                assignImplementations(method, vtablesMap, usedSlotsMap);
+                /*
+                 * Methods with 1 implementations do not need a vtable because invokes can be done
+                 * as direct calls without the need for a vtable. Methods with 0 implementations are
+                 * unreachable.
+                 */
+                if (method.implementations.length > 1) {
+                    /*
+                     * Find a suitable vtable slot for the method, taking the existing vtable
+                     * assignments into account.
+                     */
+                    int slot = findSlot(method, vtablesMap, usedSlotsMap, vtablesSlots);
+                    method.vtableIndex = slot;
+
+                    /* Assign the vtable slot for the type and all subtypes. */
+                    assignImplementations(method.getDeclaringClass(), method, slot, vtablesMap);
+                }
             }
         }
     }
 
-    private void assignImplementations(HostedMethod method, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap) {
-        if (method.implementations.length <= 1) {
-            return;
-        }
-        int slot = findSlot(method, vtablesMap, usedSlotsMap);
-        method.vtableIndex = slot;
-
-        assignImplementations(method.getDeclaringClass(), method, slot, vtablesMap);
-    }
-
+    /**
+     * Assign the vtable slot to the correct resolved method for all subtypes.
+     */
     private void assignImplementations(HostedType type, HostedMethod method, int slot, Map<HostedType, ArrayList<HostedMethod>> vtablesMap) {
         if (type.wrapped.isInstantiated()) {
             assert (type.isInstanceClass() && !type.isAbstract()) || type.isArray();
 
-            ArrayList<HostedMethod> vtable = vtablesMap.get(type);
-            if (slot < vtable.size() && vtable.get(slot) != null) {
-                /* We already have a vtable entry from a supertype. Check that it is correct. */
-                assert vtable.get(slot).equals(resolveMethod(type, method));
-            } else {
-                HostedMethod resolvedMethod = resolveMethod(type, method);
-                if (resolvedMethod != null) {
+            HostedMethod resolvedMethod = resolveMethod(type, method);
+            if (resolvedMethod != null) {
+                ArrayList<HostedMethod> vtable = vtablesMap.get(type);
+                if (slot < vtable.size() && vtable.get(slot) != null) {
+                    /* We already have a vtable entry from a supertype. Check that it is correct. */
+                    assert vtable.get(slot).equals(resolvedMethod);
+                } else {
                     resize(vtable, slot + 1);
                     assert vtable.get(slot) == null;
                     vtable.set(slot, resolvedMethod);
@@ -963,32 +1069,55 @@ public class UniverseBuilder {
         }
     }
 
-    private int findSlot(HostedMethod method, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap) {
-        int resultSlot = method.implementations[0].vtableIndex;
+    private int findSlot(HostedMethod method, Map<HostedType, ArrayList<HostedMethod>> vtablesMap, Map<HostedType, BitSet> usedSlotsMap, Map<HostedMethod, Set<Integer>> vtablesSlots) {
+        /*
+         * Check if all implementation methods already have a common slot assigned. Each
+         * implementation method can have multiple slots because of interfaces. We compute the
+         * intersection of the slot sets for all implementation methods.
+         */
+        Set<Integer> resultSlots = vtablesSlots.get(method.implementations[0]);
         for (HostedMethod impl : method.implementations) {
-            if (impl.vtableIndex != resultSlot) {
-                resultSlot = -1;
+            Set<Integer> implSlots = vtablesSlots.get(impl);
+            if (implSlots == null) {
+                resultSlots = null;
                 break;
             }
+            resultSlots.retainAll(implSlots);
         }
-        if (resultSlot != -1) {
+        if (resultSlots != null && !resultSlots.isEmpty()) {
             /*
              * All implementations already have the same vtable slot assigned, so we can re-use
-             * that.
+             * that. If we have multiple candidates, we use the slot with the lowest number.
              */
+            int resultSlot = Integer.MAX_VALUE;
+            for (int slot : resultSlots) {
+                resultSlot = Math.min(resultSlot, slot);
+            }
             return resultSlot;
         }
 
+        /*
+         * No slot found, we need to compute a new one. Check the whole subtype hierarchy for
+         * constraints using bitset union, and then use the lowest slot number that is available in
+         * all subtypes.
+         */
         BitSet usedSlots = new BitSet();
         collectUsedSlots(method.getDeclaringClass(), usedSlots, usedSlotsMap);
         for (HostedMethod impl : method.implementations) {
             collectUsedSlots(impl.getDeclaringClass(), usedSlots, usedSlotsMap);
         }
 
-        resultSlot = usedSlots.nextClearBit(0);
+        /*
+         * The new slot number is the lowest slot number not occupied by any subtype, i.e., the
+         * lowest index not set in the union bitset.
+         */
+        int resultSlot = usedSlots.nextClearBit(0);
+
         markSlotAsUsed(resultSlot, method.getDeclaringClass(), vtablesMap, usedSlotsMap);
         for (HostedMethod impl : method.implementations) {
             markSlotAsUsed(resultSlot, impl.getDeclaringClass(), vtablesMap, usedSlotsMap);
+
+            vtablesSlots.computeIfAbsent(impl, k -> new HashSet<>()).add(resultSlot);
         }
 
         return resultSlot;
@@ -1011,14 +1140,15 @@ public class UniverseBuilder {
     }
 
     private void buildHubs() {
-        ReferenceMapEncoder referenceMapEncoder = new ReferenceMapEncoder();
+        InstanceReferenceMapEncoder referenceMapEncoder = new InstanceReferenceMapEncoder();
         Map<HostedType, ReferenceMapEncoder.Input> referenceMaps = new HashMap<>();
         for (HostedType type : hUniverse.orderedTypes) {
             ReferenceMapEncoder.Input referenceMap = createReferenceMap(type);
+            assert ((SubstrateReferenceMap) referenceMap).hasNoDerivedOffsets();
             referenceMaps.put(type, referenceMap);
             referenceMapEncoder.add(referenceMap);
         }
-        ImageSingletons.lookup(DynamicHubSupport.class).setData(referenceMapEncoder.encodeAll(null));
+        ImageSingletons.lookup(DynamicHubSupport.class).setData(referenceMapEncoder.encodeAll());
 
         ObjectLayout ol = ConfigurationValues.getObjectLayout();
         for (HostedType type : hUniverse.orderedTypes) {
@@ -1031,16 +1161,18 @@ public class UniverseBuilder {
                     layoutHelper = LayoutEncoding.forAbstract();
                 } else if (HybridLayout.isHybrid(type)) {
                     HybridLayout<?> hybridLayout = new HybridLayout<>(instanceClass, ol);
-                    JavaKind kind = hybridLayout.getArrayElementKind();
-                    layoutHelper = LayoutEncoding.forArray(kind == JavaKind.Object, hybridLayout.getArrayBaseOffset(), ol.getArrayIndexShift(kind), ol.getAlignment());
+                    JavaKind storageKind = hybridLayout.getArrayElementStorageKind();
+                    boolean isObject = (storageKind == JavaKind.Object);
+                    layoutHelper = LayoutEncoding.forArray(isObject, hybridLayout.getArrayBaseOffset(), ol.getArrayIndexShift(storageKind));
                 } else {
                     layoutHelper = LayoutEncoding.forInstance(ConfigurationValues.getObjectLayout().alignUp(instanceClass.getInstanceSize()));
                 }
                 monitorOffset = instanceClass.getMonitorFieldOffset();
                 hashCodeOffset = instanceClass.getHashCodeFieldOffset();
             } else if (type.isArray()) {
-                JavaKind kind = type.getComponentType().getStorageKind();
-                layoutHelper = LayoutEncoding.forArray(kind == JavaKind.Object, ol.getArrayBaseOffset(kind), ol.getArrayIndexShift(kind), ol.getAlignment());
+                JavaKind storageKind = type.getComponentType().getStorageKind();
+                boolean isObject = (storageKind == JavaKind.Object);
+                layoutHelper = LayoutEncoding.forArray(isObject, ol.getArrayBaseOffset(storageKind), ol.getArrayIndexShift(storageKind));
                 hashCodeOffset = ol.getArrayHashCodeOffset();
             } else if (type.isInterface()) {
                 layoutHelper = LayoutEncoding.forInterface();
@@ -1066,6 +1198,7 @@ public class UniverseBuilder {
             // pointer maps in Dynamic Hub
             ReferenceMapEncoder.Input referenceMap = referenceMaps.get(type);
             assert referenceMap != null;
+            assert ((SubstrateReferenceMap) referenceMap).hasNoDerivedOffsets();
             long referenceMapIndex = referenceMapEncoder.lookupEncoding(referenceMap);
 
             DynamicHub hub = type.getHub();
@@ -1080,7 +1213,7 @@ public class UniverseBuilder {
         SubstrateReferenceMap referenceMap = new SubstrateReferenceMap();
         for (HostedField field : fields) {
             if (field.getType().getStorageKind() == JavaKind.Object && field.hasLocation() && field.getAnnotation(ExcludeFromReferenceMap.class) == null) {
-                referenceMap.markReferenceAtIndex(field.getLocation() / ConfigurationValues.getTarget().wordSize);
+                referenceMap.markReferenceAtOffset(field.getLocation(), true);
             }
         }
         if (type.isInstanceClass()) {
@@ -1090,22 +1223,21 @@ public class UniverseBuilder {
              */
             final int monitorOffset = instanceClass.getMonitorFieldOffset();
             if (monitorOffset != 0) {
-                final int monitorIndex = monitorOffset / ConfigurationValues.getTarget().wordSize;
-                referenceMap.markReferenceAtIndex(monitorIndex);
+                referenceMap.markReferenceAtOffset(monitorOffset, true);
             }
         }
         return referenceMap;
     }
 
-    private void setConstantFieldValues() {
+    private void processFieldLocations() {
         for (HostedField hField : hUniverse.fields.values()) {
             AnalysisField aField = hField.wrapped;
             if (aField.wrapped instanceof ComputedValueField) {
                 ((ComputedValueField) aField.wrapped).processSubstrate(hMetaAccess);
             }
 
-            if (Modifier.isStatic(hField.getModifiers()) && !aField.isWritten()) {
-                hField.setConstantValue();
+            if (!hField.hasLocation() && Modifier.isStatic(hField.getModifiers()) && !aField.isWritten()) {
+                hField.setUnmaterializedStaticConstant();
             }
         }
     }

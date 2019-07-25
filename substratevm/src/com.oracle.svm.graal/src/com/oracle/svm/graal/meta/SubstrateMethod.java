@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -40,6 +42,7 @@ import com.oracle.svm.core.annotate.UnknownObjectField;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.graal.meta.SharedRuntimeMethod;
 import com.oracle.svm.core.hub.AnnotationsEncoding;
+import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.Replaced;
 
 import jdk.vm.ci.meta.Constant;
@@ -88,13 +91,13 @@ public class SubstrateMethod implements SharedRuntimeMethod, Replaced {
     private SubstrateSignature signature;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public SubstrateMethod(ResolvedJavaMethod original, UniqueStringTable stringTable) {
+    public SubstrateMethod(ResolvedJavaMethod original, HostedStringDeduplication stringTable) {
         encodedLineNumberTable = EncodedLineNumberTable.encode(original.getLineNumberTable());
 
         assert original.getAnnotation(CEntryPoint.class) == null : "Can't compile entry point method";
 
         modifiers = original.getModifiers();
-        name = stringTable.unique(original.getName());
+        name = stringTable.deduplicate(original.getName(), true);
         neverInline = (original.getAnnotation(NeverInline.class) != null);
 
         /*
@@ -297,7 +300,7 @@ public class SubstrateMethod implements SharedRuntimeMethod, Replaced {
     @Override
     public StackTraceElement asStackTraceElement(int bci) {
         int lineNumber = EncodedLineNumberTable.getLineNumber(bci, encodedLineNumberTable);
-        return new StackTraceElement(getDeclaringClass().toJavaName(true), getName(), getDeclaringClass().getSourceFileName(), lineNumber);
+        return new StackTraceElement(getDeclaringClass().toClassName(), getName(), getDeclaringClass().getSourceFileName(), lineNumber);
     }
 
     @Override
@@ -317,7 +320,7 @@ public class SubstrateMethod implements SharedRuntimeMethod, Replaced {
 
     @Override
     public Annotation[] getAnnotations() {
-        return AnnotationsEncoding.getAnnotations(annotationsEncoding);
+        return AnnotationsEncoding.decodeAnnotations(annotationsEncoding);
     }
 
     @Override
@@ -327,7 +330,7 @@ public class SubstrateMethod implements SharedRuntimeMethod, Replaced {
 
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return AnnotationsEncoding.getAnnotation(annotationsEncoding, annotationClass);
+        return AnnotationsEncoding.decodeAnnotation(annotationsEncoding, annotationClass);
     }
 
     @Override

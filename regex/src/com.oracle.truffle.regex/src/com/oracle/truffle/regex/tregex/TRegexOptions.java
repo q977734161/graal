@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -133,12 +133,12 @@ public class TRegexOptions {
     public static final int TRegexMaxNumberOfCaptureGroups = 127;
 
     /**
-     * Maximum number of NFA states contained in one DFA state. This number must not be higher that
-     * 255, because the maximum number of NFA states in one DFA state determines the number of
-     * simultaneously tracked result sets (arrays) in capture group tracking mode, which are
-     * accessed over byte indices in {@link DFACaptureGroupPartialTransitionNode}.
+     * Maximum number of NFA states involved in one DFA transition. This number must not be higher
+     * than 255, because the maximum number of NFA states in one DFA transition determines the
+     * number of simultaneously tracked result sets (arrays) in capture group tracking mode, which
+     * are accessed over byte indices in {@link DFACaptureGroupPartialTransitionNode}.
      */
-    public static final int TRegexMaxNumberOfNFAStatesInOneDFAState = 255;
+    public static final int TRegexMaxNumberOfNFAStatesInOneDFATransition = 255;
 
     static {
         assert TRegexTraceFinderMaxNumberOfResults <= 254;
@@ -147,7 +147,7 @@ public class TRegexOptions {
         assert TRegexMaxDFASize <= Short.MAX_VALUE;
         assert TRegexMaxDFASizeAfterNodeSplitting <= Short.MAX_VALUE;
         assert TRegexMaxNumberOfCaptureGroups <= 127;
-        assert TRegexMaxNumberOfNFAStatesInOneDFAState <= 255;
+        assert TRegexMaxNumberOfNFAStatesInOneDFATransition <= 255;
         assert TRegexRangeToBitSetConversionThreshold > 1;
     }
 }

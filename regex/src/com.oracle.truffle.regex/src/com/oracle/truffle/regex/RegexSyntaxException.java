@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,30 +24,73 @@
  */
 package com.oracle.truffle.regex;
 
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleException;
+import com.oracle.truffle.api.nodes.Node;
 
-public class RegexSyntaxException extends RuntimeException {
+public class RegexSyntaxException extends RuntimeException implements TruffleException {
 
     private static final String template = "Invalid regular expression: /%s/%s: %s";
     private static final String templateNoFlags = "Invalid regular expression: %s: %s";
+    private static final String templatePosition = "Invalid regular expression: /%s/%s:%d: %s";
+
+    private String reason;
+    private RegexSource regexSrc;
+    private int position = -1;
 
     public RegexSyntaxException(String msg) {
         super(msg);
     }
 
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     public RegexSyntaxException(String pattern, String msg) {
         super(String.format(templateNoFlags, pattern, msg));
+        this.reason = msg;
+        this.regexSrc = new RegexSource(pattern);
     }
 
-    @CompilerDirectives.TruffleBoundary
-    public RegexSyntaxException(String pattern, RegexFlags flags, String msg) {
+    @TruffleBoundary
+    public RegexSyntaxException(String pattern, String flags, String msg) {
         super(String.format(template, pattern, flags, msg));
+        this.reason = msg;
+        this.regexSrc = new RegexSource(pattern, flags);
     }
 
-    @CompilerDirectives.TruffleBoundary
-    public RegexSyntaxException(String pattern, RegexFlags flags, String msg, Throwable ex) {
+    @TruffleBoundary
+    public RegexSyntaxException(String pattern, String flags, String msg, int position) {
+        super(String.format(templatePosition, pattern, flags, position, msg));
+        this.reason = msg;
+        this.regexSrc = new RegexSource(pattern, flags);
+        this.position = position;
+    }
+
+    @TruffleBoundary
+    public RegexSyntaxException(String pattern, String flags, String msg, Throwable ex) {
         super(String.format(template, pattern, flags, msg), ex);
+        this.reason = msg;
+        this.regexSrc = new RegexSource(pattern, flags);
+    }
+
+    @Override
+    public boolean isSyntaxError() {
+        return true;
+    }
+
+    @Override
+    public Node getLocation() {
+        return null;
+    }
+
+    public String getReason() {
+        return reason;
+    }
+
+    public RegexSource getRegex() {
+        return regexSrc;
+    }
+
+    public Integer getPosition() {
+        return position;
     }
 
     private static final long serialVersionUID = 1L;

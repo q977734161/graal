@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,7 +44,7 @@ import com.oracle.svm.core.util.TimeUtils;
 public final class FeebleReferenceList<T> {
 
     /** The head of the list of FeebleReference<T>. */
-    private UninterruptibleUtils.AtomicReference<FeebleReference<? extends T>> head;
+    private final UninterruptibleUtils.AtomicReference<FeebleReference<? extends T>> head;
 
     /**
      * Notification of other threads that FeebleReferences might be available.
@@ -65,15 +67,43 @@ public final class FeebleReferenceList<T> {
         head = new UninterruptibleUtils.AtomicReference<>(null);
     }
 
+    /** Whether the list is empty at the time of the call. */
+    public boolean isEmpty() {
+        return getHead() == null;
+    }
+
     /**
-     * Push FeebleReference on to this list. This method is only called during a collection, and so
-     * does not have to worry about races.
+     * Push FeebleReference on to this list if it is not already on a list. Each reference can only
+     * be enqueued once. Calls to this method may race with the collector to enqueue a reference.
+     * One call to this method may also race with other threaded trying to enqueue the same
+     * reference, or trying to enqueue other references on the same queue.
+     * <p>
+     * The race to enqueue a reference is resolved by having only the thread that can clear the list
+     * slot enqueue the reference on the queue.
+     * <p>
+     * The race to enqueue other references on the same queue is resolved by the compare-and-set of
+     * the sampled head.
      */
-    public void push(FeebleReference<?> fr) {
-        if (!fr.isEnlisted()) {
-            fr.listPrepend(getHead());
-            setHead(uncheckedNarrow(fr));
+    public boolean push(FeebleReference<?> fr) {
+        /*
+         * Clear the list field of the FeebleReference so it can not be pushed again, to avoiding
+         * A-B-A problems. Only the winner of the race to clear the list field will push the
+         * FeebleReference to the list.
+         */
+        final FeebleReferenceList<?> clearedList = fr.clearList();
+        if (clearedList != null) {
+            /* I won the race. */
+            assert clearedList == this : "Pushing to the wrong list.";
+            assert !fr.isEnlisted() : "Pushing a FeebleReference that is already on a list.";
+            for (; /* return */;) {
+                final FeebleReference<? extends T> sampleHead = getHead();
+                fr.listPrepend(sampleHead);
+                if (compareAndSetHead(sampleHead, FeebleReference.uncheckedNarrow(fr))) {
+                    return true;
+                }
+            }
         }
+        return false;
     }
 
     /*
@@ -82,8 +112,8 @@ public final class FeebleReferenceList<T> {
 
     /**
      * Pop a FeebleReference off of this list. This method may be called by multiple threads, and so
-     * has to worry about races. So as to not worry about intervening pushes by the collector, it is
-     * uninterruptible.
+     * has to worry about races. So as to not worry about intervening pushes by the collector, this
+     * method is uninterruptible.
      */
     @Uninterruptible(reason = "List is pushed to during collections.")
     public FeebleReference<? extends T> pop() {
@@ -167,14 +197,9 @@ public final class FeebleReferenceList<T> {
      * Manipulations of head.
      */
 
-    @Uninterruptible(reason = "Called from uninterruptible code.")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private FeebleReference<? extends T> getHead() {
         return head.get();
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.")
-    private void setHead(FeebleReference<? extends T> value) {
-        head.set(value);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.")
@@ -246,12 +271,14 @@ public final class FeebleReferenceList<T> {
      * way. Similarly, I could add asserts about the thread state on the way out, but there is not
      * much I can do if things go wrong.
      */
+    @NeverInline("Must not be inlined in a caller that has an exception handler: We only support InvokeNode and not InvokeWithExceptionNode between a CFunctionPrologueNode and CFunctionEpilogueNode")
     private static void awaitWithTransition() {
         CFunctionPrologueNode.cFunctionPrologue();
         awaitInNative();
         CFunctionEpilogueNode.cFunctionEpilogue();
     }
 
+    @NeverInline("Must not be inlined in a caller that has an exception handler: We only support InvokeNode and not InvokeWithExceptionNode between a CFunctionPrologueNode and CFunctionEpilogueNode")
     private static long awaitWithTransition(long waitNanos) {
         CFunctionPrologueNode.cFunctionPrologue();
         final long result = awaitInNative(waitNanos);
@@ -320,11 +347,6 @@ public final class FeebleReferenceList<T> {
     /*
      * Other methods.
      */
-
-    @SuppressWarnings("unchecked")
-    private FeebleReference<T> uncheckedNarrow(FeebleReference<?> fr) {
-        return (FeebleReference<T>) fr;
-    }
 
     /** Clean the list state that is kept in a FeebleReference. */
     @Uninterruptible(reason = "Called from uninterruptible code.")

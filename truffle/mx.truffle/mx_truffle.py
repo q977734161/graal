@@ -1,53 +1,79 @@
 #
-# commands.py - the GraalVM specific commands
-#
-# ----------------------------------------------------------------------------------------------------
-#
-# Copyright (c) 2007, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
-# This code is free software; you can redistribute it and/or modify it
-# under the terms of the GNU General Public License version 2 only, as
-# published by the Free Software Foundation.  Oracle designates this
-# particular file as subject to the "Classpath" exception as provided
-# by Oracle in the LICENSE file that accompanied this code.
+# The Universal Permissive License (UPL), Version 1.0
 #
-# This code is distributed in the hope that it will be useful, but WITHOUT
-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-# version 2 for more details (a copy is included in the LICENSE file that
-# accompanied this code).
+# Subject to the condition set forth below, permission is hereby granted to any
+# person obtaining a copy of this software, associated documentation and/or
+# data (collectively the "Software"), free of charge and under any and all
+# copyright rights in the Software, and any and all patent rights owned or
+# freely licensable by each licensor hereunder covering either (i) the
+# unmodified Software as contributed to or provided by such licensor, or (ii)
+# the Larger Works (as defined below), to deal in both
 #
-# You should have received a copy of the GNU General Public License version
-# 2 along with this work; if not, write to the Free Software Foundation,
-# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+# (a) the Software, and
 #
-# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
-# or visit www.oracle.com if you need additional information or have any
-# questions.
+# (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+# one is included with the Software each a "Larger Work" to which the Software
+# is contributed by such licensors),
 #
-# ----------------------------------------------------------------------------------------------------
-
+# without restriction, including without limitation the rights to copy, create
+# derivative works of, display, perform, and distribute the Software and make,
+# use, sell, offer for sale, import, export, have made, and have sold the
+# Software and the Larger Work(s), and to sublicense the foregoing rights on
+# either these or other terms.
+#
+# This license is subject to the following condition:
+#
+# The above copyright notice and either this complete permission notice or at a
+# minimum a reference to the UPL must be included in all copies or substantial
+# portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
 import os
-from os.path import exists
 import re
-import zipfile
-from collections import OrderedDict
-from argparse import ArgumentParser, RawDescriptionHelpFormatter
 import tempfile
+import sys
+import zipfile
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
+from collections import OrderedDict
+from os.path import exists
 
 import mx
-
-from mx_unittest import unittest
-from mx_sigtest import sigtest
-from mx_jackpot import jackpot
-from mx_gate import Task
-from mx_javamodules import as_java_module, get_java_module_info
-from urlparse import urljoin
-import mx_gate
-import mx_unittest
 import mx_benchmark
+import mx_gate
+import mx_native
 import mx_sdk
+import mx_unittest
+import tck
+from mx_gate import Task
+from mx_jackpot import jackpot
+from mx_javamodules import as_java_module, get_java_module_info
+from mx_sigtest import sigtest
+from mx_unittest import unittest
+
+# Temporary imports and (re)definitions while porting mx from Python 2 to Python 3
+if sys.version_info[0] < 3:
+    from urlparse import urljoin as _urllib_urljoin
+    def _decode(x):
+        return x
+    def _encode(x):
+        return x
+else:
+    from urllib.parse import urljoin as _urllib_urljoin # pylint: disable=unused-import,no-name-in-module
+    def _decode(x):
+        return x.decode()
+    def _encode(x):
+        return x.encode()
+
 
 _suite = mx.suite('truffle')
 
@@ -70,7 +96,8 @@ mx_benchmark.add_bm_suite(JMHRunnerTruffleBenchmarkSuite())
 
 def javadoc(args, vm=None):
     """build the Javadoc for all API packages"""
-    mx.javadoc(['--unified', '--exclude-packages', 'com.oracle.truffle.tck,com.oracle.truffle.tck.impl,com.oracle.truffle.api.interop.java,com.oracle.truffle.api.vm,com.oracle.truffle.api.metadata'] + args)
+    extraArgs = mx_sdk.build_oracle_compliant_javadoc_args(_suite, 'GraalVM', 'Truffle')
+    mx.javadoc(['--unified', '--exclude-packages', 'com.oracle.truffle.tck,com.oracle.truffle.tck.impl'] + extraArgs + args)
     javadoc_dir = os.sep.join([_suite.dir, 'javadoc'])
     checkLinks(javadoc_dir)
 
@@ -83,13 +110,13 @@ def checkLinks(javadocDir):
                 html = os.path.join(root, f)
                 content = open(html, 'r').read()
                 for url in href.findall(content):
-                    full = urljoin(html, url)
+                    full = _urllib_urljoin(html, url)
                     sectionIndex = full.find('#')
                     questionIndex = full.find('?')
                     minIndex = sectionIndex
                     if minIndex < 0:
                         minIndex = len(full)
-                    if questionIndex >= 0 and questionIndex < minIndex:
+                    if 0 <= questionIndex < minIndex:
                         minIndex = questionIndex
                     path = full[0:minIndex]
 
@@ -112,9 +139,10 @@ def checkLinks(javadocDir):
         else:
             content = open(referencedfile, 'r').read()
             for path, s in sections:
-                if not s == None:
-                    where = content.find('name="' + s + '"')
-                    if where == -1:
+                if not s is None:
+                    whereName = content.find('name="' + s + '"')
+                    whereId = content.find('id="' + s + '"')
+                    if whereName == -1 and whereId == -1:
                         mx.warn('There should be section ' + s + ' in ' + referencedfile + ". Referenced from " + path)
                         err = True
 
@@ -139,7 +167,7 @@ def _path_args(depNames=None):
             cpEntryToModule = {m.dist.path : m for m in modules}
 
             for e in mx.classpath(depNames).split(os.pathsep):
-                if cpEntryToModule.has_key(e):
+                if e in cpEntryToModule:
                     modulepath.append(cpEntryToModule[e].jarpath)
                 else:
                     classpath.append(e)
@@ -155,9 +183,12 @@ def _unittest_config_participant(config):
         # in turn allows us to dynamically open fields/methods to reflection.
         vmArgs = vmArgs + ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
 
+        # Needed for om.oracle.truffle.api.dsl.test.TestHelper#instrumentSlowPath
+        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.api.nodes=ALL-UNNAMED']
+
         # This is required for the call to setAccessible in
         # TruffleTCK.testValueWithSource to work.
-        vmArgs = vmArgs + ['--add-opens=com.oracle.truffle.truffle_api/com.oracle.truffle.api.vm=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
+        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
     return (vmArgs, mainClass, mainClassArgs)
 
 mx_unittest.add_config_participant(_unittest_config_participant)
@@ -173,13 +204,15 @@ def _truffle_gate_runner(args, tasks):
         if t: jackpot(['--fail-on-warnings'], suite=None, nonZeroIsFatal=True)
     if jdk.javaCompliance < '9':
         with Task('Truffle Javadoc', tasks) as t:
-            if t: mx.javadoc(['--unified'])
+            if t: javadoc([])
     with Task('Truffle UnitTests', tasks) as t:
         if t: unittest(['--suite', 'truffle', '--enable-timing', '--verbose', '--fail-fast'])
     with Task('Truffle Signature Tests', tasks) as t:
         if t: sigtest(['--check', 'binary'])
     with Task('File name length check', tasks) as t:
         if t: check_filename_length([])
+    with Task('Check Copyrights', tasks) as t:
+        if t: mx.checkcopyrights(['--primary'])
 
 mx_gate.add_gate_runner(_suite, _truffle_gate_runner)
 
@@ -198,28 +231,7 @@ def _is_graalvm(jdk):
                     return True
     return False
 
-def _unittest_config_participant_tck(config):
-
-    def find_path_arg(vmArgs, prefix):
-        for index in reversed(range(len(vmArgs) - 1)):
-            if prefix in vmArgs[index]:
-                return index, vmArgs[index][len(prefix):]
-        return None, None
-
-    def create_filter(requiredResource):
-        def has_resource(dist):
-            if dist.isJARDistribution() and exists(dist.path):
-                with zipfile.ZipFile(dist.path, "r") as zf:
-                    try:
-                        zf.getinfo(requiredResource)
-                    except KeyError:
-                        return False
-                    else:
-                        return True
-            else:
-                return False
-        return has_resource
-
+def _collect_class_path_entries(cp_entries_filter, entries_collector, properties_collector):
     def import_visitor(suite, suite_import, predicate, collector, javaProperties, seenSuites, **extra_args):
         suite_collector(mx.suite(suite_import.name), predicate, collector, javaProperties, seenSuites)
 
@@ -240,13 +252,46 @@ def _unittest_config_participant_tck(config):
                         cpPath = distCpEntry.classpath_repr(resolve=True)
                     if cpPath:
                         collector[cpPath] = None
+    suite_collector(mx.primary_suite(), cp_entries_filter, entries_collector, properties_collector, set())
+
+def _collect_class_path_entries_by_resource(requiredResource, entries_collector, properties_collector):
+    def has_resource(dist):
+        if dist.isJARDistribution() and exists(dist.path):
+            with zipfile.ZipFile(dist.path, "r") as zf:
+                try:
+                    zf.getinfo(requiredResource)
+                except KeyError:
+                    return False
+                else:
+                    return True
+        else:
+            return False
+    _collect_class_path_entries(has_resource, entries_collector, properties_collector)
+
+def _collect_class_path_entries_by_name(distributionName, entries_collector, properties_collector):
+    cp_filter = lambda dist: dist.isJARDistribution() and  dist.name == distributionName and exists(dist.path)
+    _collect_class_path_entries(cp_filter, entries_collector, properties_collector)
+
+def _collect_languages(entries_collector, properties_collector):
+    _collect_class_path_entries_by_resource("META-INF/truffle/language", entries_collector, properties_collector)
+
+def _collect_tck_providers(entries_collector, properties_collector):
+    _collect_class_path_entries_by_resource("META-INF/services/org.graalvm.polyglot.tck.LanguageProvider", entries_collector, properties_collector)
+
+def _unittest_config_participant_tck(config):
+
+    def find_path_arg(vmArgs, prefix):
+        for index in reversed(range(len(vmArgs) - 1)):
+            if prefix in vmArgs[index]:
+                return index, vmArgs[index][len(prefix):]
+        return None, None
 
     javaPropertiesToAdd = OrderedDict()
     providers = OrderedDict()
-    suite_collector(mx.primary_suite(), create_filter("META-INF/services/org.graalvm.polyglot.tck.LanguageProvider"), providers, javaPropertiesToAdd, set())
+    _collect_tck_providers(providers, javaPropertiesToAdd)
     languages = OrderedDict()
-    suite_collector(mx.primary_suite(), create_filter("META-INF/truffle/language"), languages, javaPropertiesToAdd, set())
-    suite_collector(mx.primary_suite(), lambda dist: dist.isJARDistribution() and "TRUFFLE_TCK_INSTRUMENTATION" == dist.name and exists(dist.path), languages, javaPropertiesToAdd, set())
+    _collect_languages(languages, javaPropertiesToAdd)
+    _collect_class_path_entries_by_name("TRUFFLE_TCK_INSTRUMENTATION", languages, javaPropertiesToAdd)
     vmArgs, mainClass, mainClassArgs = config
     cpIndex, cpValue = mx.find_classpath_arg(vmArgs)
     cpBuilder = OrderedDict()
@@ -257,8 +302,8 @@ def _unittest_config_participant_tck(config):
         cpBuilder[providerCpElement] = None
 
     if _is_graalvm(mx.get_jdk()):
-        common = OrderedDict()
-        suite_collector(mx.primary_suite(), lambda dist: dist.isJARDistribution() and "TRUFFLE_TCK_COMMON" == dist.name and exists(dist.path), common, javaPropertiesToAdd, set())
+        boot_cp = OrderedDict()
+        _collect_class_path_entries_by_name("TRUFFLE_TCK_COMMON", boot_cp, javaPropertiesToAdd)
         tpIndex, tpValue = find_path_arg(vmArgs, '-Dtruffle.class.path.append=')
         tpBuilder = OrderedDict()
         if tpValue:
@@ -271,7 +316,7 @@ def _unittest_config_participant_tck(config):
         if bpValue:
             for cpElement in bpValue.split(os.pathsep):
                 bpBuilder[cpElement] = None
-        for bootCpElement in common:
+        for bootCpElement in boot_cp:
             bpBuilder[bootCpElement] = None
             cpBuilder.pop(bootCpElement, None)
             tpBuilder.pop(bootCpElement, None)
@@ -323,12 +368,12 @@ class TruffleArchiveParticipant:
         self.settings = {}
         self.arc = arc
 
-    def __add__(self, arcname, contents):
+    def __add__(self, arcname, contents): # pylint: disable=unexpected-special-method-signature
         metainfFile = self._truffle_metainf_file(arcname)
         if metainfFile:
             propertyRe = TruffleArchiveParticipant.PROPERTY_RE
             properties = {}
-            for line in contents.strip().split('\n'):
+            for line in _decode(contents).strip().split('\n'):
                 if not line.startswith('#'):
                     m = propertyRe.match(line)
                     assert m, 'line in ' + arcname + ' does not match ' + propertyRe.pattern + ': ' + line
@@ -344,12 +389,12 @@ class TruffleArchiveParticipant:
         return False
 
     def __closing__(self):
-        for metainfFile, propertiesList in self.settings.iteritems():
+        for metainfFile, propertiesList in self.settings.items():
             arcname = 'META-INF/truffle/' + metainfFile
             lines = []
             counter = 1
             for properties in propertiesList:
-                for enum in sorted(properties.viewkeys()):
+                for enum in sorted(properties.keys()):
                     assert enum.startswith(metainfFile)
                     newEnum = metainfFile + str(counter)
                     counter += 1
@@ -414,6 +459,29 @@ def _execute_debugger_test(testFilter, logFile, testEvaluation=False, unitTestOp
     args = args + testFilter
     unittest(args)
 
+def execute_tck(graalvm_home, mode='default', language_filter=None, values_filter=None, tests_filter=None, vm_args=None):
+    """
+    Executes Truffle TCK with all TCK providers reachable from the primary suite and all languages installed in the given GraalVM.
+
+    :param graalvm_home: a path to GraalVM
+    :param mode: a name of TCK mode,
+        'default' - executes the test with default GraalVM configuration,
+        'compile' - compiles the tests before execution
+    :param language_filter: the language id, limits TCK tests to certain language
+    :param values_filter: an iterable of value constructors language ids, limits TCK values to certain language(s)
+    :param tests_filter: a substring of TCK test name or an iterable of substrings of TCK test names
+    :param vm_args: iterable containing additional Java VM args
+    """
+    cp = OrderedDict()
+    _collect_tck_providers(cp, dict())
+    truffle_cp = OrderedDict()
+    _collect_class_path_entries_by_name("TRUFFLE_TCK_INSTRUMENTATION", truffle_cp, dict())
+    _collect_class_path_entries_by_name("TRUFFLE_SL", truffle_cp, dict())
+    boot_cp = OrderedDict()
+    _collect_class_path_entries_by_name("TRUFFLE_TCK_COMMON", boot_cp, dict())
+    return tck.execute_tck(graalvm_home, mode=tck.Mode.for_name(mode), language_filter=language_filter, values_filter=values_filter,
+        tests_filter=tests_filter, cp=cp.keys(), truffle_cp=truffle_cp.keys(), boot_cp=boot_cp, vm_args=vm_args)
+
 
 def _tck(args):
     """runs TCK tests"""
@@ -432,11 +500,14 @@ def _tck(args):
     if len(tests) == 0:
         tests = ["com.oracle.truffle.tck.tests"]
     index = len(args_no_tests)
+    has_separator_arg = False
     for arg in reversed(args_no_tests):
         if arg.startswith("--"):
+            if arg == "--":
+                has_separator_arg = True
             break
         index = index - 1
-    unitTestOptions = args_no_tests[0:max(index-1, 0)]
+    unitTestOptions = args_no_tests[0:max(index - (1 if has_separator_arg else 0), 0)]
     jvmOptions = args_no_tests[index:len(args_no_tests)]
     if tckConfiguration == "default":
         unittest(unitTestOptions + ["--"] + jvmOptions + tests)
@@ -471,33 +542,6 @@ def check_filename_length(args):
             mx.log_error(x)
         mx.abort("File names that are too long where found. Ensure all file names are under %d characters long." % max_length)
 
-COPYRIGHT_HEADER_GPL = """\
-/*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
- *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
- *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
- *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
- *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
- */
-// Checkstyle: stop
-//@formatter:off
-{0}
-"""
 COPYRIGHT_HEADER_UPL = """\
 /*
  * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
@@ -549,7 +593,7 @@ PTRN_TOKEN_CAST = re.compile(r"\(Token\)_errHandler.recoverInline\(this\)")
 
 def create_dsl_parser(args=None, out=None):
     """create the DSL expression parser using antlr"""
-    create_parser("com.oracle.truffle.dsl.processor", "com.oracle.truffle.dsl.processor.expression", "Expression", COPYRIGHT_HEADER_GPL, args, out)
+    create_parser("com.oracle.truffle.dsl.processor", "com.oracle.truffle.dsl.processor.expression", "Expression", COPYRIGHT_HEADER_UPL, args, out)
 
 def create_sl_parser(args=None, out=None):
     """create the SimpleLanguage parser using antlr"""
@@ -557,7 +601,7 @@ def create_sl_parser(args=None, out=None):
 
 def create_parser(grammar_project, grammar_package, grammar_name, copyright_template, args=None, out=None):
     """create the DSL expression parser using antlr"""
-    grammar_dir = mx.project(grammar_project).source_dirs()[0] + "/" + grammar_package.replace(".", "/") + "/"
+    grammar_dir = os.path.join(mx.project(grammar_project).source_dirs()[0], *grammar_package.split(".")) + os.path.sep
     mx.run_java(mx.get_runtime_jvm_args(['ANTLR4_COMPLETE']) + ["org.antlr.v4.Tool", "-package", grammar_package, "-no-listener"] + args + [grammar_dir + grammar_name + ".g4"], out=out)
     for filename in [grammar_dir + grammar_name + "Lexer.java", grammar_dir + grammar_name + "Parser.java"]:
         with open(filename, 'r') as content_file:
@@ -574,19 +618,167 @@ def create_parser(grammar_project, grammar_package, grammar_name, copyright_temp
         with open(filename, 'w') as content_file:
             content_file.write(content)
 
-mx_sdk.register_graalvm_component(mx_sdk.GraalVmTool(
+
+class LibffiBuilderProject(mx.AbstractNativeProject, mx_native.NativeDependency):
+    """Project for building libffi from source.
+
+    The build is performed by:
+        1. Extracting the sources,
+        2. Applying the platform dependent patches, and
+        3. Invoking the platform dependent builder that we delegate to.
+    """
+
+    def __init__(self, suite, name, deps, workingSets, **kwargs):
+        subDir = 'src'
+        srcDirs = ['patches']
+        d = mx.join(suite.dir, subDir, name)
+        super(LibffiBuilderProject, self).__init__(suite, name, subDir, srcDirs, deps, workingSets, d, **kwargs)
+
+        self.out_dir = self.get_output_root()
+        if mx.get_os() == 'windows':
+            self.delegate = mx_native.DefaultNativeProject(suite, name, subDir, [], [], None,
+                                                           mx.join(self.out_dir, 'libffi-3.2.1'),
+                                                           'static_lib',
+                                                           deliverable='ffi',
+                                                           cflags=['-MD', '-O2'])
+            self.delegate._source = dict(tree=['include',
+                                               'src',
+                                               mx.join('src', 'x86')],
+                                         files={'.h': [mx.join('include', 'ffi.h'),
+                                                       mx.join('include', 'ffitarget.h'),
+                                                       mx.join('src', 'fficonfig.h'),
+                                                       mx.join('src', 'ffi_common.h')],
+                                                '.c': [mx.join('src', 'closures.c'),
+                                                       mx.join('src', 'java_raw_api.c'),
+                                                       mx.join('src', 'prep_cif.c'),
+                                                       mx.join('src', 'raw_api.c'),
+                                                       mx.join('src', 'types.c'),
+                                                       mx.join('src', 'x86', 'ffi.c')],
+                                                '.S': [mx.join('src', 'x86', 'win64.S')]})
+        else:
+            class LibtoolNativeProject(mx.NativeProject,  # pylint: disable=too-many-ancestors
+                                       mx_native.NativeDependency):
+                include_dirs = property(lambda self: [mx.join(self.getOutput(), 'include')])
+                libs = property(lambda self: [next(self.getArchivableResults(single=True))[0]])
+
+                def getArchivableResults(self, use_relpath=True, single=False):
+                    for file_path, archive_path in super(LibtoolNativeProject, self).getArchivableResults(use_relpath):
+                        path_in_lt_objdir = mx.basename(mx.dirname(file_path)) == '.libs'
+                        yield file_path, mx.basename(archive_path) if path_in_lt_objdir else archive_path
+                        if single:
+                            assert path_in_lt_objdir, 'the first build result must be from LT_OBJDIR'
+                            break
+
+            self.delegate = LibtoolNativeProject(suite, name, subDir, [], [], None,
+                                                 ['.libs/libffi.a',
+                                                  'include/ffi.h',
+                                                  'include/ffitarget.h'],
+                                                 mx.join(self.out_dir, 'libffi-build'),
+                                                 mx.join(self.out_dir, 'libffi-3.2.1'))
+            self.delegate.buildEnv = dict(
+                SOURCES=mx.basename(self.delegate.dir),
+                OUTPUT=mx.basename(self.delegate.getOutput()),
+                CONFIGURE_ARGS=' '.join([
+                    '--disable-dependency-tracking',
+                    '--disable-shared',
+                    '--with-pic',
+                    'CFLAGS="{}"'.format(' '.join(
+                        ['-g', '-O3'] + (['-m64'] if mx.get_os() == 'solaris' else [])
+                    )),
+                ])
+            )
+
+        self.buildDependencies = self.delegate.buildDependencies
+        self.include_dirs = self.delegate.include_dirs
+        self.libs = self.delegate.libs
+
+    @property
+    def sources(self):
+        assert len(self.deps) == 1, '{} must depend only on its sources'.format(self.name)
+        return self.deps[0]
+
+    @property
+    def patches(self):
+        """A list of patches that will be applied during a build."""
+        os_arch_dir = mx.join(self.source_dirs()[0], '{}-{}'.format(mx.get_os(), mx.get_arch()))
+        if mx.exists(os_arch_dir):
+            return [mx.join(os_arch_dir, patch) for patch in os.listdir(os_arch_dir)]
+
+        others_dir = mx.join(self.source_dirs()[0], 'others')
+        return [mx.join(others_dir, patch) for patch in os.listdir(others_dir)]
+
+    def getBuildTask(self, args):
+        return LibffiBuildTask(args, self)
+
+    def getArchivableResults(self, use_relpath=True, single=False):
+        return self.delegate.getArchivableResults(use_relpath, single)
+
+
+class LibffiBuildTask(mx.AbstractNativeBuildTask):
+    def __init__(self, args, project):
+        super(LibffiBuildTask, self).__init__(args, project)
+        self.delegate = project.delegate.getBuildTask(args)
+
+    def __str__(self):
+        return 'Building {}'.format(self.subject.name)
+
+    def needsBuild(self, newestInput):
+        is_needed, reason = super(LibffiBuildTask, self).needsBuild(newestInput)
+        if is_needed:
+            return True, reason
+
+        output = self.newestOutput()
+        newest_patch = mx.TimeStampFile.newest(self.subject.patches)
+        if newest_patch and output.isOlderThan(newest_patch):
+            return True, '{} is older than {}'.format(output, newest_patch)
+
+        return False, 'all files are up to date'
+
+    def newestOutput(self):
+        output = self.delegate.newestOutput()
+        return None if output and not output.exists() else output
+
+    def build(self):
+        assert not mx.exists(self.subject.out_dir), '{} must be cleaned before build'.format(self.subject.name)
+
+        mx.log('Extracting {}...'.format(self.subject.sources))
+        mx.Extractor.create(self.subject.sources.get_path(False)).extract(self.subject.out_dir)
+
+        mx.log('Applying patches...')
+        git_apply = ['git', 'apply', '--whitespace=nowarn', '--directory',
+                     os.path.relpath(self.subject.delegate.dir, self.subject.suite.vc_dir)]
+        for patch in self.subject.patches:
+            mx.run(git_apply + [patch], cwd=self.subject.suite.vc_dir)
+
+        self.delegate.logBuild()
+        self.delegate.build()
+
+    def clean(self, forBuild=False):
+        mx.rmtree(self.subject.out_dir, ignore_errors=True)
+
+
+mx_sdk.register_graalvm_component(mx_sdk.GraalVMSvmMacro(
     suite=_suite,
-    name='Truffle NFI',
+    name='Truffle',
     short_name='tfl',
     dir_name='truffle',
     license_files=[],
     third_party_license_files=[],
-    truffle_jars=[],
-    support_distributions=[
-        'truffle:TRUFFLE_GRAALVM_SUPPORT',
-        'truffle:TRUFFLE_NFI_NATIVE',
-    ]
+    support_distributions=['truffle:TRUFFLE_GRAALVM_SUPPORT']
 ))
+
+
+mx_sdk.register_graalvm_component(mx_sdk.GraalVmLanguage(
+    suite=_suite,
+    name='Truffle NFI',
+    short_name='nfi',
+    dir_name='nfi',
+    license_files=[],
+    third_party_license_files=[],
+    truffle_jars=['truffle:TRUFFLE_NFI'],
+    support_distributions=['truffle:TRUFFLE_NFI_GRAALVM_SUPPORT']
+))
+
 
 mx.update_commands(_suite, {
     'check-filename-length' : [check_filename_length, ""],

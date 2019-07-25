@@ -1,11 +1,13 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2017, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -78,9 +80,9 @@ public class AArch64ReadNode extends ReadNode {
      */
     public static void replace(ReadNode readNode) {
         assert readNode.getUsageCount() == 1;
-        assert readNode.getUsageAt(0) instanceof ZeroExtendNode || readNode.getUsageAt(0) instanceof SignExtendNode;
+        assert readNode.usages().first() instanceof ZeroExtendNode || readNode.usages().first() instanceof SignExtendNode;
 
-        ValueNode usage = (ValueNode) readNode.getUsageAt(0);
+        ValueNode usage = (ValueNode) readNode.usages().first();
         boolean isSigned = usage instanceof SignExtendNode;
         IntegerStamp accessStamp = ((IntegerStamp) readNode.getAccessStamp());
 

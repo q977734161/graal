@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,23 +24,25 @@
  */
 package com.oracle.truffle.regex.tregex.nodes;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.regex.RegexLanguage;
 import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
 import com.oracle.truffle.regex.tregex.util.json.JsonValue;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /**
  * This class is used to store a trace of the execution of a
- * {@link TRegexDFAExecutorNode#execute(VirtualFrame)}. A trace contains the arguments received by
- * {@link TRegexDFAExecutorNode#execute(VirtualFrame)}, and the ID of the DFA transition taken for
- * all characters of the input string that have been traversed. After execution, the recorded trace
- * can be dumped to disk as JSON with {@link #finishRecording()}.
+ * {@link TRegexDFAExecutorNode#execute(TRegexDFAExecutorLocals, boolean)}. A trace contains the
+ * arguments received by {@link TRegexDFAExecutorNode#execute(TRegexDFAExecutorLocals, boolean)},
+ * and the ID of the DFA transition taken for all characters of the input string that have been
+ * traversed. After execution, the recorded trace can be dumped to disk as JSON with
+ * {@link #finishRecording()}.
  */
 public class TRegexDFAExecutorDebugRecorder implements JsonConvertible {
 
@@ -60,9 +62,32 @@ public class TRegexDFAExecutorDebugRecorder implements JsonConvertible {
             transitions = new ArrayList<>();
         }
 
+        private int getLowestIndex() {
+            return initialIndex < maxIndex ? initialIndex : maxIndex;
+        }
+
+        private void initUpToIndex(int currentIndex) {
+            for (int i = transitions.size(); i <= currentIndex - getLowestIndex(); i++) {
+                transitions.add(new RecordedTransition(getLowestIndex() + i));
+            }
+        }
+
+        private RecordedTransition getTransition(int currentIndex) {
+            RecordedTransition transition = transitions.get(currentIndex - getLowestIndex());
+            assert transition.currentIndex == currentIndex;
+            return transition;
+        }
+
         @TruffleBoundary
         public void recordTransition(int currentIndex, int transitionID) {
-            transitions.add(new RecordedTransition(currentIndex, transitionID));
+            initUpToIndex(currentIndex);
+            getTransition(currentIndex).setTransitionID(transitionID);
+        }
+
+        @TruffleBoundary
+        public void recordCGPartialTransition(int currentIndex, int cgPartialTransitionIndex) {
+            initUpToIndex(currentIndex);
+            getTransition(currentIndex).addCgPartialTransitionIDs(cgPartialTransitionIndex);
         }
 
         @TruffleBoundary
@@ -79,18 +104,31 @@ public class TRegexDFAExecutorDebugRecorder implements JsonConvertible {
     private static final class RecordedTransition implements JsonConvertible {
 
         private final int currentIndex;
-        private final int transitionID;
+        private int transitionID = -1;
+        private List<Integer> cgPartialTransitionIDs;
 
-        private RecordedTransition(int currentIndex, int transitionID) {
+        private RecordedTransition(int currentIndex) {
             this.currentIndex = currentIndex;
+        }
+
+        public void setTransitionID(int transitionID) {
             this.transitionID = transitionID;
+        }
+
+        public void addCgPartialTransitionIDs(int partialTransitionID) {
+            if (cgPartialTransitionIDs == null) {
+                cgPartialTransitionIDs = new ArrayList<>();
+            }
+            cgPartialTransitionIDs.add(partialTransitionID);
         }
 
         @TruffleBoundary
         @Override
         public JsonValue toJson() {
             return Json.obj(Json.prop("currentIndex", currentIndex),
-                            Json.prop("transitionID", transitionID));
+                            Json.prop("transitionID", transitionID),
+                            Json.prop("cgPartialTransitionIDs", Json.array(
+                                            cgPartialTransitionIDs == null ? new int[0] : cgPartialTransitionIDs.stream().mapToInt(x -> x).toArray())));
         }
     }
 
@@ -101,9 +139,9 @@ public class TRegexDFAExecutorDebugRecorder implements JsonConvertible {
     private final DFAGenerator dfa;
     private List<Recording> recordings = new ArrayList<>();
 
-    public void startRecording(VirtualFrame frame, TRegexDFAExecutorNode executor) {
+    public void startRecording(TRegexDFAExecutorLocals locals) {
         CompilerAsserts.neverPartOfCompilation();
-        recordings.add(new Recording(executor.getInput(frame).toString(), executor.getFromIndex(frame), executor.getIndex(frame), executor.getMaxIndex(frame)));
+        recordings.add(new Recording(locals.getInput().toString(), locals.getFromIndex(), locals.getIndex(), locals.getMaxIndex()));
     }
 
     private Recording curRecording() {
@@ -118,10 +156,17 @@ public class TRegexDFAExecutorDebugRecorder implements JsonConvertible {
     }
 
     @TruffleBoundary
+    public void recordCGPartialTransition(int currentIndex, int cgPartialTransitionIndex) {
+        CompilerAsserts.neverPartOfCompilation();
+        curRecording().recordCGPartialTransition(currentIndex, cgPartialTransitionIndex);
+    }
+
+    @TruffleBoundary
     public void finishRecording() {
         CompilerAsserts.neverPartOfCompilation();
-        Json.obj(Json.prop("dfa", dfa), Json.prop("recording", curRecording())).dump(
+        TruffleFile file = RegexLanguage.getCurrentContext().getEnv().getTruffleFile(
                         "tregex_" + dfa.getDebugDumpName() + "_" + dfa.getNfa().getAst().getSource().toFileName() + "_recording" + recordings.size() + ".json");
+        Json.obj(Json.prop("dfa", dfa), Json.prop("recording", curRecording())).dump(file);
     }
 
     @TruffleBoundary

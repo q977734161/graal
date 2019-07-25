@@ -9,13 +9,13 @@ tests.
 ## Using Tools
 
 The tools provided in this suite have options, that can be specified to command-line
-language launchers. Some tools have their [APIs](http://graalvm.github.io/graal/tools/javadoc/).
+language launchers. Some tools have their [APIs](http://www.graalvm.org/tools/javadoc/).
 
 ## Setup and Build
 
 Graal uses the [MX build tool](https://github.com/graalvm/mx/), which must be downloaded
 and put onto your PATH. Also, point `JAVA_HOME` to a
-[labsjdk](http://www.oracle.com/technetwork/oracle-labs/program-languages/downloads/index.html).
+[JVMCI-enabled JDK 8](https://github.com/graalvm/openjdk8-jvmci-builder/releases).
 
 ```bash
 git clone https://github.com/graalvm/mx.git

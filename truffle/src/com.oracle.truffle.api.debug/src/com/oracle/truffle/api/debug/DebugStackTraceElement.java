@@ -2,25 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
@@ -46,16 +62,16 @@ import com.oracle.truffle.api.source.SourceSection;
  * {@link DebugStackFrame}, that is associated with a {@link SuspendedEvent}.
  *
  * @see DebugException#getDebugStackTrace()
- * @since 1.0
+ * @since 19.0
  */
 public final class DebugStackTraceElement {
 
-    private final Debugger debugger;
+    private final DebuggerSession session;
     final TruffleStackTraceElement traceElement;
     private StackTraceElement stackTrace;
 
-    DebugStackTraceElement(Debugger debugger, TruffleStackTraceElement traceElement) {
-        this.debugger = debugger;
+    DebugStackTraceElement(DebuggerSession session, TruffleStackTraceElement traceElement) {
+        this.session = session;
         this.traceElement = traceElement;
     }
 
@@ -65,7 +81,7 @@ public final class DebugStackTraceElement {
      * The decision to mark a method as <em>internal</em> is language-specific, reflects judgments
      * about tool usability, and is subject to change.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isInternal() {
         RootNode root = findCurrentRoot();
@@ -79,7 +95,7 @@ public final class DebugStackTraceElement {
      * A description of the trace element. If the language does not provide such a description then
      * <code>null</code> is returned.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public String getName() {
         RootNode root = findCurrentRoot();
@@ -88,13 +104,23 @@ public final class DebugStackTraceElement {
         }
         try {
             return root.getName();
-        } catch (Throwable e) {
-            /* Throw error if assertions are enabled. */
-            try {
-                assert false;
-            } catch (AssertionError e1) {
-                throw e;
-            }
+        } catch (ThreadDeath td) {
+            throw td;
+        } catch (Throwable ex) {
+            throw new DebugException(session, ex, root.getLanguageInfo(), null, true, null);
+        }
+    }
+
+    private String getName0() {
+        RootNode root = findCurrentRoot();
+        if (root == null) {
+            return null;
+        }
+        try {
+            return root.getName();
+        } catch (ThreadDeath td) {
+            throw td;
+        } catch (Throwable ex) {
             return null;
         }
     }
@@ -103,12 +129,12 @@ public final class DebugStackTraceElement {
      * Returns the source section location of this trace element. The source section is
      * <code>null</code> if the source location is not available.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public SourceSection getSourceSection() {
         Node node = traceElement.getLocation();
         if (node != null) {
-            return node.getEncapsulatingSourceSection();
+            return session.resolveSection(node.getEncapsulatingSourceSection());
         }
         return null;
     }
@@ -119,7 +145,7 @@ public final class DebugStackTraceElement {
      *
      * @return the scope, or <code>null</code> when no language is associated with this frame
      *         location, or when no local scope exists.
-     * @since 1.0
+     * @since 19.0
      */
     public DebugScope getScope() {
         Node node = traceElement.getLocation();
@@ -133,17 +159,17 @@ public final class DebugStackTraceElement {
         }
         Frame elementFrame = traceElement.getFrame();
         MaterializedFrame frame = (elementFrame != null) ? elementFrame.materialize() : null;
-        Iterable<Scope> scopes = debugger.getEnv().findLocalScopes(node, frame);
+        Iterable<Scope> scopes = session.getDebugger().getEnv().findLocalScopes(node, frame);
         Iterator<Scope> it = scopes.iterator();
         if (!it.hasNext()) {
             return null;
         }
-        return new DebugScope(it.next(), it, debugger, null, frame, root);
+        return new DebugScope(it.next(), it, session, null, frame, root);
     }
 
     DebugValue wrapHeapValue(Object result) {
         LanguageInfo language = getLanguage();
-        return new HeapValue(debugger, language, null, result);
+        return new HeapValue(session, language, null, result);
     }
 
     LanguageInfo getLanguage() {
@@ -170,7 +196,7 @@ public final class DebugStackTraceElement {
         if (stackTrace == null) {
             LanguageInfo language = getLanguage();
             String declaringClass = language != null ? "<" + language.getId() + ">" : "<unknown>";
-            String methodName = getName();
+            String methodName = getName0();
             if (methodName == null) {
                 methodName = "";
             }

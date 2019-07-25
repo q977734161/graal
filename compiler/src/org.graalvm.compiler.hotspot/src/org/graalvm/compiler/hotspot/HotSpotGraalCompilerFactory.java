@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,6 +25,9 @@
 package org.graalvm.compiler.hotspot;
 
 import static jdk.vm.ci.common.InitTimer.timer;
+import static jdk.vm.ci.hotspot.HotSpotJVMCICompilerFactory.CompilationLevelAdjustment.None;
+import static jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE;
+import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
 import static org.graalvm.compiler.hotspot.HotSpotGraalOptionValues.GRAAL_OPTION_PROPERTY_PREFIX;
 
 import java.io.PrintStream;
@@ -39,8 +44,10 @@ import org.graalvm.compiler.phases.tiers.CompilerConfiguration;
 import jdk.vm.ci.common.InitTimer;
 import jdk.vm.ci.hotspot.HotSpotJVMCICompilerFactory;
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
-import jdk.vm.ci.hotspot.HotSpotSignature;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
+import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.runtime.JVMCIRuntime;
+import jdk.vm.ci.services.Services;
 
 public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFactory {
 
@@ -67,21 +74,27 @@ public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFacto
 
     @Override
     public void onSelection() {
-        JVMCIVersionCheck.check(false);
+        JVMCIVersionCheck.check(Services.getSavedProperties(), false);
         assert options == null : "cannot select " + getClass() + " service more than once";
-        options = HotSpotGraalOptionValues.HOTSPOT_OPTIONS;
+        options = HotSpotGraalOptionValues.defaultOptions();
         initializeGraalCompilePolicyFields(options);
         isGraalPredicate = compileGraalWithC1Only ? new IsGraalPredicate() : null;
         /*
          * Exercise this code path early to encourage loading now. This doesn't solve problem of
          * deadlock during class loading but seems to eliminate it in practice.
          */
-        adjustCompilationLevelInternal(Object.class, "hashCode", "()I", CompilationLevel.FullOptimization);
-        adjustCompilationLevelInternal(Object.class, "hashCode", "()I", CompilationLevel.Simple);
+        if (isGraalPredicate != null && isGraalPredicate.getCompilationLevelAdjustment() != None) {
+            adjustCompilationLevelInternal(Object.class, CompilationLevel.FullOptimization);
+            adjustCompilationLevelInternal(Object.class, CompilationLevel.Simple);
+        }
+        if (IS_BUILDING_NATIVE_IMAGE) {
+            // Triggers initialization of all option descriptors
+            Options.CompileGraalWithC1Only.getName();
+        }
     }
 
     private static void initializeGraalCompilePolicyFields(OptionValues options) {
-        compileGraalWithC1Only = Options.CompileGraalWithC1Only.getValue(options);
+        compileGraalWithC1Only = Options.CompileGraalWithC1Only.getValue(options) && !IS_IN_NATIVE_IMAGE;
         String optionValue = Options.GraalCompileOnly.getValue(options);
         if (optionValue != null) {
             MethodFilter[] filter = MethodFilter.parse(optionValue);
@@ -116,7 +129,7 @@ public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFacto
     public HotSpotGraalCompiler createCompiler(JVMCIRuntime runtime) {
         CompilerConfigurationFactory factory = CompilerConfigurationFactory.selectFactory(null, options);
         if (isGraalPredicate != null) {
-            isGraalPredicate.onCompilerConfigurationFactorySelection(factory);
+            isGraalPredicate.onCompilerConfigurationFactorySelection((HotSpotJVMCIRuntime) runtime, factory);
         }
         HotSpotGraalCompiler compiler = createCompiler("VM", runtime, options, factory);
         // Only the HotSpotGraalRuntime associated with the compiler created via
@@ -147,21 +160,13 @@ public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFacto
 
     @Override
     public CompilationLevelAdjustment getCompilationLevelAdjustment() {
-        if (graalCompileOnlyFilter != null) {
-            return CompilationLevelAdjustment.ByFullSignature;
-        }
-        if (compileGraalWithC1Only) {
-            // We only decide using the class declaring the method
-            // so no need to have the method name and signature
-            // symbols converted to a String.
-            return CompilationLevelAdjustment.ByHolder;
-        }
-        return CompilationLevelAdjustment.None;
+        return isGraalPredicate != null ? isGraalPredicate.getCompilationLevelAdjustment() : None;
     }
 
     @Override
-    public CompilationLevel adjustCompilationLevel(Class<?> declaringClass, String name, String signature, boolean isOsr, CompilationLevel level) {
-        return adjustCompilationLevelInternal(declaringClass, name, signature, level);
+    public CompilationLevel adjustCompilationLevel(Object declaringClassObject, String name, String signature, boolean isOsr, CompilationLevel level) {
+        Class<?> declaringClass = (Class<?>) declaringClassObject;
+        return adjustCompilationLevelInternal(declaringClass, level);
     }
 
     static {
@@ -171,32 +176,28 @@ public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFacto
         assert HotSpotGraalCompilerFactory.class.getName().equals("org.graalvm.compiler.hotspot.HotSpotGraalCompilerFactory");
     }
 
-    private CompilationLevel adjustCompilationLevelInternal(Class<?> declaringClass, String name, String signature, CompilationLevel level) {
-        if (compileGraalWithC1Only) {
-            if (level.ordinal() > CompilationLevel.Simple.ordinal()) {
-                if (isGraalPredicate.apply(declaringClass)) {
-                    return CompilationLevel.Simple;
-                }
-            }
-        }
-        return checkGraalCompileOnlyFilter(declaringClass.getName(), name, signature, level);
-    }
-
-    public static CompilationLevel checkGraalCompileOnlyFilter(String declaringClassName, String name, String signature, CompilationLevel level) {
-        if (graalCompileOnlyFilter != null) {
-            if (level == CompilationLevel.FullOptimization) {
-                HotSpotSignature sig = null;
-                for (MethodFilter filter : graalCompileOnlyFilter) {
-                    if (filter.hasSignature() && sig == null) {
-                        sig = new HotSpotSignature(HotSpotJVMCIRuntime.runtime(), signature);
-                    }
-                    if (filter.matches(declaringClassName, name, sig)) {
-                        return level;
-                    }
-                }
+    private CompilationLevel adjustCompilationLevelInternal(Class<?> declaringClass, CompilationLevel level) {
+        assert isGraalPredicate != null;
+        if (level.ordinal() > CompilationLevel.Simple.ordinal()) {
+            if (isGraalPredicate.apply(declaringClass)) {
                 return CompilationLevel.Simple;
             }
         }
         return level;
+    }
+
+    static boolean shouldExclude(HotSpotResolvedJavaMethod method) {
+        if (graalCompileOnlyFilter != null) {
+            String javaClassName = method.getDeclaringClass().toJavaName();
+            String name = method.getName();
+            Signature signature = method.getSignature();
+            for (MethodFilter filter : graalCompileOnlyFilter) {
+                if (filter.matches(javaClassName, name, signature)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 }

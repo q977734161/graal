@@ -38,7 +38,7 @@ import com.oracle.truffle.tools.profiler.MemoryTracer;
  *
  * @since 0.30
  */
-@TruffleInstrument.Registration(id = MemoryTracerInstrument.ID, name = "Memory Tracer", version = "0.1", services = {MemoryTracer.class})
+@TruffleInstrument.Registration(id = MemoryTracerInstrument.ID, name = "Memory Tracer", version = "0.2", services = {MemoryTracer.class})
 public class MemoryTracerInstrument extends TruffleInstrument {
 
     /**
@@ -85,24 +85,6 @@ public class MemoryTracerInstrument extends TruffleInstrument {
      * Does a lookup in the runtime instruments of the engine and returns an instance of the
      * {@link CPUTracer}.
      *
-     * @since 0.30
-     * @deprecated use {@link #getTracer(Engine)} instead.
-     */
-    @Deprecated
-    @SuppressWarnings("deprecation")
-    public static MemoryTracer getTracer(com.oracle.truffle.api.vm.PolyglotEngine engine) {
-        com.oracle.truffle.api.vm.PolyglotRuntime.Instrument instrument = engine.getRuntime().getInstruments().get(ID);
-        if (instrument == null) {
-            throw new IllegalStateException("Memory Tracer is not installed.");
-        }
-        instrument.setEnabled(true);
-        return instrument.lookup(MemoryTracer.class);
-    }
-
-    /**
-     * Does a lookup in the runtime instruments of the engine and returns an instance of the
-     * {@link CPUTracer}.
-     *
      * @since 0.33
      */
     public static MemoryTracer getTracer(Engine engine) {
@@ -137,8 +119,9 @@ public class MemoryTracerInstrument extends TruffleInstrument {
         final boolean internals = env.getOptions().get(MemoryTracerCLI.TRACE_INTERNAL);
         final Object[] filterRootName = env.getOptions().get(MemoryTracerCLI.FILTER_ROOT);
         final Object[] filterFile = env.getOptions().get(MemoryTracerCLI.FILTER_FILE);
+        final String filterMimeType = env.getOptions().get(MemoryTracerCLI.FILTER_MIME_TYPE);
         final String filterLanguage = env.getOptions().get(MemoryTracerCLI.FILTER_LANGUAGE);
-        return MemoryTracerCLI.buildFilter(roots, statements, calls, internals, filterRootName, filterFile, filterLanguage);
+        return MemoryTracerCLI.buildFilter(roots, statements, calls, internals, filterRootName, filterFile, filterMimeType, filterLanguage);
     }
 
     /**

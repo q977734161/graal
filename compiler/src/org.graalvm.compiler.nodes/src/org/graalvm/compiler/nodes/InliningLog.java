@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -115,9 +117,23 @@ public class InliningLog {
 
         public String positionString() {
             if (parent == null) {
-                return "compilation of " + target.format("%H.%n(%p)");
+                if (target != null) {
+                    return "compilation of " + target.format("%H.%n(%p)");
+                } else if (invoke != null && invoke.getTargetMethod() != null) {
+                    return "compilation of " + invoke.getTargetMethod().getName() + "(bci: " + getBci() + ")";
+                } else {
+                    return "unknown method (bci: " + getBci() + ")";
+                }
             }
-            return "at " + MetaUtil.appendLocation(new StringBuilder(100), parent.target, getBci()).toString();
+            String position;
+            if (parent.target != null) {
+                position = MetaUtil.appendLocation(new StringBuilder(100), parent.target, getBci()).toString();
+            } else if (invoke != null && invoke.getTargetMethod() != null) {
+                position = invoke.getTargetMethod().getName() + "(bci: " + getBci() + ")";
+            } else {
+                position = "unknown method (bci: " + getBci() + ")";
+            }
+            return "at " + position;
         }
 
         public int getBci() {
@@ -384,7 +400,7 @@ public class InliningLog {
         }
     }
 
-    public final class PlaceholderInvokable implements Invokable {
+    public static final class PlaceholderInvokable implements Invokable {
         private int bci;
         private ResolvedJavaMethod method;
 

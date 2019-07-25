@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -48,7 +50,7 @@ public class UnsupportedFeatures {
         Data(String key, AnalysisMethod method, String message, String trace, Throwable originalException) {
             this.key = key;
             this.method = method;
-            this.message = message;
+            this.message = message != null ? message : "";
             this.trace = trace;
             this.originalException = originalException;
         }
@@ -92,15 +94,19 @@ public class UnsupportedFeatures {
      * @throws UnsupportedFeatureException if unsupported features are found
      */
     public void report(BigBang bb) {
-        if (!messages.isEmpty()) {
+        if (exist()) {
             List<Data> entries = new ArrayList<>(messages.values());
             Collections.sort(entries);
+
+            boolean singleEntry = entries.size() == 1;
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             PrintStream printStream = new PrintStream(outputStream);
 
             for (Data entry : entries) {
-                printStream.println("Error: " + entry.message);
+                if (!singleEntry) {
+                    printStream.println("Error: " + entry.message);
+                }
                 if (entry.trace != null) {
                     printStream.println("Trace: " + entry.trace);
                 }
@@ -109,29 +115,35 @@ public class UnsupportedFeatures {
                     ShortestInvokeChainPrinter.print(bb, entry.method, printStream);
                     printStream.println();
                 }
-                if (entry.originalException != null && !(entry.originalException instanceof UnsupportedFeatureException)) {
-                    printStream.print("Original exception that caused the problem: ");
-                    entry.originalException.printStackTrace(printStream);
+                if (!singleEntry) {
+                    if (entry.originalException != null && !(entry.originalException instanceof UnsupportedFeatureException)) {
+                        printStream.print("Original exception that caused the problem: ");
+                        entry.originalException.printStackTrace(printStream);
+                    }
                 }
             }
             printStream.close();
 
             String unsupportedFeaturesMessage;
-            if (entries.size() == 1) {
+            if (singleEntry) {
                 unsupportedFeaturesMessage = entries.get(0).message + "\nDetailed message:\n" + outputStream.toString();
                 throw new UnsupportedFeatureException(unsupportedFeaturesMessage, entries.get(0).originalException);
             } else {
-                unsupportedFeaturesMessage = "unsupported features in " + entries.size() + " methods" + "\nDetailed message:\n" + outputStream.toString();
+                unsupportedFeaturesMessage = "Unsupported features in " + entries.size() + " methods" + "\nDetailed message:\n" + outputStream.toString();
                 throw new UnsupportedFeatureException(unsupportedFeaturesMessage);
             }
 
         }
     }
 
+    public boolean exist() {
+        return !messages.isEmpty();
+    }
+
     public void checkMethod(AnalysisMethod method, StructuredGraph graph) {
         if (method.isEntryPoint() && !Modifier.isStatic(graph.method().getModifiers())) {
             ValueNode receiver = graph.start().stateAfter().localAt(0);
-            if (receiver != null && receiver.usages().count() > 0) {
+            if (receiver != null && receiver.hasUsages()) {
                 /*
                  * Entry point methods should be static. However, for unit testing we also use JUnit
                  * test methods as entry points, and they are by convention non-static. If the

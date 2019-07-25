@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -43,6 +45,7 @@ import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.Graph;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.CallTargetNode;
+import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.Invoke;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ParameterNode;
@@ -142,7 +145,11 @@ public class InliningData {
         OptionValues options = rootGraph.getOptions();
         if (method == null) {
             return "the method is not resolved";
-        } else if (method.isNative() && (!Intrinsify.getValue(options) || !InliningUtil.canIntrinsify(context.getReplacements(), method, invokeBci))) {
+        } else if (method.isNative() && !(Intrinsify.getValue(options) &&
+                        context.getReplacements().getSubstitution(method, invokeBci, rootGraph.trackNodeSourcePosition(), null, options) != null)) {
+            // We have conditional intrinsic, e.g., String.intern, which may not have inlineable
+            // graph depending on the context. The getSubstitution test ensures the inlineable
+            // graph is present.
             return "it is a non-intrinsic native method";
         } else if (method.isAbstract()) {
             return "it is an abstract method";
@@ -187,11 +194,12 @@ public class InliningData {
         MethodCallTargetNode callTarget = (MethodCallTargetNode) invoke.callTarget();
         ResolvedJavaMethod targetMethod = callTarget.targetMethod();
 
-        if (callTarget.invokeKind() == CallTargetNode.InvokeKind.Special || targetMethod.canBeStaticallyBound()) {
+        InvokeKind invokeKind = callTarget.invokeKind();
+        if (invokeKind == CallTargetNode.InvokeKind.Special || invokeKind == CallTargetNode.InvokeKind.Static || targetMethod.canBeStaticallyBound()) {
             return getExactInlineInfo(invoke, targetMethod);
         }
 
-        assert callTarget.invokeKind().isIndirect();
+        assert invokeKind.isIndirect();
 
         ResolvedJavaType holder = targetMethod.getDeclaringClass();
         if (!(callTarget.receiver().stamp(NodeView.DEFAULT) instanceof ObjectStamp)) {
@@ -230,12 +238,8 @@ public class InliningData {
         AssumptionResult<ResolvedJavaType> leafConcreteSubtype = holder.findLeafConcreteSubtype();
         if (leafConcreteSubtype != null) {
             ResolvedJavaMethod resolvedMethod = leafConcreteSubtype.getResult().resolveConcreteMethod(targetMethod, contextType);
-            if (resolvedMethod != null) {
-                if (leafConcreteSubtype.canRecordTo(callTarget.graph().getAssumptions())) {
-                    return getAssumptionInlineInfo(invoke, resolvedMethod, leafConcreteSubtype);
-                } else {
-                    return getTypeCheckedAssumptionInfo(invoke, resolvedMethod, leafConcreteSubtype.getResult());
-                }
+            if (resolvedMethod != null && leafConcreteSubtype.canRecordTo(callTarget.graph().getAssumptions())) {
+                return getAssumptionInlineInfo(invoke, resolvedMethod, leafConcreteSubtype);
             }
         }
 
@@ -246,13 +250,6 @@ public class InliningData {
 
         // type check based inlining
         return getTypeCheckedInlineInfo(invoke, targetMethod);
-    }
-
-    private InlineInfo getTypeCheckedAssumptionInfo(Invoke invoke, ResolvedJavaMethod method, ResolvedJavaType type) {
-        if (!checkTargetConditions(invoke, method)) {
-            return null;
-        }
-        return new TypeGuardInlineInfo(invoke, method, type);
     }
 
     private InlineInfo getTypeCheckedInlineInfo(Invoke invoke, ResolvedJavaMethod targetMethod) {
@@ -464,7 +461,7 @@ public class InliningData {
         assert callerCallsiteHolder.containsInvoke(calleeInfo.invoke());
         counterInliningConsidered.increment(debug);
 
-        InliningPolicy.Decision decision = inliningPolicy.isWorthInlining(context.getReplacements(), calleeInvocation, inliningDepth, true);
+        InliningPolicy.Decision decision = inliningPolicy.isWorthInlining(context.getReplacements(), calleeInvocation, calleeInfo, inliningDepth, true);
         if (decision.shouldInline()) {
             doInline(callerCallsiteHolder, calleeInvocation, decision.getReason());
             return true;
@@ -725,7 +722,8 @@ public class InliningData {
 
         final MethodInvocation currentInvocation = currentInvocation();
 
-        final boolean backtrack = (!currentInvocation.isRoot() && !inliningPolicy.isWorthInlining(context.getReplacements(), currentInvocation, inliningDepth(), false).shouldInline());
+        final boolean backtrack = (!currentInvocation.isRoot() &&
+                        !inliningPolicy.isWorthInlining(context.getReplacements(), currentInvocation, currentInvocation.callee(), inliningDepth(), false).shouldInline());
         if (backtrack) {
             int remainingGraphs = currentInvocation.totalGraphs() - currentInvocation.processedGraphs();
             assert remainingGraphs > 0;

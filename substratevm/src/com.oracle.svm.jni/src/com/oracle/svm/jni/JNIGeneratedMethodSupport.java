@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,13 +28,13 @@ package com.oracle.svm.jni;
 
 import java.lang.reflect.Array;
 
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.UnsafeAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.jni.access.JNIAccessibleField;
 import com.oracle.svm.jni.access.JNINativeLinkage;
@@ -41,12 +43,15 @@ import com.oracle.svm.jni.nativeapi.JNIFieldId;
 import com.oracle.svm.jni.nativeapi.JNIObjectHandle;
 
 import jdk.vm.ci.meta.JavaKind;
+import sun.misc.Unsafe;
 
 /**
  * Helper code that is used in generated JNI code via {@code JNIGraphKit}.
  */
 public final class JNIGeneratedMethodSupport {
     // Careful around here -- these methods are invoked by generated methods.
+
+    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
 
     static PointerBase nativeCallAddress(JNINativeLinkage linkage) {
         return linkage.getOrFindEntryPoint();
@@ -61,9 +66,6 @@ public final class JNIGeneratedMethodSupport {
     }
 
     static JNIEnvironment environment() {
-        if (!JNIThreadLocalEnvironment.isInitialized()) {
-            JNIThreadLocalEnvironment.initialize();
-        }
         return JNIThreadLocalEnvironment.getAddress();
     }
 
@@ -125,7 +127,7 @@ public final class JNIGeneratedMethodSupport {
         if (count > 0) {
             long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
             int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
-            UnsafeAccess.UNSAFE.copyMemory(array, offset, null, buffer.rawValue(), count * elementSize);
+            UNSAFE.copyMemory(array, offset, null, buffer.rawValue(), count * elementSize);
         }
     }
 
@@ -136,7 +138,7 @@ public final class JNIGeneratedMethodSupport {
         if (count > 0) {
             long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
             int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
-            UnsafeAccess.UNSAFE.copyMemory(null, buffer.rawValue(), array, offset, count * elementSize);
+            UNSAFE.copyMemory(null, buffer.rawValue(), array, offset, count * elementSize);
         }
     }
 }

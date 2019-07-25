@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -87,10 +87,11 @@ public final class SLMain {
 
     private static int executeSource(Source source, InputStream in, PrintStream out, Map<String, String> options) {
         Context context;
+        PrintStream err = System.err;
         try {
             context = Context.newBuilder(SL).in(in).out(out).options(options).build();
         } catch (IllegalArgumentException e) {
-            System.err.println(e.getMessage());
+            err.println(e.getMessage());
             return 1;
         }
         out.println("== running on " + context.getEngine());
@@ -98,7 +99,7 @@ public final class SLMain {
         try {
             Value result = context.eval(source);
             if (context.getBindings(SL).getMember("main") == null) {
-                System.err.println("No function main() defined in SL source file.");
+                err.println("No function main() defined in SL source file.");
                 return 1;
             }
             if (!result.isNull()) {
@@ -110,7 +111,7 @@ public final class SLMain {
                 // for internal errors we print the full stack trace
                 ex.printStackTrace();
             } else {
-                System.err.println(ex.getMessage());
+                err.println(ex.getMessage());
             }
             return 1;
         } finally {

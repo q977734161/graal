@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,13 +34,18 @@ import org.graalvm.compiler.nodes.StructuredGraph;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.flow.context.AnalysisContext;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.typestate.PointsToStats;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.ConcurrentLightHashSet;
 
+@SuppressWarnings("rawtypes")
 public abstract class TypeFlow<T> {
-
+    private static final AtomicReferenceFieldUpdater<TypeFlow, Object> USE_UPDATER = AtomicReferenceFieldUpdater.newUpdater(TypeFlow.class, Object.class, "uses");
+    private static final AtomicReferenceFieldUpdater<TypeFlow, Object> INPUTS_UPDATER = AtomicReferenceFieldUpdater.newUpdater(TypeFlow.class, Object.class, "inputs");
+    private static final AtomicReferenceFieldUpdater<TypeFlow, Object> OBSERVERS_UPDATER = AtomicReferenceFieldUpdater.newUpdater(TypeFlow.class, Object.class, "observers");
+    private static final AtomicReferenceFieldUpdater<TypeFlow, Object> OBSERVEES_UPDATER = AtomicReferenceFieldUpdater.newUpdater(TypeFlow.class, Object.class, "observees");
     protected static final AtomicInteger nextId = new AtomicInteger();
 
     protected final int id;
@@ -49,16 +56,16 @@ public abstract class TypeFlow<T> {
     private volatile TypeState state;
 
     /** The set of all {@link TypeFlow}s that need to be update when this flow changes. */
-    private final ConcurrentLightHashSet<TypeFlow<?>> uses;
+    @SuppressWarnings("unused") private volatile Object uses;
 
     /** The set of all flows that have this flow as an use. */
-    private final ConcurrentLightHashSet<TypeFlow<?>> inputs;
+    @SuppressWarnings("unused") private volatile Object inputs;
 
     /** The set of all observers, i.e., objects that are notified when this flow changes. */
-    private final ConcurrentLightHashSet<TypeFlow<?>> observers;
+    @SuppressWarnings("unused") private volatile Object observers;
 
     /** The set of all observees, i.e., objects that notify this flow when they change. */
-    private final ConcurrentLightHashSet<TypeFlow<?>> observees;
+    @SuppressWarnings("unused") private volatile Object observees;
 
     private int slot;
     private final boolean isClone; // true -> clone, false -> original
@@ -87,10 +94,6 @@ public abstract class TypeFlow<T> {
         this.graphRef = graphRef;
         this.context = graphRef != null ? graphRef.context() : null;
         this.state = typeState;
-        this.uses = new ConcurrentLightHashSet<>();
-        this.inputs = new ConcurrentLightHashSet<>();
-        this.observers = new ConcurrentLightHashSet<>();
-        this.observees = new ConcurrentLightHashSet<>();
         this.usedAsAParameter = false;
         this.usedAsAReceiver = false;
     }
@@ -136,7 +139,7 @@ public abstract class TypeFlow<T> {
 
     /**
      * Initialization code for some clone corner case type flows.
-     * 
+     *
      * @param bb
      */
     public void initClone(BigBang bb) {
@@ -173,6 +176,10 @@ public abstract class TypeFlow<T> {
 
     public MethodFlowsGraph graphRef() {
         return graphRef;
+    }
+
+    public AnalysisMethod method() {
+        return graphRef != null ? graphRef.getMethod() : null;
     }
 
     public T getSource() {
@@ -278,20 +285,11 @@ public abstract class TypeFlow<T> {
         if (bb.trackTypeFlowInputs() || registerInput) {
             use.addInput(this);
         }
-        return uses.addElement(use);
+        return ConcurrentLightHashSet.addElement(this, USE_UPDATER, use);
     }
 
     public Collection<TypeFlow<?>> getUses() {
-        return uses.getElements();
-    }
-
-    public boolean removeUse(TypeFlow<?> use) {
-        use.removeInput(this);
-        return uses.removeElement(use);
-    }
-
-    public void clearUses() {
-        uses.clear();
+        return ConcurrentLightHashSet.getElements(this, USE_UPDATER);
     }
 
     // manage observers
@@ -327,16 +325,16 @@ public abstract class TypeFlow<T> {
         if (bb.trackTypeFlowInputs() || registerObservees) {
             observer.addObservee(this);
         }
-        return observers.addElement(observer);
+        return ConcurrentLightHashSet.addElement(this, OBSERVERS_UPDATER, observer);
     }
 
     public boolean removeObserver(TypeFlow<?> observer) {
         observer.removeObservee(this);
-        return observers.removeElement(observer);
+        return ConcurrentLightHashSet.removeElement(this, OBSERVERS_UPDATER, observer);
     }
 
     public Collection<TypeFlow<?>> getObservers() {
-        return observers.getElements();
+        return ConcurrentLightHashSet.getElements(this, OBSERVERS_UPDATER);
     }
 
     /** Let the observers that the state has changed. */
@@ -349,29 +347,29 @@ public abstract class TypeFlow<T> {
     // manage observees
 
     public void addObservee(TypeFlow<?> observee) {
-        observees.addElement(observee);
+        ConcurrentLightHashSet.addElement(this, OBSERVEES_UPDATER, observee);
     }
 
     public Collection<TypeFlow<?>> getObservees() {
-        return observees.getElements();
+        return ConcurrentLightHashSet.getElements(this, OBSERVEES_UPDATER);
     }
 
     public boolean removeObservee(TypeFlow<?> observee) {
-        return observees.removeElement(observee);
+        return ConcurrentLightHashSet.removeElement(this, OBSERVEES_UPDATER, observee);
     }
 
     // manage inputs
 
     public void addInput(TypeFlow<?> input) {
-        inputs.addElement(input);
+        ConcurrentLightHashSet.addElement(this, INPUTS_UPDATER, input);
     }
 
     public Collection<TypeFlow<?>> getInputs() {
-        return inputs.getElements();
+        return ConcurrentLightHashSet.getElements(this, INPUTS_UPDATER);
     }
 
     public boolean removeInput(TypeFlow<?> input) {
-        return inputs.removeElement(input);
+        return ConcurrentLightHashSet.removeElement(this, INPUTS_UPDATER, input);
     }
 
     public TypeState filter(@SuppressWarnings("unused") BigBang bb, TypeState newState) {

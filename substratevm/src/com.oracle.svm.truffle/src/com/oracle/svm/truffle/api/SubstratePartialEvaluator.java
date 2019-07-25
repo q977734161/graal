@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,7 +41,6 @@ import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.TruffleInliningPlan;
 import org.graalvm.compiler.truffle.compiler.PartialEvaluator;
 import org.graalvm.compiler.truffle.compiler.TruffleConstantFieldProvider;
-import org.graalvm.compiler.truffle.compiler.phases.InstrumentPhase;
 import org.graalvm.compiler.truffle.compiler.substitutions.KnownTruffleTypes;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -52,9 +53,8 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 public class SubstratePartialEvaluator extends PartialEvaluator {
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public SubstratePartialEvaluator(Providers providers, GraphBuilderConfiguration configForRoot, SnippetReflectionProvider snippetReflection, Architecture architecture,
-                    InstrumentPhase.Instrumentation instrumentation) {
-        super(providers, configForRoot, snippetReflection, architecture, instrumentation, new KnownTruffleTypes(providers.getMetaAccess()));
+    public SubstratePartialEvaluator(Providers providers, GraphBuilderConfiguration configForRoot, SnippetReflectionProvider snippetReflection, Architecture architecture) {
+        super(providers, configForRoot, snippetReflection, architecture, new KnownTruffleTypes(providers.getMetaAccess()));
     }
 
     @Override
@@ -62,8 +62,18 @@ public class SubstratePartialEvaluator extends PartialEvaluator {
                     InlineInvokePlugin[] inlineInvokePlugins, ParameterPlugin parameterPlugin, NodePlugin[] nodePlugins, ResolvedJavaMethod callInlined,
                     SourceLanguagePositionProvider sourceLanguagePositionProvider) {
         TruffleConstantFieldProvider compilationLocalConstantProvider = new TruffleConstantFieldProvider(providers.getConstantFieldProvider(), providers.getMetaAccess());
-        return new SubstratePEGraphDecoder(architecture, graph, providers.getMetaAccess(), providers.getConstantReflection(), compilationLocalConstantProvider, providers.getStampProvider(),
-                        loopExplosionPlugin, invocationPlugins, inlineInvokePlugins, parameterPlugin, nodePlugins, callInlined, sourceLanguagePositionProvider);
+        return new SubstratePEGraphDecoder(architecture, graph, providers.copyWith(compilationLocalConstantProvider), loopExplosionPlugin, invocationPlugins, inlineInvokePlugins, parameterPlugin,
+                        nodePlugins, callInlined, sourceLanguagePositionProvider);
+    }
+
+    @Override
+    protected StructuredGraph.Builder customizeStructuredGraphBuilder(StructuredGraph.Builder builder) {
+        /*
+         * Substrate VM does not need a complete list of methods that were inlined during
+         * compilation. Therefore, we do not even store this information in encoded graphs that are
+         * part of the image heap.
+         */
+        return super.customizeStructuredGraphBuilder(builder).recordInlinedMethods(false);
     }
 
     @Override

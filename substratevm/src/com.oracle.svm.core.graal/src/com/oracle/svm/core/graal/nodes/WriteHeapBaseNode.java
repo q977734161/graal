@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.nodes;
 
-import com.oracle.svm.core.amd64.FrameAccess;
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.graph.NodeClass;
@@ -50,7 +52,7 @@ public class WriteHeapBaseNode extends FixedWithNextNode implements LIRLowerable
     @Override
     public void generate(NodeLIRBuilderTool gen) {
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
-        tool.emitMove(((SubstrateRegisterConfig) tool.getResult().getRegisterConfig()).getHeapBaseRegister().asValue(tool.getLIRKind(FrameAccess.getWordStamp())), gen.operand(value));
+        tool.emitWriteRegister(((SubstrateRegisterConfig) tool.getResult().getRegisterConfig()).getHeapBaseRegister(), gen.operand(value), tool.getLIRKind(FrameAccess.getWordStamp()));
     }
 
     @NodeIntrinsic

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -78,7 +80,7 @@ import jdk.vm.ci.meta.JavaMethod;
  */
 public final class DebugContext implements AutoCloseable {
 
-    public static final Description NO_DESCRIPTION = null;
+    public static final Description NO_DESCRIPTION = new Description(null, "NO_DESCRIPTION");
     public static final GlobalMetrics NO_GLOBAL_METRIC_VALUES = null;
     public static final Iterable<DebugHandlersFactory> NO_CONFIG_CUSTOMIZERS = Collections.emptyList();
 
@@ -237,15 +239,9 @@ public final class DebugContext implements AutoCloseable {
             this.unscopedTimers = parseUnscopedMetricSpec(Timers.getValue(options), "".equals(timeValue), true);
             this.unscopedMemUseTrackers = parseUnscopedMetricSpec(MemUseTrackers.getValue(options), "".equals(trackMemUseValue), true);
 
-            if (unscopedTimers != null || timeValue != null) {
-                if (!GraalServices.isCurrentThreadCpuTimeSupported()) {
-                    throw new IllegalArgumentException("Time and Timers options require VM support for querying CPU time");
-                }
-            }
-
             if (unscopedMemUseTrackers != null || trackMemUseValue != null) {
                 if (!GraalServices.isThreadAllocatedMemorySupported()) {
-                    throw new IllegalArgumentException("MemUseTrackers and TrackMemUse options require VM support for querying thread allocated memory");
+                    TTY.println("WARNING: Missing VM support for MemUseTrackers and TrackMemUse options so all reported memory usage will be 0");
                 }
             }
 
@@ -315,9 +311,19 @@ public final class DebugContext implements AutoCloseable {
     }
 
     /**
-     * Shared object used to represent a disabled debug context.
+     * Singleton used to represent a disabled debug context.
      */
-    public static final DebugContext DISABLED = new DebugContext(NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, DEFAULT_LOG_STREAM, new Immutable(), NO_CONFIG_CUSTOMIZERS);
+    private static final DebugContext DISABLED = new DebugContext(NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, DEFAULT_LOG_STREAM, new Immutable(), NO_CONFIG_CUSTOMIZERS);
+
+    /**
+     * Create a DebugContext with debugging disabled.
+     */
+    public static DebugContext disabled(OptionValues options) {
+        if (options == null || options.getMap().isEmpty()) {
+            return DISABLED;
+        }
+        return new DebugContext(NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, DEFAULT_LOG_STREAM, Immutable.create(options), NO_CONFIG_CUSTOMIZERS);
+    }
 
     /**
      * Gets the debug context for the current thread. This should only be used when there is no
@@ -402,6 +408,18 @@ public final class DebugContext implements AutoCloseable {
         return new DebugContext(NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, DEFAULT_LOG_STREAM, Immutable.create(options), factories);
     }
 
+    public static DebugContext create(OptionValues options, PrintStream logStream, DebugHandlersFactory factory) {
+        return new DebugContext(NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, logStream, Immutable.create(options), Collections.singletonList(factory));
+    }
+
+    /**
+     * Creates a {@link DebugContext} based on a given set of option values and {@code factories}.
+     * The {@link DebugHandlersFactory#LOADER} can be used for the latter.
+     */
+    public static DebugContext create(OptionValues options, Description description, Iterable<DebugHandlersFactory> factories) {
+        return new DebugContext(description, NO_GLOBAL_METRIC_VALUES, DEFAULT_LOG_STREAM, Immutable.create(options), factories);
+    }
+
     /**
      * Creates a {@link DebugContext}.
      */
@@ -436,11 +454,11 @@ public final class DebugContext implements AutoCloseable {
         }
     }
 
-    public Path getDumpPath(String extension, boolean directory) {
+    public Path getDumpPath(String extension, boolean createMissingDirectory) {
         try {
             String id = description == null ? null : description.identifier;
             String label = description == null ? null : description.getLabel();
-            Path result = PathUtilities.createUnique(immutable.options, DumpPath, id, label, extension, directory);
+            Path result = PathUtilities.createUnique(immutable.options, DumpPath, id, label, extension, createMissingDirectory);
             if (ShowDumpFiles.getValue(immutable.options)) {
                 TTY.println("Dumping debug output to %s", result.toAbsolutePath().toString());
             }
@@ -793,8 +811,9 @@ public final class DebugContext implements AutoCloseable {
                 return true;
             }
             return !currentScope.isTopLevel();
+        } else {
+            return false;
         }
-        return immutable.scopesEnabled && currentScope == null;
     }
 
     class DisabledScope implements DebugContext.Scope {

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,7 +33,9 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.function.CEntryPointCreateIsolateParameters;
+import com.oracle.svm.core.code.CodeInfoTable;
 
 /**
  * A provider of ranges of committed memory, which is virtual memory that is backed by physical
@@ -71,7 +75,10 @@ public interface CommittedMemoryProvider {
      * Returns the granularity of committed memory management, which is typically the same as that
      * of {@linkplain VirtualMemoryProvider#getGranularity() virtual memory management}.
      */
-    UnsignedWord getGranularity();
+    @Uninterruptible(reason = "Still being initialized.", mayBeInlined = true)
+    default UnsignedWord getGranularity() {
+        return VirtualMemoryProvider.get().getGranularity();
+    }
 
     /**
      * Allocate a block of committed memory.
@@ -95,6 +102,7 @@ public interface CommittedMemoryProvider {
      * @param executable Whether the block was requested to be executable.
      * @return true on success, or false otherwise.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     boolean free(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment, boolean executable);
 
     /**
@@ -111,5 +119,11 @@ public interface CommittedMemoryProvider {
      * @param completeCollection Whether the garbage collector has performed a full collection.
      */
     default void afterGarbageCollection(boolean completeCollection) {
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    static void tearDownUnmanagedMemoryConsumers() {
+        CodeInfoTable.tearDown();
+        NonmovableArrays.tearDown();
     }
 }

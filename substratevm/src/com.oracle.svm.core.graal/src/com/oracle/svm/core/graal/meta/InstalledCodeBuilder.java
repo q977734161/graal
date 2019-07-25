@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,10 @@
  */
 package com.oracle.svm.core.graal.meta;
 
+import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
+
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -31,37 +36,34 @@ import java.util.Map.Entry;
 import java.util.Set;
 
 import org.graalvm.compiler.code.CompilationResult;
+import org.graalvm.compiler.code.CompilationResult.CodeAnnotation;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.Indent;
+import org.graalvm.compiler.truffle.common.TruffleCompiler;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.c.function.CodePointer;
+import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.amd64.FrameAccess;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoEncoder;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.DeoptimizationSourcePositionEncoder;
 import com.oracle.svm.core.code.FrameInfoEncoder;
 import com.oracle.svm.core.code.InstalledCodeObserver;
 import com.oracle.svm.core.code.InstalledCodeObserverSupport;
-import com.oracle.svm.core.code.RuntimeMethodInfo;
+import com.oracle.svm.core.code.RuntimeMethodInfoAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
+import com.oracle.svm.core.graal.code.NativeImagePatcher;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
-import com.oracle.svm.core.graal.code.amd64.AMD64InstructionPatcher;
-import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.heap.NoAllocationVerifier;
-import com.oracle.svm.core.heap.ObjectReferenceVisitor;
-import com.oracle.svm.core.heap.ObjectReferenceWalker;
-import com.oracle.svm.core.heap.PinnedAllocator;
+import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
 import com.oracle.svm.core.heap.ReferenceAccess;
-import com.oracle.svm.core.heap.ReferenceMapDecoder;
-import com.oracle.svm.core.heap.ReferenceMapEncoder;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedMethod;
@@ -73,6 +75,7 @@ import com.oracle.svm.core.util.VMError;
 
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.code.site.Call;
+import jdk.vm.ci.code.site.ConstantReference;
 import jdk.vm.ci.code.site.DataPatch;
 import jdk.vm.ci.code.site.DataSectionReference;
 import jdk.vm.ci.code.site.Infopoint;
@@ -89,9 +92,9 @@ import jdk.vm.ci.meta.JavaKind;
  *
  */
 public class InstalledCodeBuilder {
-
     private final SharedRuntimeMethod method;
     private final SubstrateInstalledCode installedCode;
+    private final int tier;
     private final Map<SharedMethod, InstalledCodeBuilder> allInstalledCode;
     protected Pointer code;
     private final int codeSize;
@@ -101,64 +104,7 @@ public class InstalledCodeBuilder {
     private SubstrateCompilationResult compilation;
     private byte[] compiledBytes;
 
-    /**
-     * Pinned allocation methods used when creating the pointer map and the code chunk infos when
-     * code is installed. These object become unpinned when the code is invalidated.
-     */
-    private final PinnedAllocator metaInfoAllocator;
-
-    private RuntimeMethodInfo runtimeMethodInfo;
-
-    /**
-     * The walker for the GC to visit object references in the constants area of the compiled
-     * method.
-     */
-    public static class ConstantsWalker extends ObjectReferenceWalker {
-
-        /**
-         * The address of the constants area, which is located right after the compiled code.
-         */
-        Pointer constantsAddr;
-
-        /**
-         * The size of the constants area.
-         */
-        int constantsSize;
-
-        /**
-         * The pointer map for the constants.
-         */
-        byte[] referenceMapEncoding;
-        long referenceMapIndex;
-
-        /**
-         * Set to true after everything is set up and GC can operate on the constants area.
-         */
-        boolean pointerMapValid;
-
-        /** Called by the GC to walk over the object references in the constants-area. */
-        @Override
-        public boolean walk(final ObjectReferenceVisitor referenceVisitor) {
-            if (pointerMapValid) {
-                return ReferenceMapDecoder.walkOffsetsFromPointer(constantsAddr, referenceMapEncoding, referenceMapIndex, referenceVisitor);
-            }
-            return false;
-        }
-
-        /** For verification: Does the memory known to this walker contain this pointer? */
-        @Override
-        public boolean containsPointer(final Pointer p) {
-            final boolean atLeast = constantsAddr.belowOrEqual(p);
-            final boolean atMost = p.belowThan(constantsAddr.add(constantsSize));
-            final boolean result = (atLeast && atMost);
-            return result;
-        }
-    }
-
-    /**
-     * The pointer map for the constants area (which is located right after the compiled code).
-     */
-    private ConstantsWalker constantsWalker;
+    private CodeInfo runtimeMethodInfo;
 
     private final boolean testTrampolineJumps;
 
@@ -180,10 +126,10 @@ public class InstalledCodeBuilder {
                     boolean testTrampolineJumps) {
         this.method = method;
         this.compilation = (SubstrateCompilationResult) compilation;
+        this.tier = compilation.getName().endsWith(TruffleCompiler.FIRST_TIER_COMPILATION_SUFFIX) ? TruffleCompiler.FIRST_TIER_INDEX : TruffleCompiler.LAST_TIER_INDEX;
         this.installedCode = installedCode;
         this.allInstalledCode = allInstalledCode;
         this.testTrampolineJumps = testTrampolineJumps;
-        this.metaInfoAllocator = Heap.getHeap().createPinnedAllocator();
 
         DebugContext debug = DebugContext.forCurrentThread();
         try (Indent indent = debug.logAndIndent("create installed code of %s.%s", method.getDeclaringClass().getName(), method.getName())) {
@@ -195,12 +141,11 @@ public class InstalledCodeBuilder {
 
             int constantsSize = compilation.getDataSection().getSectionSize();
             codeSize = compilation.getTargetCodeSize();
-            int tmpConstantsOffset = ObjectLayout.roundUp(codeSize, compilation.getDataSection().getSectionAlignment());
+            int tmpConstantsOffset = NumUtil.roundUp(codeSize, compilation.getDataSection().getSectionAlignment());
             int tmpMemorySize = tmpConstantsOffset + constantsSize;
 
             // Allocate executable memory. It contains the compiled code and the constants
-            //
-            code = allocateOSMemory(WordFactory.unsigned(tmpMemorySize), true);
+            code = allocateOSMemory(WordFactory.unsigned(tmpMemorySize));
 
             /*
              * Check if we there are some direct calls where the PC displacement is out of the 32
@@ -235,16 +180,16 @@ public class InstalledCodeBuilder {
                 freeOSMemory(code, WordFactory.unsigned(tmpMemorySize));
 
                 // Add space for the actual trampoline jump instructions: jmp [rip+offset]
-                tmpConstantsOffset = ObjectLayout.roundUp(codeSize + directTargets.size() * TRAMPOLINE_JUMP_SIZE, 8);
+                tmpConstantsOffset = NumUtil.roundUp(codeSize + directTargets.size() * TRAMPOLINE_JUMP_SIZE, 8);
                 // Add space for the target addresses
                 // (which are referenced from the jump instructions)
-                tmpConstantsOffset = ObjectLayout.roundUp(tmpConstantsOffset + directTargets.size() * 8, compilation.getDataSection().getSectionAlignment());
+                tmpConstantsOffset = NumUtil.roundUp(tmpConstantsOffset + directTargets.size() * 8, compilation.getDataSection().getSectionAlignment());
                 if (tmpConstantsOffset > compiledBytes.length) {
                     compiledBytes = Arrays.copyOf(compiledBytes, tmpConstantsOffset);
                 }
                 tmpMemorySize = tmpConstantsOffset + constantsSize;
 
-                code = allocateOSMemory(WordFactory.unsigned(tmpMemorySize), true);
+                code = allocateOSMemory(WordFactory.unsigned(tmpMemorySize));
             }
             constantsOffset = tmpConstantsOffset;
 
@@ -258,26 +203,28 @@ public class InstalledCodeBuilder {
     }
 
     static class ObjectConstantsHolder {
+        final SubstrateReferenceMap referenceMap;
         final int[] offsets;
+        final NativeImagePatcher[] patchers;
         final Object[] values;
         int count;
 
-        final SubstrateReferenceMap referenceMap;
-
         ObjectConstantsHolder(CompilationResult compilation) {
             /* Conservative estimate on the maximum number of object constants we might have. */
-            offsets = new int[compilation.getDataSection().getSectionSize() / FrameAccess.wordSize()];
+            int maxDataRefs = compilation.getDataSection().getSectionSize() / ConfigurationValues.getObjectLayout().getReferenceSize();
+            int maxCodeRefs = compilation.getDataPatches().size();
+            offsets = new int[maxDataRefs + maxCodeRefs];
+            patchers = new NativeImagePatcher[offsets.length];
             values = new Object[offsets.length];
             referenceMap = new SubstrateReferenceMap();
         }
 
-        void add(int offset, Object value) {
-            offsets[count] = offset;
-            values[count] = value;
+        void add(NativeImagePatcher patchingAnnotation, SubstrateObjectConstant constant) {
+            assert constant.isCompressed() == ReferenceAccess.singleton().haveCompressedReferences() : "Object reference constants in code must be compressed";
+            patchers[count] = patchingAnnotation;
+            values[count] = KnownIntrinsics.convertUnknownValue(constant.getObject(), Object.class);
+            referenceMap.markReferenceAtOffset(patchingAnnotation.getPosition(), true);
             count++;
-
-            assert offset % FrameAccess.wordSize() == 0;
-            referenceMap.markReferenceAtIndex(offset / FrameAccess.wordSize());
         }
     }
 
@@ -285,12 +232,55 @@ public class InstalledCodeBuilder {
         this.installOperation();
     }
 
+    /**
+     * The layout of the data-section is determined by Substratevm and not by the underlying
+     * architecture. We can use the same patcher for all architectures.
+     */
+    private static class DataSectionPatcher implements NativeImagePatcher {
+        private final int position;
+
+        DataSectionPatcher(int position) {
+            this.position = position;
+        }
+
+        @Override
+        public void patch(int codePos, int relative, byte[] code) {
+            shouldNotReachHere("Datasection can only be patched with an VM constant");
+        }
+
+        @Uninterruptible(reason = "The patcher is intended to work with raw pointers")
+        @Override
+        public void patchData(Pointer pointer, Object object) {
+            boolean compressed = ReferenceAccess.singleton().haveCompressedReferences();
+            Pointer address = pointer.add(position);
+            ReferenceAccess.singleton().writeObjectAt(address, object, compressed);
+        }
+
+        @Uninterruptible(reason = ".")
+        @Override
+        public int getPosition() {
+            return position;
+        }
+    }
+
     @SuppressWarnings("try")
     private void installOperation() {
-        AMD64InstructionPatcher patcher = new AMD64InstructionPatcher(compilation);
-        patchData(patcher);
+        /*
+         * Object reference constants are stored in this holder first, then written and made visible
+         * in a single step that is atomic regarding to GC.
+         */
+        ObjectConstantsHolder objectConstants = new ObjectConstantsHolder(compilation);
 
-        int updatedCodeSize = patchCalls(patcher);
+        // Build an index of PatchingAnnoations
+        Map<Integer, NativeImagePatcher> patches = new HashMap<>();
+        for (CodeAnnotation codeAnnotation : compilation.getCodeAnnotations()) {
+            if (codeAnnotation instanceof NativeImagePatcher) {
+                patches.put(codeAnnotation.position, (NativeImagePatcher) codeAnnotation);
+            }
+        }
+        patchData(patches, objectConstants);
+
+        int updatedCodeSize = patchCalls(patches);
         assert updatedCodeSize <= constantsOffset;
 
         // Store the compiled code
@@ -298,55 +288,30 @@ public class InstalledCodeBuilder {
             code.writeByte(index, compiledBytes[index]);
         }
 
-        /* Primitive constants are written directly to the code memory. */
-        ByteBuffer constantsBuffer = SubstrateUtil.wrapAsByteBuffer(code.add(constantsOffset), compilation.getDataSection().getSectionSize());
-        /*
-         * Object constants are stored in an Object[] array first, because we have to be careful
-         * that they are always exposed as roots to the GC.
-         */
-        ObjectConstantsHolder objectConstants = new ObjectConstantsHolder(compilation);
-
+        /* Write primitive constants to the buffer, record object constants with offsets */
+        ByteBuffer constantsBuffer = CTypeConversion.asByteBuffer(code.add(constantsOffset), compilation.getDataSection().getSectionSize());
         compilation.getDataSection().buildDataSection(constantsBuffer, (position, constant) -> {
-            objectConstants.add(position, KnownIntrinsics.convertUnknownValue(SubstrateObjectConstant.asObject(constant), Object.class));
+            objectConstants.add(new DataSectionPatcher(constantsOffset + position), (SubstrateObjectConstant) constant);
         });
 
-        // Open the PinnedAllocator for the meta-information.
-        metaInfoAllocator.open();
-        try {
-            runtimeMethodInfo = metaInfoAllocator.newInstance(RuntimeMethodInfo.class);
-            constantsWalker = metaInfoAllocator.newInstance(ConstantsWalker.class);
+        runtimeMethodInfo = RuntimeMethodInfoAccess.allocateMethodInfo();
+        RuntimeMethodInfoAccess.setCodeLocation(runtimeMethodInfo, code, codeSize);
 
-            ReferenceMapEncoder encoder = new ReferenceMapEncoder();
-            encoder.add(objectConstants.referenceMap);
-            constantsWalker.referenceMapEncoding = encoder.encodeAll(metaInfoAllocator);
-            constantsWalker.referenceMapIndex = encoder.lookupEncoding(objectConstants.referenceMap);
-            constantsWalker.constantsAddr = code.add(constantsOffset);
-            constantsWalker.constantsSize = compilation.getDataSection().getSectionSize();
-            Heap.getHeap().getGC().registerObjectReferenceWalker(constantsWalker);
+        CodeReferenceMapEncoder encoder = new CodeReferenceMapEncoder();
+        encoder.add(objectConstants.referenceMap);
+        RuntimeMethodInfoAccess.setCodeObjectConstantsInfo(runtimeMethodInfo, encoder.encodeAll(), encoder.lookupEncoding(objectConstants.referenceMap));
+        writeObjectConstantsToCode(objectConstants);
 
-            /*
-             * We now have the constantsWalker initialized and registered, but it is still inactive.
-             * Writing the actual object constants to the code memory needs to be atomic regarding
-             * to GC. After everything is written, we activate the constantsWalker.
-             */
-            try (NoAllocationVerifier verifier = NoAllocationVerifier.factory("InstalledCodeBuilder.install")) {
-                writeObjectConstantsToCode(objectConstants);
-            }
+        createCodeChunkInfos();
 
-            createCodeChunkInfos();
+        InstalledCodeObserver.InstalledCodeObserverHandle[] observerHandles = InstalledCodeObserverSupport.installObservers(codeObservers);
 
-            InstalledCodeObserver.InstalledCodeObserverHandle[] observerHandles = InstalledCodeObserverSupport.installObservers(codeObservers, metaInfoAllocator);
-
-            runtimeMethodInfo.setData((CodePointer) code, WordFactory.unsigned(codeSize), installedCode, constantsWalker, metaInfoAllocator, observerHandles);
-        } finally {
-            metaInfoAllocator.close();
-        }
+        RuntimeMethodInfoAccess.setData(runtimeMethodInfo, installedCode, tier, observerHandles);
 
         Throwable[] errorBox = {null};
         VMOperation.enqueueBlockingSafepoint("Install code", () -> {
             try {
                 CodeInfoTable.getRuntimeCodeCache().addMethod(runtimeMethodInfo);
-
                 /*
                  * This call makes the new code visible, i.e., other threads can start executing it
                  * immediately. So all metadata must be registered at this point.
@@ -368,40 +333,40 @@ public class InstalledCodeBuilder {
         throw (E) ex;
     }
 
-    @Uninterruptible(reason = "Operates on raw pointers to objects")
+    @Uninterruptible(reason = "Must be atomic with regard to garbage collection.")
     private void writeObjectConstantsToCode(ObjectConstantsHolder objectConstants) {
-        boolean compressed = ReferenceAccess.singleton().haveCompressedReferences();
-        Pointer constantsStart = code.add(constantsOffset);
         for (int i = 0; i < objectConstants.count; i++) {
-            Pointer address = constantsStart.add(objectConstants.offsets[i]);
-            ReferenceAccess.singleton().writeObjectAt(address, objectConstants.values[i], compressed);
+            objectConstants.patchers[i].patchData(code, objectConstants.values[i]);
         }
-        /* From now on the constantsWalker will operate on the constants area. */
-        constantsWalker.pointerMapValid = true;
+        RuntimeMethodInfoAccess.setCodeConstantsLive(runtimeMethodInfo);
     }
 
     private void createCodeChunkInfos() {
-        CodeInfoEncoder codeInfoEncoder = new CodeInfoEncoder(new FrameInfoEncoder.NamesFromImage(), metaInfoAllocator);
+        CodeInfoEncoder codeInfoEncoder = new CodeInfoEncoder(new FrameInfoEncoder.NamesFromImage());
         codeInfoEncoder.addMethod(method, compilation, 0);
-        codeInfoEncoder.encodeAll();
-        codeInfoEncoder.install(runtimeMethodInfo);
-        assert codeInfoEncoder.verifyMethod(compilation, 0);
+        codeInfoEncoder.encodeAllAndInstall(runtimeMethodInfo);
+        assert CodeInfoEncoder.verifyMethod(compilation, 0, runtimeMethodInfo);
 
-        DeoptimizationSourcePositionEncoder sourcePositionEncoder = new DeoptimizationSourcePositionEncoder(metaInfoAllocator);
-        sourcePositionEncoder.encode(compilation.getDeoptimzationSourcePositions());
-        sourcePositionEncoder.install(runtimeMethodInfo);
+        DeoptimizationSourcePositionEncoder sourcePositionEncoder = new DeoptimizationSourcePositionEncoder();
+        sourcePositionEncoder.encodeAndInstall(compilation.getDeoptimizationSourcePositions(), runtimeMethodInfo);
     }
 
-    private void patchData(AMD64InstructionPatcher patcher) {
+    private void patchData(Map<Integer, NativeImagePatcher> patcher, @SuppressWarnings("unused") ObjectConstantsHolder objectConstants) {
         for (DataPatch dataPatch : compilation.getDataPatches()) {
-            DataSectionReference ref = (DataSectionReference) dataPatch.reference;
-            int pcDisplacement = constantsOffset + ref.getOffset() - dataPatch.pcOffset;
-
-            patcher.findPatchData(dataPatch.pcOffset, pcDisplacement).apply(compiledBytes);
+            NativeImagePatcher patch = patcher.get(dataPatch.pcOffset);
+            if (dataPatch.reference instanceof DataSectionReference) {
+                DataSectionReference ref = (DataSectionReference) dataPatch.reference;
+                int pcDisplacement = constantsOffset + ref.getOffset() - dataPatch.pcOffset;
+                patch.patch(dataPatch.pcOffset, pcDisplacement, compiledBytes);
+            } else if (dataPatch.reference instanceof ConstantReference) {
+                ConstantReference ref = (ConstantReference) dataPatch.reference;
+                SubstrateObjectConstant refConst = (SubstrateObjectConstant) ref.getConstant();
+                objectConstants.add(patch, refConst);
+            }
         }
     }
 
-    private int patchCalls(AMD64InstructionPatcher patcher) {
+    private int patchCalls(Map<Integer, NativeImagePatcher> patches) {
         /*
          * Patch the direct call instructions. TODO: This is highly x64 specific. Should be
          * rewritten to generic backends.
@@ -430,7 +395,7 @@ public class InstalledCodeBuilder {
                 assert pcDisplacement == (int) pcDisplacement;
 
                 // Patch a PC-relative call.
-                patcher.findPatchData(call.pcOffset, (int) pcDisplacement).apply(compiledBytes);
+                patches.get(call.pcOffset).patch(call.pcOffset, (int) pcDisplacement, compiledBytes);
             }
         }
         if (directTargets.size() > 0) {
@@ -438,8 +403,10 @@ public class InstalledCodeBuilder {
              * Insert trampoline jumps. Note that this is only a fail-safe, because usually the code
              * should be within a 32-bit address range.
              */
-            currentPos = ObjectLayout.roundUp(currentPos, 8);
-            ByteBuffer codeBuffer = ByteBuffer.wrap(compiledBytes).order(ConfigurationValues.getTarget().arch.getByteOrder());
+            currentPos = NumUtil.roundUp(currentPos, 8);
+            ByteOrder byteOrder = ConfigurationValues.getTarget().arch.getByteOrder();
+            assert byteOrder == ByteOrder.LITTLE_ENDIAN : "Code below assumes little-endian byte order";
+            ByteBuffer codeBuffer = ByteBuffer.wrap(compiledBytes).order(byteOrder);
             for (Entry<Long, Integer> entry : directTargets.entrySet()) {
                 long targetAddress = entry.getKey();
                 int trampolineOffset = entry.getValue();
@@ -461,7 +428,7 @@ public class InstalledCodeBuilder {
         // (e.g. native) functions.
         // This will change, and we will have to case-split here... but not yet.
         SharedMethod targetMethod = (SharedMethod) callInfo.target;
-        long callTargetStart = CodeInfoTable.getImageCodeCache().absoluteIP(targetMethod.getCodeOffsetInImage()).rawValue();
+        long callTargetStart = CodeInfoAccess.absoluteIP(CodeInfoTable.getImageCodeInfo(), targetMethod.getCodeOffsetInImage()).rawValue();
 
         if (allInstalledCode != null) {
             InstalledCodeBuilder targetInstalledCodeBuilder = allInstalledCode.get(targetMethod);
@@ -478,23 +445,25 @@ public class InstalledCodeBuilder {
         return callTargetStart;
     }
 
-    protected Pointer allocateOSMemory(final UnsignedWord size, final boolean executable) {
+    private static Pointer allocateOSMemory(final UnsignedWord size) {
         final Log trace = Log.noopLog();
         trace.string("[SubstrateInstalledCode.allocateAlignedMemory:");
         trace.string("  size: ").unsigned(size);
-        trace.string("  executable: ").bool(executable);
-        final Pointer result = CommittedMemoryProvider.get().allocate(size, CommittedMemoryProvider.UNALIGNED, executable);
+        final Pointer result = CommittedMemoryProvider.get().allocate(size, WordFactory.unsigned(SubstrateOptions.codeAlignment()), true);
         trace.string("  returns: ").hex(result);
         trace.string("]").newline();
+        if (result.isNull()) {
+            throw new OutOfMemoryError();
+        }
         return result;
     }
 
-    protected void freeOSMemory(final Pointer start, final UnsignedWord size) {
+    private static void freeOSMemory(final Pointer start, final UnsignedWord size) {
         final Log trace = Log.noopLog();
         trace.string("[SubstrateInstalledCode.freeOSMemory:");
         trace.string("  start: ").hex(start);
         trace.string("  size: ").unsigned(size);
-        CommittedMemoryProvider.get().free(start, size, CommittedMemoryProvider.UNALIGNED, false);
+        CommittedMemoryProvider.get().free(start, size, WordFactory.unsigned(SubstrateOptions.codeAlignment()), true);
         trace.string("]").newline();
     }
 }

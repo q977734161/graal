@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,11 @@
  */
 package com.oracle.truffle.regex.tregex.parser;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.regex.RegexFlags;
@@ -31,12 +36,17 @@ import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.RegexSyntaxException;
 import com.oracle.truffle.regex.UnsupportedRegexException;
+import com.oracle.truffle.regex.charset.CharSet;
+import com.oracle.truffle.regex.charset.CodePointSet;
+import com.oracle.truffle.regex.charset.Constants;
+import com.oracle.truffle.regex.charset.SortedListOfRanges;
 import com.oracle.truffle.regex.tregex.TRegexOptions;
-import com.oracle.truffle.regex.tregex.matchers.MatcherBuilder;
+import com.oracle.truffle.regex.tregex.buffer.IntRangesBuffer;
 import com.oracle.truffle.regex.tregex.parser.ast.BackReference;
 import com.oracle.truffle.regex.tregex.parser.ast.CharacterClass;
 import com.oracle.truffle.regex.tregex.parser.ast.Group;
 import com.oracle.truffle.regex.tregex.parser.ast.LookAheadAssertion;
+import com.oracle.truffle.regex.tregex.parser.ast.LookAroundAssertion;
 import com.oracle.truffle.regex.tregex.parser.ast.LookBehindAssertion;
 import com.oracle.truffle.regex.tregex.parser.ast.PositionAssertion;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexAST;
@@ -51,13 +61,6 @@ import com.oracle.truffle.regex.tregex.parser.ast.visitors.DeleteVisitor;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.InitIDVisitor;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.MarkLookBehindEntriesVisitor;
 import com.oracle.truffle.regex.tregex.parser.ast.visitors.SetSourceSectionVisitor;
-import com.oracle.truffle.regex.tregex.util.DebugUtil;
-import com.oracle.truffle.regex.util.Constants;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
 
 public final class RegexParser {
 
@@ -99,6 +102,8 @@ public final class RegexParser {
 
     private final RegexAST ast;
     private final RegexSource source;
+    private final RegexFlags flags;
+    private final RegexOptions options;
     private final RegexLexer lexer;
     private final RegexProperties properties;
     private final Counter.ThresholdCounter groupCount;
@@ -110,31 +115,27 @@ public final class RegexParser {
     private Group curGroup;
     private Term curTerm;
 
+    private RegexFeatures features;
+
+    private IntRangesBuffer tmpRangesBuffer1;
+    private IntRangesBuffer tmpRangesBuffer2;
+
     @TruffleBoundary
-    public RegexParser(RegexSource source, RegexOptions options) {
+    public RegexParser(RegexSource source, RegexOptions options) throws RegexSyntaxException {
         this.source = source;
-        this.lexer = new RegexLexer(source, options);
-        this.ast = new RegexAST(source, options);
+        this.flags = RegexFlags.parseFlags(source.getFlags());
+        this.options = options;
+        this.lexer = new RegexLexer(source, flags, options);
+        this.ast = new RegexAST(source, flags, options);
         this.properties = ast.getProperties();
         this.groupCount = ast.getGroupCount();
         this.copyVisitor = new CopyVisitor(ast);
         this.deleteVisitor = new DeleteVisitor(ast);
-        this.setSourceSectionVisitor = DebugUtil.DEBUG ? new SetSourceSectionVisitor() : null;
+        this.setSourceSectionVisitor = options.isDumpAutomata() ? new SetSourceSectionVisitor() : null;
     }
 
     private static Group parseRootLess(String pattern) throws RegexSyntaxException {
-        try {
-            return new RegexParser(new RegexSource(pattern, RegexFlags.DEFAULT), RegexOptions.DEFAULT).parse(false);
-        } catch (Throwable e) {
-            e.printStackTrace();
-            System.out.flush();
-            throw e;
-        }
-    }
-
-    @TruffleBoundary
-    public static RegexAST parse(RegexSource source, RegexOptions options) throws RegexSyntaxException {
-        return new RegexParser(source, options).parse();
+        return new RegexParser(new RegexSource(pattern), RegexOptions.DEFAULT).parse(false);
     }
 
     @TruffleBoundary
@@ -145,26 +146,88 @@ public final class RegexParser {
     @TruffleBoundary
     public RegexAST parse() throws RegexSyntaxException {
         ast.setRoot(parse(true));
+        for (LookBehindAssertion lb : ast.getLookBehinds()) {
+            if (!lb.isLiteral()) {
+                properties.setNonLiteralLookBehindAssertions();
+                break;
+            }
+        }
         final CalcMinPathsVisitor calcMinPathsVisitor = new CalcMinPathsVisitor();
         calcMinPathsVisitor.runReverse(ast.getRoot());
         calcMinPathsVisitor.run(ast.getRoot());
         ast.removeUnreachablePositionAssertions();
-        ast.createPrefix();
-        InitIDVisitor.init(ast);
-        if (!ast.getProperties().hasBackReferences()) {
-            new MarkLookBehindEntriesVisitor(ast).run();
+        if (!properties.hasNonLiteralLookBehindAssertions()) {
+            ast.createPrefix();
+            InitIDVisitor.init(ast);
+            if (!properties.hasBackReferences()) {
+                new MarkLookBehindEntriesVisitor(ast).run();
+            }
         }
+        checkInnerLiteral();
         return ast;
+    }
+
+    private void checkInnerLiteral() {
+        if (ast.isLiteralString() || ast.getRoot().startsWithCaret() || ast.getRoot().endsWithDollar() || ast.getRoot().getAlternatives().size() != 1) {
+            return;
+        }
+        ArrayList<Term> terms = ast.getRoot().getAlternatives().get(0).getTerms();
+        int literalStart = -1;
+        int literalEnd = -1;
+        int maxPath = 0;
+        for (int i = 0; i < terms.size(); i++) {
+            Term t = terms.get(i);
+            if (t instanceof CharacterClass && ((CharacterClass) t).getMatcherBuilder().matchesSingleChar()) {
+                if (literalStart < 0) {
+                    literalStart = i;
+                }
+                literalEnd = i + 1;
+            } else if (literalStart >= 0 || t.hasLoops()) {
+                break;
+            } else {
+                maxPath = t.getMaxPath();
+                if (maxPath > 4) {
+                    return;
+                }
+            }
+        }
+        if (literalStart >= 0 && (literalStart > 0 || literalEnd - literalStart > 1)) {
+            StringBuilder sb = new StringBuilder(literalEnd - literalStart);
+            for (int i = literalStart; i < literalEnd; i++) {
+                sb.append(((CharacterClass) terms.get(i)).getMatcherBuilder().getLo(0));
+            }
+            properties.setInnerLiteral(sb.toString());
+        }
     }
 
     @TruffleBoundary
     public void validate() throws RegexSyntaxException {
+        features = new RegexFeatures();
         parseDryRun();
+    }
+
+    @TruffleBoundary
+    public int getNumberOfCaptureGroups() {
+        return lexer.numberOfCaptureGroups();
     }
 
     @TruffleBoundary
     public Map<String, Integer> getNamedCaptureGroups() {
         return lexer.getNamedCaptureGroups();
+    }
+
+    public RegexFlags getFlags() {
+        return flags;
+    }
+
+    /**
+     * Returns the features used by the regular expression that was just validated. This property is
+     * only populated after a call to {@link #validate()} and should therefore only be accessed
+     * then.
+     */
+    public RegexFeatures getFeatures() {
+        assert features != null;
+        return features;
     }
 
     /* AST manipulation */
@@ -206,7 +269,7 @@ public final class RegexParser {
 
     /**
      * Adds a new {@link Sequence} to the current {@link Group}.
-     * 
+     *
      * @param token the opening bracket of the parent group ({@link Token.Kind#captureGroupBegin})
      *            or the alternation symbol ({@link Token.Kind#alternation}) that opens the new
      *            sequence.
@@ -216,7 +279,7 @@ public final class RegexParser {
             setComplexLookAround();
         }
         curSequence = curGroup.addSequence(ast);
-        if (DebugUtil.DEBUG) {
+        if (options.isDumpAutomata()) {
             if (token != null) {
                 SourceSection src = token.getSourceSection();
                 // set source section to empty string, it will be updated by the Sequence object
@@ -263,16 +326,31 @@ public final class RegexParser {
         createGroup(token, false, false, lookAhead);
     }
 
+    private IntRangesBuffer getTmpRangesBuffer1() {
+        if (tmpRangesBuffer1 == null) {
+            tmpRangesBuffer1 = new IntRangesBuffer();
+        }
+        return tmpRangesBuffer1;
+    }
+
+    private IntRangesBuffer getTmpRangesBuffer2() {
+        if (tmpRangesBuffer2 == null) {
+            tmpRangesBuffer2 = new IntRangesBuffer();
+        }
+        return tmpRangesBuffer2;
+    }
+
     private Term translateUnicodeCharClass(Token.CharacterClass token) {
         CodePointSet codePointSet = token.getCodePointSet();
         SourceSection src = token.getSourceSection();
         Group group = ast.createGroup();
         group.setEnclosedCaptureGroupsLow(groupCount.getCount());
         group.setEnclosedCaptureGroupsHigh(groupCount.getCount());
-        CodePointSet bmpRanges = Constants.BMP_WITHOUT_SURROGATES.createIntersection(codePointSet);
-        CodePointSet astralRanges = Constants.ASTRAL_SYMBOLS.createIntersection(codePointSet);
-        CodePointSet loneLeadSurrogateRanges = Constants.LEAD_SURROGATES.createIntersection(codePointSet);
-        CodePointSet loneTrailSurrogateRanges = Constants.TRAIL_SURROGATES.createIntersection(codePointSet);
+        IntRangesBuffer tmp = getTmpRangesBuffer1();
+        CodePointSet bmpRanges = codePointSet.createIntersection(Constants.BMP_WITHOUT_SURROGATES, tmp);
+        CodePointSet astralRanges = codePointSet.createIntersection(Constants.ASTRAL_SYMBOLS, tmp);
+        CodePointSet loneLeadSurrogateRanges = codePointSet.createIntersection(Constants.LEAD_SURROGATES, tmp);
+        CodePointSet loneTrailSurrogateRanges = codePointSet.createIntersection(Constants.TRAIL_SURROGATES, tmp);
 
         if (bmpRanges.matchesSomething()) {
             Sequence bmpAlternative = group.addSequence(ast);
@@ -296,57 +374,59 @@ public final class RegexParser {
         if (astralRanges.matchesSomething()) {
             // completeRanges matches surrogate pairs where leading surrogates can be followed by
             // any trailing surrogates
-            CodePointSet completeRanges = CodePointSet.createEmpty();
+            IntRangesBuffer completeRanges = getTmpRangesBuffer2();
+            completeRanges.clear();
 
-            char curLead = Character.highSurrogate(astralRanges.getRanges().get(0).lo);
-            CodePointSet curTrails = CodePointSet.createEmpty();
-            for (CodePointRange astralRange : astralRanges.getRanges()) {
-                char startLead = Character.highSurrogate(astralRange.lo);
-                char startTrail = Character.lowSurrogate(astralRange.lo);
-                char endLead = Character.highSurrogate(astralRange.hi);
-                char endTrail = Character.lowSurrogate(astralRange.hi);
+            char curLead = Character.highSurrogate(astralRanges.getLo(0));
+            IntRangesBuffer curTrails = tmp;
+            curTrails.clear();
+            for (int i = 0; i < astralRanges.size(); i++) {
+                char startLead = Character.highSurrogate(astralRanges.getLo(i));
+                final char startTrail = Character.lowSurrogate(astralRanges.getLo(i));
+                char endLead = Character.highSurrogate(astralRanges.getHi(i));
+                final char endTrail = Character.lowSurrogate(astralRanges.getHi(i));
 
                 if (startLead > curLead) {
                     if (curTrails.matchesSomething()) {
                         Sequence finishedAlternative = group.addSequence(ast);
-                        finishedAlternative.add(createCharClass(MatcherBuilder.create(curLead), src));
+                        finishedAlternative.add(createCharClass(CharSet.create(curLead), src));
                         finishedAlternative.add(createCharClass(curTrails, src));
                     }
                     curLead = startLead;
-                    curTrails = CodePointSet.createEmpty();
+                    curTrails.clear();
                 }
                 if (startLead == endLead) {
-                    curTrails.addRange(new CodePointRange(startTrail, endTrail));
+                    curTrails.addRange(startTrail, endTrail);
                 } else {
-                    if (startTrail != Constants.TRAIL_SURROGATE_RANGE.lo) {
-                        curTrails.addRange(new CodePointRange(startTrail, Constants.TRAIL_SURROGATE_RANGE.hi));
+                    if (startTrail != Constants.TRAIL_SURROGATE_RANGE.getLo(0)) {
+                        curTrails.addRange(startTrail, Constants.TRAIL_SURROGATE_RANGE.getHi(0));
                         assert startLead < Character.MAX_VALUE;
                         startLead = (char) (startLead + 1);
                     }
 
                     if (curTrails.matchesSomething()) {
                         Sequence finishedAlternative = group.addSequence(ast);
-                        finishedAlternative.add(createCharClass(MatcherBuilder.create(curLead), src));
+                        finishedAlternative.add(createCharClass(CharSet.create(curLead), src));
                         finishedAlternative.add(createCharClass(curTrails, src));
                     }
                     curLead = endLead;
-                    curTrails = CodePointSet.createEmpty();
+                    curTrails.clear();
 
-                    if (endTrail != Constants.TRAIL_SURROGATE_RANGE.hi) {
-                        curTrails.addRange(new CodePointRange(Constants.TRAIL_SURROGATE_RANGE.lo, endTrail));
+                    if (endTrail != Constants.TRAIL_SURROGATE_RANGE.getHi(0)) {
+                        curTrails.addRange(Constants.TRAIL_SURROGATE_RANGE.getLo(0), endTrail);
                         assert endLead > Character.MIN_VALUE;
                         endLead = (char) (endLead - 1);
                     }
 
                     if (startLead <= endLead) {
-                        completeRanges.addRange(new CodePointRange(startLead, endLead));
+                        completeRanges.addRange(startLead, endLead);
                     }
 
                 }
             }
             if (curTrails.matchesSomething()) {
                 Sequence lastAlternative = group.addSequence(ast);
-                lastAlternative.add(createCharClass(MatcherBuilder.create(curLead), src));
+                lastAlternative.add(createCharClass(CharSet.create(curLead), src));
                 lastAlternative.add(createCharClass(curTrails, src));
             }
 
@@ -355,7 +435,7 @@ public final class RegexParser {
                 Sequence completeRangesAlt = ast.createSequence();
                 group.insertFirst(completeRangesAlt);
                 completeRangesAlt.add(createCharClass(completeRanges, src));
-                completeRangesAlt.add(createCharClass(MatcherBuilder.createTrailSurrogateRange(), src));
+                completeRangesAlt.add(createCharClass(CharSet.getTrailSurrogateRange(), src));
             }
         }
 
@@ -376,10 +456,10 @@ public final class RegexParser {
 
     private void addCharClass(Token.CharacterClass token) {
         CodePointSet codePointSet = token.getCodePointSet();
-        if (source.getFlags().isUnicode()) {
+        if (flags.isUnicode()) {
             if (codePointSet.matchesNothing()) {
                 // We need this branch because a Group with no alternatives is invalid
-                addTerm(createCharClass(MatcherBuilder.createEmpty(), token.getSourceSection()));
+                addTerm(createCharClass(CharSet.getEmpty(), token.getSourceSection()));
             } else {
                 addTerm(translateUnicodeCharClass(token));
             }
@@ -388,11 +468,11 @@ public final class RegexParser {
         }
     }
 
-    private CharacterClass createCharClass(CodePointSet codePointSet, SourceSection sourceSection) {
-        return createCharClass(MatcherBuilder.create(codePointSet), sourceSection);
+    private CharacterClass createCharClass(SortedListOfRanges codePointSet, SourceSection sourceSection) {
+        return createCharClass(CharSet.fromSortedRanges(codePointSet), sourceSection);
     }
 
-    private CharacterClass createCharClass(MatcherBuilder matcherBuilder, SourceSection sourceSection) {
+    private CharacterClass createCharClass(CharSet matcherBuilder, SourceSection sourceSection) {
         CharacterClass characterClass = ast.createCharacterClass(matcherBuilder);
         characterClass.setSourceSection(sourceSection);
         return characterClass;
@@ -432,7 +512,6 @@ public final class RegexParser {
     }
 
     private void setLoop() {
-        properties.setLoops();
         assert curTerm instanceof Group;
         ((Group) curTerm).setLoop(true);
     }
@@ -443,7 +522,7 @@ public final class RegexParser {
 
     private void substitute(Token token, Group substitution) {
         Group copy = substitution.copy(ast, true);
-        if (DebugUtil.DEBUG) {
+        if (options.isDumpAutomata()) {
             setSourceSectionVisitor.run(copy, token.getSourceSection());
         }
         addTerm(copy);
@@ -454,7 +533,7 @@ public final class RegexParser {
     private Group parse(boolean rootCapture) throws RegexSyntaxException {
         RegexASTRootNode rootParent = ast.createRootNode();
         Group root = createGroup(null, false, rootCapture, rootParent);
-        if (DebugUtil.DEBUG) {
+        if (options.isDumpAutomata()) {
             root.setSourceSectionBegin(ast.getSource().getSource().createSection(0, 1));
             root.setSourceSectionEnd(ast.getSource().getSource().createSection(ast.getSource().getPattern().length() + 1, 1));
         }
@@ -462,7 +541,7 @@ public final class RegexParser {
             Token token = lexer.next();
             switch (token.kind) {
                 case caret:
-                    if (source.getFlags().isMultiline()) {
+                    if (flags.isMultiline()) {
                         substitute(token, MULTI_LINE_CARET_SUBSTITUTION);
                         properties.setAlternations();
                     } else if (!curTermIsAnchor(PositionAssertion.Type.CARET)) {
@@ -472,7 +551,7 @@ public final class RegexParser {
                     }
                     break;
                 case dollar:
-                    if (source.getFlags().isMultiline()) {
+                    if (flags.isMultiline()) {
                         substitute(token, MULTI_LINE_DOLLAR_SUBSTITUTION);
                         properties.setAlternations();
                     } else if (!curTermIsAnchor(PositionAssertion.Type.DOLLAR)) {
@@ -482,7 +561,7 @@ public final class RegexParser {
                     }
                     break;
                 case wordBoundary:
-                    if (source.getFlags().isUnicode() && source.getFlags().isIgnoreCase()) {
+                    if (flags.isUnicode() && flags.isIgnoreCase()) {
                         substitute(token, UNICODE_IGNORE_CASE_WORD_BOUNDARY_SUBSTITUTION);
                     } else {
                         substitute(token, WORD_BOUNDARY_SUBSTITUTION);
@@ -490,7 +569,7 @@ public final class RegexParser {
                     properties.setAlternations();
                     break;
                 case nonWordBoundary:
-                    if (source.getFlags().isUnicode() && source.getFlags().isIgnoreCase()) {
+                    if (flags.isUnicode() && flags.isIgnoreCase()) {
                         substitute(token, UNICODE_IGNORE_CASE_NON_WORD_BOUNDARY_SUBSTITUTION);
                     } else {
                         substitute(token, NON_WORD_BOUNDARY_SUBSTITUTION);
@@ -546,15 +625,17 @@ public final class RegexParser {
         if (curTerm == null) {
             throw syntaxError(ErrorMessages.QUANTIFIER_WITHOUT_TARGET);
         }
-        final boolean onAssertion = curTerm instanceof RegexASTSubtreeRootNode;
-        if (source.getFlags().isUnicode() && onAssertion) {
-            throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKAROUND_ASSERTION);
+        if (flags.isUnicode() && curTerm instanceof LookAheadAssertion) {
+            throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKAHEAD_ASSERTION);
+        }
+        if (curTerm instanceof LookBehindAssertion) {
+            throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKBEHIND_ASSERTION);
         }
         assert curTerm == curSequence.getLastTerm();
         if (quantifier.getMin() == -1) {
             deleteVisitor.run(curSequence.getLastTerm());
             curSequence.removeLastTerm();
-            addTerm(createCharClass(MatcherBuilder.createEmpty(), null));
+            addTerm(createCharClass(CharSet.getEmpty(), null));
             curSequence.markAsDead();
             return;
         }
@@ -563,7 +644,7 @@ public final class RegexParser {
             curSequence.removeLastTerm();
         }
         Term t = curTerm;
-        if (!onAssertion) {
+        if (!(curTerm instanceof LookAroundAssertion)) {
             if (quantifier.getMin() > TRegexOptions.TRegexMaxCountedRepetition || quantifier.getMax() > TRegexOptions.TRegexMaxCountedRepetition) {
                 properties.setLargeCountedRepetitions();
                 // avoid tree explosion. note that this will result in an incorrect parse tree!
@@ -585,14 +666,14 @@ public final class RegexParser {
     }
 
     /**
-     * This method should be called when <code>curSequence</code> is about to be closed. If the
-     * current {@link Sequence} <em>and</em> the last {@link Sequence} consist of a single
+     * This method should be called when {@code curSequence} is about to be closed. If the current
+     * {@link Sequence} <em>and</em> the last {@link Sequence} consist of a single
      * {@link CharacterClass} each, the {@link CharacterClass} contained in the current
      * {@link Sequence} will be removed and merged into the last {@link Sequence}'s
      * {@link CharacterClass}, resulting in a smaller NFA.
-     * 
-     * @return <code>true</code> if the {@link CharacterClass} in the current sequence was merged
-     *         with the {@link CharacterClass} in the last Sequence.
+     *
+     * @return {@code true} if the {@link CharacterClass} in the current sequence was merged with
+     *         the {@link CharacterClass} in the last Sequence.
      */
     private boolean tryMergeSingleCharClassAlternations() {
         if (curGroup.size() > 1 && curSequence.isSingleCharClass()) {
@@ -603,7 +684,7 @@ public final class RegexParser {
                 CharacterClass curCC = (CharacterClass) curSequence.getFirstTerm();
                 prevCC.setMatcherBuilder(prevCC.getMatcherBuilder().union(curCC.getMatcherBuilder()));
                 curSequence.removeLastTerm();
-                if (DebugUtil.DEBUG) {
+                if (options.isDumpAutomata()) {
                     // set source section to cover both char classes and the "|" in between
                     SourceSection prevCCSrc = prevCC.getSourceSection();
                     prevCC.setSourceSection(prevCCSrc.getSource().createSection(
@@ -625,16 +706,19 @@ public final class RegexParser {
      */
     private enum RegexStackElem {
         Group,
-        LookAroundAssertion
+        LookAheadAssertion,
+        LookBehindAssertion
     }
 
     /**
      * Information about the state of the {@link #curTerm} field. The field can be either null,
-     * point to a lookaround assertion node or to some other non-null node.
+     * point to a lookahead assertion node, to a lookbehind assertion node or to some other non-null
+     * node.
      */
     private enum CurTermState {
         Null,
-        LookAroundAssertion,
+        LookAheadAssertion,
+        LookBehindAssertion,
         Other
     }
 
@@ -648,29 +732,65 @@ public final class RegexParser {
      * <p>
      * Unlike {@link #parse(boolean)}, this method will never throw an
      * {@link UnsupportedRegexException}.
-     * 
+     *
      * @throws RegexSyntaxException when a syntax error is detected in the RegExp
      */
     private void parseDryRun() throws RegexSyntaxException {
         List<RegexStackElem> syntaxStack = new ArrayList<>();
+        int lookBehindDepth = 0;
         CurTermState curTermState = CurTermState.Null;
         while (lexer.hasNext()) {
             Token token = lexer.next();
+            if (lookBehindDepth > 0 && token.kind != Token.Kind.charClass && token.kind != Token.Kind.groupEnd) {
+                features.setNonLiteralLookBehindAssertions();
+            }
             switch (token.kind) {
                 case caret:
+                    curTermState = CurTermState.Other;
+                    break;
                 case dollar:
+                    if (lookBehindDepth > 0 && !flags.isMultiline()) {
+                        features.setEndOfStringAssertionsInLookBehind();
+                    }
+                    curTermState = CurTermState.Other;
+                    break;
                 case wordBoundary:
                 case nonWordBoundary:
+                    if (lookBehindDepth > 0) {
+                        features.setWordBoundaryAssertionsInLookBehind();
+                    }
+                    curTermState = CurTermState.Other;
+                    break;
                 case backReference:
+                    features.setBackReferences();
+                    if (lookBehindDepth > 0) {
+                        features.setBackReferencesInLookBehind();
+                    }
+                    curTermState = CurTermState.Other;
+                    break;
                 case charClass:
                     curTermState = CurTermState.Other;
                     break;
                 case quantifier:
-                    if (curTermState == CurTermState.Null) {
-                        throw syntaxError(ErrorMessages.QUANTIFIER_WITHOUT_TARGET);
-                    }
-                    if (source.getFlags().isUnicode() && curTermState == CurTermState.LookAroundAssertion) {
-                        throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKAROUND_ASSERTION);
+                    switch (curTermState) {
+                        case Null:
+                            throw syntaxError(ErrorMessages.QUANTIFIER_WITHOUT_TARGET);
+                        case LookAheadAssertion:
+                            if (flags.isUnicode()) {
+                                throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKAHEAD_ASSERTION);
+                            }
+                            break;
+                        case LookBehindAssertion:
+                            throw syntaxError(ErrorMessages.QUANTIFIER_ON_LOOKBEHIND_ASSERTION);
+                        case Other:
+                            Token.Quantifier quantifier = (Token.Quantifier) token;
+                            if (lookBehindDepth > 0 && quantifier.getMin() != quantifier.getMax()) {
+                                features.setNonTrivialQuantifiersInLookBehind();
+                            }
+                            if (quantifier.getMin() > TRegexOptions.TRegexMaxCountedRepetition || quantifier.getMax() > TRegexOptions.TRegexMaxCountedRepetition) {
+                                features.setLargeCountedRepetitions();
+                            }
+                            break;
                     }
                     curTermState = CurTermState.Other;
                     break;
@@ -683,8 +803,24 @@ public final class RegexParser {
                     curTermState = CurTermState.Null;
                     break;
                 case lookAheadAssertionBegin:
+                    if (((Token.LookAheadAssertionBegin) token).isNegated()) {
+                        features.setNegativeLookAheadAssertions();
+                    }
+                    if (lookBehindDepth > 0) {
+                        features.setLookAheadAssertionsInLookBehind();
+                    }
+                    syntaxStack.add(RegexStackElem.LookAheadAssertion);
+                    curTermState = CurTermState.Null;
+                    break;
                 case lookBehindAssertionBegin:
-                    syntaxStack.add(RegexStackElem.LookAroundAssertion);
+                    if (((Token.LookBehindAssertionBegin) token).isNegated()) {
+                        features.setNegativeLookBehindAssertions();
+                        if (lookBehindDepth > 0) {
+                            features.setNegativeLookBehindAssertionsInLookBehind();
+                        }
+                    }
+                    syntaxStack.add(RegexStackElem.LookBehindAssertion);
+                    lookBehindDepth++;
                     curTermState = CurTermState.Null;
                     break;
                 case groupEnd:
@@ -692,10 +828,17 @@ public final class RegexParser {
                         throw syntaxError(ErrorMessages.UNMATCHED_RIGHT_PARENTHESIS);
                     }
                     RegexStackElem poppedElem = syntaxStack.remove(syntaxStack.size() - 1);
-                    if (poppedElem == RegexStackElem.LookAroundAssertion) {
-                        curTermState = CurTermState.LookAroundAssertion;
-                    } else { // poppedElem == RegexStackElem.Group
-                        curTermState = CurTermState.Other;
+                    switch (poppedElem) {
+                        case LookAheadAssertion:
+                            curTermState = CurTermState.LookAheadAssertion;
+                            break;
+                        case LookBehindAssertion:
+                            lookBehindDepth--;
+                            curTermState = CurTermState.LookBehindAssertion;
+                            break;
+                        case Group:
+                            curTermState = CurTermState.Other;
+                            break;
                     }
                     break;
             }

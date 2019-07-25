@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.core.graal.nodes;
 
+import jdk.vm.ci.code.Register;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.lir.gen.LIRGeneratorTool;
 import org.graalvm.compiler.nodeinfo.NodeCycles;
@@ -31,9 +34,7 @@ import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 
-import com.oracle.svm.core.amd64.FrameAccess;
-
-import jdk.vm.ci.code.RegisterValue;
+import com.oracle.svm.core.FrameAccess;
 
 @NodeInfo(cycles = NodeCycles.CYCLES_1, size = NodeSize.SIZE_1)
 public final class ReadStackPointerNode extends FixedWithNextNode implements LIRLowerable {
@@ -46,7 +47,7 @@ public final class ReadStackPointerNode extends FixedWithNextNode implements LIR
     @Override
     public void generate(NodeLIRBuilderTool gen) {
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
-        RegisterValue input = tool.getRegisterConfig().getFrameRegister().asValue(tool.getLIRKind(FrameAccess.getWordStamp()));
-        gen.setResult(this, tool.emitMove(input));
+        Register register = tool.getRegisterConfig().getFrameRegister();
+        gen.setResult(this, tool.emitReadRegister(register, tool.getLIRKind(FrameAccess.getWordStamp())));
     }
 }

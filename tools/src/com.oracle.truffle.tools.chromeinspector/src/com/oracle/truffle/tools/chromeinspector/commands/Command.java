@@ -24,8 +24,8 @@
  */
 package com.oracle.truffle.tools.chromeinspector.commands;
 
-import org.json.JSONException;
-import org.json.JSONObject;
+import com.oracle.truffle.tools.utils.json.JSONException;
+import com.oracle.truffle.tools.utils.json.JSONObject;
 
 public final class Command {
 
@@ -47,6 +47,12 @@ public final class Command {
         } else {
             this.params = null;
         }
+    }
+
+    public Command(long id, String method, Params params) {
+        this.id = id;
+        this.method = method;
+        this.params = params;
     }
 
     public long getId() {

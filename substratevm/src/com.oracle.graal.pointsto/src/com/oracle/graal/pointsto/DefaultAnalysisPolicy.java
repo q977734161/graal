@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -90,6 +92,11 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
 
     @Override
     public void noteMerge(BigBang bb, AnalysisObject... a) {
+        // nothing to do
+    }
+
+    @Override
+    public void noteMerge(BigBang bb, AnalysisObject a) {
         // nothing to do
     }
 
@@ -206,8 +213,9 @@ public class DefaultAnalysisPolicy extends AnalysisPolicy {
         public Collection<MethodFlowsGraph> getCalleesFlows(BigBang bb) {
             // collect the flow graphs, one for each analysis method, since it is context
             // insensitive
+            Collection<AnalysisMethod> callees = getCallees();
             List<MethodFlowsGraph> methodFlowsGraphs = new ArrayList<>(callees.size());
-            for (AnalysisMethod method : callees.getElements()) {
+            for (AnalysisMethod method : callees) {
                 methodFlowsGraphs.add(method.getTypeFlow().getFlows(bb.contextPolicy().emptyContext()));
             }
             return methodFlowsGraphs;

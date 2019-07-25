@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -85,7 +87,7 @@ public abstract class MacroStateSplitNode extends MacroNode implements StateSpli
             }
             assert invoke.stateAfter().bci == BytecodeFrame.AFTER_BCI;
             // Here we need to fix the bci of the invoke
-            InvokeNode newInvoke = snippetGraph.add(new InvokeNode(invoke.callTarget(), bci()));
+            InvokeNode newInvoke = snippetGraph.add(new InvokeNode(invoke.callTarget(), bci(), invoke.getLocationIdentity()));
             newInvoke.setStateAfter(invoke.stateAfter());
             snippetGraph.replaceFixedWithFixed((InvokeNode) invoke.asNode(), newInvoke);
         }

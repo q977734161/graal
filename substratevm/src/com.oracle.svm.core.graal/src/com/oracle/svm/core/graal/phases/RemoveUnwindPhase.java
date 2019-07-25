@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,7 +33,6 @@ import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
 import org.graalvm.compiler.nodes.LoopExitNode;
 import org.graalvm.compiler.nodes.MergeNode;
-import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValueNode;
@@ -71,11 +72,7 @@ public class RemoveUnwindPhase extends Phase {
          * deleted nodes during graph traversal.
          */
         for (InvokeWithExceptionNode node : invocations) {
-            InvokeNode replacement = node.graph().add(new InvokeNode(node.callTarget(), node.bci(), node.stamp(NodeView.DEFAULT)));
-            replacement.setStateAfter(node.stateAfter());
-
-            node.killExceptionEdge();
-            node.graph().replaceSplit(node, replacement, node.next());
+            node.replaceWithInvoke();
         }
     }
 

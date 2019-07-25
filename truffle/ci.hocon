@@ -12,18 +12,18 @@ gateLite : ${truffleCommon} {
   ]
 }
 
-benchCommon: ${linux-amd64} ${labsjdk8} {
+benchCommon: ${linux-amd64} ${oraclejdk8} {
   environment: {
     BENCH_RESULTS_FILE_PATH: "bench-results.json"
   },
-  targets: [weekly],
+  targets: [bench, weekly],
   timelimit: "1:00:00",
   setup : [
-    ["cd", "./compiler"],
+    ["cd", ${compiler-suite-root}],
     ["mx", "build" ]
-  ],
+  ] ${download-hsdis.setup}
   teardown : [
-    ["bench-uploader.py", "--url", "${BENCH_SERVER_URL}", "${BENCH_RESULTS_FILE_PATH}"]
+    ["bench-uploader.py", "${BENCH_RESULTS_FILE_PATH}"]
   ]
 }
 
@@ -32,10 +32,9 @@ truffleWeekly: ${truffle-weekly-notifications} {
 }
 
 builds += [
-  ${linux-amd64} ${labsjdk8}    ${truffleCommon} ${eclipse} ${jdt} {run : [["mx", "--strict-compliance", "gate", "--strict-mode"]], targets : [gate], name: "gate-truffle-8"},
-  ${linux-amd64} ${oraclejdk9}  ${truffleCommon} ${eclipse} {run : [["mx", "--strict-compliance", "gate", "--strict-mode"]], targets : [gate], name: "gate-truffle-9"},
-  ${linux-amd64} ${oraclejdk10} ${truffleCommon} ${eclipse} {run : [["mx", "--strict-compliance", "gate", "--strict-mode"]], targets : [gate], name: "gate-truffle-10"},
-  ${linux-amd64} ${labsjdk8}    ${truffleCommon} {
+  ${linux-amd64} ${oraclejdk8}    ${truffleCommon} ${eclipse} ${jdt} {run : [["mx", "--strict-compliance", "gate", "--strict-mode"]], targets : [gate], name: "gate-truffle-8"},
+  ${linux-amd64} ${oraclejdk11}   ${truffleCommon} ${eclipse} {run : [["mx", "--strict-compliance", "gate", "--strict-mode"]], targets : [gate], name: "gate-truffle-11"},
+  ${linux-amd64} ${oraclejdk8}    ${truffleCommon} {
     run : [
         ["mx", "build"],
         ["mx", "javadoc"],
@@ -43,24 +42,30 @@ builds += [
     targets : [gate],
     name: "gate-truffle-javadoc"
   },
-  ${linux-amd64} ${linux-deploy} ${maven-deploy-dry-run} ${truffleCommon} {name: "gate-truffle-maven-dry-run"}
-  ${solaris-sparcv9} ${labsjdk8} ${gateLite} ${truffleWeekly} {
+  ${solaris-sparcv9} ${oraclejdk8} ${gateLite} ${truffleWeekly} {
     name: "gate-truffle-solaris-lite-8"
   }
-  ${solaris-sparcv9} ${oraclejdk9} ${gateLite} ${truffleWeekly} {
-    name: "gate-truffle-solaris-lite-9"
+  ${solaris-sparcv9} ${oraclejdk11} ${gateLite} ${truffleWeekly} {
+    name: "gate-truffle-solaris-lite-11"
   }
-  ${solaris-sparcv9} ${oraclejdk10} ${gateLite} ${truffleWeekly} {
-    name: "gate-truffle-solaris-lite-10"
-  }
-  ${darwin-amd64} ${labsjdk8} ${gateLite} ${truffleWeekly} {
+  ${darwin-amd64} ${oraclejdk8} ${gateLite} ${truffleWeekly} {
     name: "gate-truffle-mac-lite-8"
   }
-  ${darwin-amd64} ${oraclejdk9} ${gateLite} ${truffleWeekly} {
-    name: "gate-truffle-mac-lite-9"
+  ${darwin-amd64} ${oraclejdk11} ${gateLite} ${truffleWeekly} {
+    name: "gate-truffle-mac-lite-11"
   }
-  ${darwin-amd64} ${oraclejdk10} ${gateLite} ${truffleWeekly} {
-    name: "gate-truffle-mac-lite-10"
+  ${windows-amd64} ${oraclejdk8} ${truffleCommon} {
+    # TODO make that a full gate run
+    # currently, some truffle unittests fail on windows
+    run : [
+      ["mx", "build" ],
+      ["mx", "unittest", "--verbose" ]
+    ]
+    packages : {
+      msvc : "==10.0"
+    }
+    targets : [gate],
+    name: "gate-truffle-nfi-windows-8",
   }
   # BENCHMARKS
   ${benchCommon} ${truffle-bench-notifications} {

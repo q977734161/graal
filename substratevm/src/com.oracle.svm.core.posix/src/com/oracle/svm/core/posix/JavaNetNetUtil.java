@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,13 +24,19 @@
  */
 package com.oracle.svm.core.posix;
 
+import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.SocketOptions;
+import java.net.StandardProtocolFamily;
+import java.nio.channels.DatagramChannel;
 
 import org.graalvm.compiler.api.replacements.Fold;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -42,8 +50,9 @@ import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.headers.Errno;
 import com.oracle.svm.core.os.IsDefined;
-import com.oracle.svm.core.posix.headers.Errno;
 import com.oracle.svm.core.posix.headers.Ioctl;
 import com.oracle.svm.core.posix.headers.LibC;
 import com.oracle.svm.core.posix.headers.NetinetIn;
@@ -62,6 +71,7 @@ import com.oracle.svm.core.util.VMError;
 // TODO: This should be in some other package (svm.core.jdk?)
 // but then it can not use the non-public classes in this package.
 /** Native methods from jdk/src/share/native/java/net/net_util.c translated to Java. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class JavaNetNetUtil {
 
     /* Private constructor: No instances. */
@@ -141,6 +151,22 @@ class JavaNetNetUtil {
         // 037 return IPv6_available ;
         return IPv6_available;
     }
+
+    // ported from: ./src/java.base/share/native/libnet/net_util.c
+    // 36 static int REUSEPORT_available;
+    static Boolean REUSEPORT_available;
+
+    /* @formatter:off */
+    //    48  JNIEXPORT jint JNICALL reuseport_available()
+    static boolean reuseport_available() {
+        //    50      return REUSEPORT_available;
+        if ( REUSEPORT_available == null ) {
+            // Initialized here as StackValue.get isn't available during static init of native-image generation.
+            REUSEPORT_available = JavaNetNetUtilMD.reuseport_supported();
+        }
+        return REUSEPORT_available;
+    }
+    /* @formatter:on */
 
     // 226 JNIEXPORT jobject JNICALL
     // 227 NET_SockaddrToInetAddress(JNIEnv *env, struct sockaddr *him, int *port) {
@@ -222,6 +248,111 @@ class JavaNetNetUtil {
         return iaObj;
     }
 
+    // 255 JNIEXPORT jint JNICALL
+    // 256 NET_SockaddrEqualsInetAddress(JNIEnv *env, struct sockaddr *him, jobject iaObj)
+    static boolean NET_SockaddrEqualsInetAddress(Socket.sockaddr him, InetAddress iaObj) {
+        // 258 jint family = AF_INET;
+        int family = Socket.AF_INET();
+
+        /* Restructured due to #ifdef mixing with either an else-branch or just a curlied block */
+
+        // 260 #ifdef AF_INET6
+        if (IsDefined.socket_AF_INET6()) {
+            // 261 family = getInetAddress_family(env, iaObj) == IPv4? AF_INET : AF_INET6;
+            family = getInetAddress_family(iaObj) == Target_java_net_InetAddress.IPv4 ? Socket.AF_INET() : Socket.AF_INET6();
+            // 262 JNU_CHECK_EXCEPTION_RETURN(env, JNI_FALSE);
+            // 263 if (him->sa_family == AF_INET6) {
+        }
+
+        /* This only occurs if AF_INET6 above && him is IPv6 */
+        if (him.sa_family() == Socket.AF_INET6()) {
+            // 264 #ifdef WIN32
+            // 265 struct SOCKADDR_IN6 *him6 = (struct SOCKADDR_IN6 *)him;
+            // 266 #else
+            // 267 struct sockaddr_in6 *him6 = (struct sockaddr_in6 *)him;
+            NetinetIn.sockaddr_in6 him6 = (NetinetIn.sockaddr_in6) him;
+            // 268 #endif
+            // 269 jbyte *caddrNew = (jbyte *)&(him6->sin6_addr);
+            CCharPointer caddrNew = him6.sin6_addr().s6_addr();
+            // 270 if (NET_IsIPv4Mapped(caddrNew)) {
+            if (isIPv4Mapped(caddrNew)) {
+                // 271 int addrNew;
+                int addrNew;
+                // 272 int addrCur;
+                int addrCur;
+                // 273 if (family == AF_INET6) {
+                if (family == Socket.AF_INET6()) {
+                    // 274 return JNI_FALSE;
+                    return false;
+                }
+                // 276 addrNew = NET_IPv4MappedToIPv4(caddrNew);
+                addrNew = JavaNetNetUtilMD.NET_IPv4MappedToIPv4(caddrNew);
+                // 277 addrCur = getInetAddress_addr(env, iaObj);
+                addrCur = JavaNetNetUtilMD.getInetAddress_addr(iaObj);
+                // 278 JNU_CHECK_EXCEPTION_RETURN(env, JNI_FALSE);
+                // 279 if (addrNew == addrCur) {
+                if (addrNew == addrCur) {
+                    // 280 return JNI_TRUE;
+                    return true;
+                } else {
+                    // 282 return JNI_FALSE;
+                    return false;
+                }
+                // 284 } else {
+            } else {
+                // 285 jbyteArray ipaddress;
+                /* Unused. */
+                // 286 jbyte caddrCur[16];
+                CCharPointer caddrCur = StackValue.get(16, CCharPointer.class);
+                // 287 int scope;
+                int scope;
+                // 289 if (family == AF_INET) {
+                if (family == Socket.AF_INET()) {
+                    // 290 return JNI_FALSE;
+                    return false;
+                }
+                // 292 scope = getInet6Address_scopeid(env, iaObj);
+                scope = getInet6Address_scopeid((Inet6Address) iaObj);
+                // 293 getInet6Address_ipaddress(env, iaObj, (char *)caddrCur);
+                getInet6Address_ipAddress((Inet6Address) iaObj, caddrCur);
+                // 294 if (NET_IsEqual(caddrNew, caddrCur) && cmpScopeID(scope, him)) {
+                if (JavaNetNetUtilMD.NET_IsEqual(caddrCur, caddrCur) && JavaNetNetUtilMD.cmpScopeID(scope, him)) {
+                    // 295 return JNI_TRUE;
+                    return true;
+                } else {
+                    // 297 return JNI_FALSE;
+                    return false;
+                }
+            }
+            // 301 #endif /* AF_INET6 */
+        }
+
+        // 303 struct sockaddr_in *him4 = (struct sockaddr_in *)him;
+        NetinetIn.sockaddr_in him4 = (NetinetIn.sockaddr_in) him;
+        // 304 int addrNew, addrCur;
+        int addrNew, addrCur;
+
+        // 305 if (family != AF_INET) {
+        if (family != Socket.AF_INET()) {
+            // 306 return JNI_FALSE;
+            return false;
+        }
+
+        // 308 addrNew = ntohl(him4->sin_addr.s_addr);
+        addrNew = NetinetIn.ntohl(him4.sin_addr().s_addr());
+        // 309 addrCur = getInetAddress_addr(env, iaObj);
+        addrCur = JavaNetNetUtilMD.getInetAddress_addr(iaObj);
+        // 310 JNU_CHECK_EXCEPTION_RETURN(env, JNI_FALSE);
+        // 311 if (addrNew == addrCur) {
+        if (addrNew == addrCur) {
+            // 312 return JNI_TRUE;
+            return true;
+        } else {
+            // 314 return JNI_FALSE;
+            return false;
+        }
+    }
+
     static boolean isIPv4Mapped(CCharPointer caddr) {
         int i;
         for (i = 0; i < 10; i++) {
@@ -243,7 +374,7 @@ class JavaNetNetUtil {
         // 105 initInetAddrs(env);
         initInetAddrs();
         // 106 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 107 CHECK_NULL_RETURN(holder, NULL);
         if (holder == null) {
             return null;
@@ -260,7 +391,7 @@ class JavaNetNetUtil {
         // 114 initInetAddrs(env);
         initInetAddrs();
         // 115 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 116 CHECK_NULL_RETURN(holder, JNI_FALSE);
         if (holder == null) {
             return -1;
@@ -278,7 +409,7 @@ class JavaNetNetUtil {
         // 133 initInetAddrs(env);
         initInetAddrs();
         // 134 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 135 CHECK_NULL_RETURN(holder, -1);
         if (holder == null) {
             return -1;
@@ -294,7 +425,7 @@ class JavaNetNetUtil {
         // 142 initInetAddrs(env);
         initInetAddrs();
         // 143 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 144 CHECK_NULL_RETURN(holder, JNI_FALSE);
         if (holder == null) {
             return Target_jni.JNI_FALSE();
@@ -319,7 +450,7 @@ class JavaNetNetUtil {
         // 157 initInetAddrs(env);
         initInetAddrs();
         // 158 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 159 CHECK_NULL_RETURN(holder, JNI_FALSE);
         if (holder == null) {
             return Target_jni.JNI_FALSE();
@@ -345,7 +476,7 @@ class JavaNetNetUtil {
         // 170 initInetAddrs(env);
         initInetAddrs();
         // 171 holder = (*env)->GetObjectField(env, iaObj, ia6_holder6ID);
-        holder = Util_java_net_Inet6Address.from_Inet6Address(iaObj).holder6;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_Inet6Address.class).holder6;
         // 172 CHECK_NULL_RETURN(holder, JNI_FALSE);
         if (holder == null) {
             return Target_jni.JNI_FALSE();
@@ -372,7 +503,7 @@ class JavaNetNetUtil {
         // 185 initInetAddrs(env);
         initInetAddrs();
         // 186 holder = (*env)->GetObjectField(env, iaObj, ia_holderID);
-        holder = Util_java_net_InetAddress.from_InetAddress(iaObj).holder;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_InetAddress.class).holder;
         // 187 (*env)->SetIntField(env, holder, iac_addressID, address);
         holder.address = address;
     }
@@ -384,7 +515,7 @@ class JavaNetNetUtil {
         // 192 initInetAddrs(env);
         initInetAddrs();
         // 193 holder = (*env)->GetObjectField(env, iaObj, ia_holderID);
-        holder = Util_java_net_InetAddress.from_InetAddress(iaObj).holder;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_InetAddress.class).holder;
         // 194 (*env)->SetIntField(env, holder, iac_familyID, family);
         holder.family = family;
     }
@@ -396,7 +527,7 @@ class JavaNetNetUtil {
         // 199 initInetAddrs(env);
         initInetAddrs();
         // 200 holder = (*env)->GetObjectField(env, iaObj, ia_holderID);
-        holder = Util_java_net_InetAddress.from_InetAddress(iaObj).holder;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_InetAddress.class).holder;
         // 201 (*env)->SetObjectField(env, holder, iac_hostNameID, host);
         holder.hostName = host;
     }
@@ -408,13 +539,21 @@ class JavaNetNetUtil {
         // 214 initInetAddrs(env);
         initInetAddrs();
         // 215 holder = (*env)->GetObjectField(env, iaObj, ia_holderID);
-        holder = Util_java_net_InetAddress.from_InetAddress(iaObj).holder;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_InetAddress.class).holder;
         // 216 return (*env)->GetIntField(env, holder, iac_familyID);
         return holder.family;
+    }
+
+    @Fold
+    static int MAX_PACKET_LEN() {
+        // from {jdk8}/share/native/java/net/net_util.h
+        // 37 #define MAX_PACKET_LEN 65536
+        return 65536;
     }
 }
 
 /** Native methods from jdk/src/solaris/native/java/net/net_util_md.c translated to Java. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class JavaNetNetUtilMD {
 
     /* Private constructor: No instances. */
@@ -462,6 +601,31 @@ class JavaNetNetUtilMD {
     }
     /* @formatter:on */
 
+    // 963 int
+    // 964 NET_IsEqual(jbyte* caddr1, jbyte* caddr2) {
+    static boolean NET_IsEqual(CCharPointer caddr1, CCharPointer caddr2) {
+        // 965 int i;
+        int i;
+        // 966 for (i = 0; i < 16; i++) {
+        for (i = 0; i < 16; i++) {
+            // 967 if (caddr1[i] != caddr2[i]) {
+            if (caddr1.read(i) != caddr2.read(i)) {
+                // 968 return 0; /* false */
+                return false;
+            }
+        }
+        // 971 return 1;
+        return true;
+    }
+
+    // 251 int cmpScopeID (unsigned int scope, struct sockaddr *him) {
+    static boolean cmpScopeID(int scope, Socket.sockaddr him) {
+        // 252 struct sockaddr_in6 *him6 = (struct sockaddr_in6 *)him;
+        NetinetIn.sockaddr_in6 him6 = (NetinetIn.sockaddr_in6) him;
+        // 253 return him6->sin6_scope_id == scope;
+        return him6.sin6_scope_id() == scope;
+    }
+
     // 237 int getScopeID (struct sockaddr *him) {
     static int getScopeID(Socket.sockaddr him) {
         // 238 struct sockaddr_in6 *hext = (struct sockaddr_in6 *)him;
@@ -477,21 +641,35 @@ class JavaNetNetUtilMD {
         // 206 initInetAddrs(env);
         JavaNetNetUtil.initInetAddrs();
         // 207 holder = (*env)->GetObjectField(env, iaObj, ia_holderID);
-        holder = Util_java_net_InetAddress.from_InetAddress(iaObj).holder;
+        holder = SubstrateUtil.cast(iaObj, Target_java_net_InetAddress.class).holder;
         // 208 return (*env)->GetIntField(env, holder, iac_addressID);
         return holder.address;
     }
 
+    /**
+     * This method is only called during image building, to determine if the JVM on which the image
+     * builder is running supports IPv6. That information is baked into the generated image, in
+     * {@link JavaNetNetUtil#IPv6_available}.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
     static boolean IPv6_supported() {
-        // TODO: Lines 305-426 of platform-dependent code elided,
-        // because it looks like IPv6 is supported by Linux, MacOSX, and Solaris.
-        // TODO: I am also not implementing building HotSpot with -DDONT_ENABLE_IPV6.
+        /*
+         * Can I open a DatagramChannel that uses IPv6, or will I get an
+         * UnsupportedOperationException?
+         */
+        try {
+            DatagramChannel.open(StandardProtocolFamily.INET6).close();
+        } catch (UnsupportedOperationException uoe) {
+            return false;
+        } catch (IOException ioe) {
+            return false;
+        }
         return true;
     }
 
     // 275 void
     // 276 NET_ThrowNew(JNIEnv *env, int errorNumber, char *msg) {
-    static void NET_ThrowNew(int errorNumber, String msgArg) throws SocketException, InterruptedException {
+    static void NET_ThrowNew(int errorNumber, String msgArg) throws SocketException, InterruptedIOException {
         /* Do not modify argument! */
         String msg = msgArg;
         // 277 char fullMsg[512];
@@ -512,16 +690,12 @@ class JavaNetNetUtilMD {
             // 286 case EINTR:
             // 287 JNU_ThrowByName(env, JNU_JAVAIOPKG "InterruptedIOException", msg);
             // 288 break;
-            throw new InterruptedException(msg);
+            throw new InterruptedIOException(msg);
         } else {
             // 290 errno = errorNumber;
             Errno.set_errno(errorNumber);
-            /*
-             * FIXME: Not implementing JNU_ThrowByNameWithLastError which might be like
-             * PosixOSInterface.lastErrorString.
-             */
             // 291 JNU_ThrowByNameWithLastError(env, JNU_JAVANETPKG "SocketException", msg);
-            throw new SocketException(msg);
+            throw new SocketException(PosixUtils.lastErrorString(msg));
         }
     }
 
@@ -546,7 +720,7 @@ class JavaNetNetUtilMD {
             // 792 struct sockaddr_in6 *him6 = (struct sockaddr_in6 *)him;
             NetinetIn.sockaddr_in6 him6 = (NetinetIn.sockaddr_in6) him;
             // 793 jbyte caddr[16];
-            CCharPointer caddr = StackValue.get(16, SizeOf.get(CCharPointer.class));
+            CCharPointer caddr = StackValue.get(16, CCharPointer.class);
             // 794 jint address;
             int address;
             // 797 if (family == IPv4) { /* will convert to IPv4-mapped address */
@@ -615,12 +789,12 @@ class JavaNetNetUtilMD {
                     // 840 int cached_scope_id = 0, scope_id = 0;
                     int cached_scope_id = 0;
                     int scope_id = 0;
-                    /* I am assuming that the field "Inet6Address.cached_scope_id" always exists. */
-                    final boolean ia6_cachedscopeidID = true;
+                    /* The field "Inet6Address.cached_scope_id" was removed in JDK13 */
+                    final boolean ia6_cachedscopeidID = JavaVersionUtil.JAVA_SPEC <= 11;
                     // 842 if (ia6_cachedscopeidID) {
                     if (ia6_cachedscopeidID) {
                         // 843     cached_scope_id = (int)(*env)->GetIntField(env, iaObj, ia6_cachedscopeidID);
-                        cached_scope_id = Util_java_net_Inet6Address.from_Inet6Address((Inet6Address) iaObj).cached_scope_id;
+                        cached_scope_id = SubstrateUtil.cast((Inet6Address) iaObj, Target_java_net_Inet6Address.class).cached_scope_id;
                         // 844     /* if cached value exists then use it. Otherwise, check
                         // 845      * if scope is set in the address.
                         // 846      */
@@ -643,7 +817,7 @@ class JavaNetNetUtilMD {
                                     // 856 cached_scope_id = lo_scope_id;
                                     cached_scope_id = lo_scope_id;
                                     // 857 (*env)->SetIntField(env, iaObj, ia6_cachedscopeidID, cached_scope_id);
-                                    Util_java_net_Inet6Address.from_Inet6Address((Inet6Address) iaObj).cached_scope_id = cached_scope_id;
+                                    SubstrateUtil.cast((Inet6Address) iaObj, Target_java_net_Inet6Address.class).cached_scope_id = cached_scope_id;
                                 }
                             } else {
                                 // 860 /*
@@ -664,7 +838,7 @@ class JavaNetNetUtilMD {
                                     }
                                 }
                                 // 872 (*env)->SetIntField(env, iaObj, ia6_cachedscopeidID, cached_scope_id);
-                                Util_java_net_Inet6Address.from_Inet6Address((Inet6Address) iaObj).cached_scope_id = cached_scope_id;
+                                SubstrateUtil.cast((Inet6Address) iaObj, Target_java_net_Inet6Address.class).cached_scope_id = cached_scope_id;
                             }
                         }
                     }
@@ -734,6 +908,42 @@ class JavaNetNetUtilMD {
         // 152 return (a->s6_bytes[0] == 0xfe
         // 153         && a->s6_bytes[1] == 0x80);
         return ((a.s6_addr().read(0) == (byte) 0xfe) && (a.s6_addr().read(1) == (byte) 0x80));
+    }
+    /* @formatter:on */
+
+    /* @formatter:off */
+    // ported from: ./src/java.base//unix/native/libnet/net_util_md.c
+    //   408  jint reuseport_supported()
+    static boolean reuseport_supported() {
+        //   409  {
+        //   410      /* Do a simple dummy call, and try to figure out from that */
+        //   411      int one = 1;
+        CIntPointer one = StackValue.get(CIntPointer.class);
+        one.write(1);
+        //   412      int rv, s;
+        int rv, s;
+        //   413      s = socket(PF_INET, SOCK_STREAM, 0);
+        s = Socket.socket(Socket.PF_INET(), Socket.SOCK_STREAM(), 0);
+        //   414      if (s < 0) {
+        if (s < 0) {
+            //   415          return JNI_FALSE;
+            return false;
+        }
+        //   417      rv = setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (void *)&one, sizeof(one));
+        rv = Socket.setsockopt(s, Socket.SOL_SOCKET(), Socket.SO_REUSEPORT(), one, SizeOf.get(CIntPointer.class));
+        //   418      if (rv != 0) {
+        try {
+            if (rv != 0) {
+                //   419          rv = JNI_FALSE;
+                return false;
+            } else {
+                //   421          rv = JNI_TRUE;
+                return true;
+            }
+        } finally {
+            //   423      close(s);
+            Unistd.close(s);
+        }
     }
     /* @formatter:on */
 
@@ -1173,47 +1383,78 @@ class JavaNetNetUtilMD {
     }
     /* @formatter:on */
 
-    /* Do not re-wrap commented-out code.  @formatter:off */
-    // 074 #define NET_Timeout     JVM_Timeout
-    static int NET_Timeout(int fd, long timeout) {
-        return Target_os.timeout(fd, timeout);
+    /* { Do not re-wrap commented-out code.  @formatter:off */
+    // 1669  long NET_GetCurrentTime() {
+    static long NET_GetCurrentTime() {
+        // 1670      struct timeval time;
+        Time.timeval time = StackValue.get(Time.timeval.class);
+         // 1671      gettimeofday(&time, NULL);
+        Time.gettimeofday(time, WordFactory.nullPointer());
+        // 1672      return (time.tv_sec * 1000 + time.tv_usec / 1000);
+        return (time.tv_sec() * 1000 + time.tv_usec() / 1000);
     }
-    /* @formatter:on */
+    /* } Do not re-wrap commented-out code.  @formatter:on */
+
+    /* { Do not re-wrap commented-out code.  @formatter:off */
+    // 1675  int NET_TimeoutWithCurrentTime(int s, long timeout, long currentTime) {
+    static long NET_TimeoutWithCurrentTime(int s, long timeout, long currentTime) {
+        // 1676      return NET_Timeout0(s, timeout, currentTime);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Timeout0(s, timeout, currentTime);
+    }
+    /* } Do not re-wrap commented-out code.  @formatter:on */
+
+    /* { Do not re-wrap commented-out code.  @formatter:off */
+    // 1679  int NET_Timeout(int s, long timeout) {
+    static int NET_Timeout(int s, long timeout) {
+        // 1680      long currentTime = (timeout > 0) ? NET_GetCurrentTime() : 0;
+        long currentTime = (timeout > 0) ? NET_GetCurrentTime() : 0;
+        // 1681      return NET_Timeout0(s, timeout, currentTime);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Timeout0(s, timeout, currentTime);
+    }
+    /* } Do not re-wrap commented-out code.  @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 075 #define NET_Read        JVM_Read
     static int NET_Read(int fd, CCharPointer bufP, int len) {
-        return (int) Target_os.restartable_read(fd, bufP, len);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Read(fd, bufP, len);
     }
     /* @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 081 #define NET_Connect     JVM_Connect
     static int NET_Connect(int fd, Socket.sockaddr him, int len) {
-        return VmPrimsJVM.JVM_Connect(fd, him, len);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Connect(fd, him, len);
     }
     /* @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 082 #define NET_Accept      JVM_Accept
     static int NET_Accept(int fd, Socket.sockaddr him, CIntPointer len_Pointer) {
-        return VmPrimsJVM.JVM_Accept(fd, him, len_Pointer);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Accept(fd, him, len_Pointer);
     }
     /* @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 086 #define NET_Poll        poll
     static int NET_Poll(pollfd fds, int nfds, int timeout) {
-        return Poll.poll(fds, nfds, timeout);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Poll(fds, nfds, timeout);
     }
     /* @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 078 #define NET_Send        JVM_Send
     static int NET_Send(int fd, CCharPointer buf, int nBytes, int flags) {
-        return VmPrimsJVM.JVM_Send(fd, buf, nBytes, flags);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Send(fd, buf, nBytes, flags);
     }
     /* @formatter:on */
+
+    static int NET_SendTo(int fd, CCharPointer buf, int n, int flags, Socket.sockaddr addr, int addr_len) {
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_SendTo(fd, buf, n, flags, addr, addr_len);
+    }
+
+    static int NET_RecvFrom(int fd, CCharPointer buf, int n, int flags, Socket.sockaddr addr, CIntPointer addr_len) {
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_RecvFrom(fd, buf, n, flags, addr, addr_len);
+    }
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 926 JNIEXPORT jint JNICALL
@@ -1239,14 +1480,14 @@ class JavaNetNetUtilMD {
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 084 #define NET_Dup2        dup2
     static int NET_Dup2(int fd, int fd2) {
-        return Unistd.dup2(fd, fd2);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_Dup2(fd, fd2);
     }
     /* @formatter:on */
 
     /* Do not re-wrap commented-out code.  @formatter:off */
     // 083 #define NET_SocketClose JVM_SocketClose
     static int NET_SocketClose(int fd) {
-        return VmPrimsJVM.JVM_SocketClose(fd);
+        return ImageSingletons.lookup(PosixJavaNetClose.class).NET_SocketClose(fd);
     }
     /* @formatter:on */
 
@@ -1470,7 +1711,7 @@ class JavaNetNetUtilMD {
         //     1228 #else
         } else {
             //     1230         socklen_t socklen = *len;
-            CIntPointer socklen_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
+            CIntPointer socklen_Pointer = StackValue.get(CIntPointer.class);
             socklen_Pointer.write(len_Pointer.read());
             //     1231         rv = getsockopt(fd, level, opt, result, &socklen);
             rv = Socket.getsockopt(fd, level, opt, result_Pointer, socklen_Pointer);
@@ -1560,20 +1801,20 @@ class JavaNetNetUtilMD {
         CIntPointer bufsize = null;
         /* maxsockbuf should be static. */
         /* Declaring maxsockbuf to be a CIntPointer because it is only used inside _ALLBSD_SOURCE. */
-        CIntPointer maxsockbuf_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
+        CIntPointer maxsockbuf_Pointer = StackValue.get(CIntPointer.class);
         int maxsockbuf_size = SizeOf.get(CIntPointer.class);
         if (IsDefined._ALLBSD_SOURCE()) {
             //     1292 #if defined(KIPC_MAXSOCKBUF)
             if (IsDefined.sysctl_KIPC_MAXSOCKBUF()) {
                 //     1293     int mib[3];
-                mib = StackValue.get(3, SizeOf.get(CIntPointer.class));
+                mib = StackValue.get(3, CIntPointer.class);
                 //     1294     size_t rlen;
-                rlen_Pointer = StackValue.get(SizeOf.get(CLongPointer.class));
+                rlen_Pointer = StackValue.get(CLongPointer.class);
             }
             //     1295 #endif
             //     1296
             //     1297     int *bufsize;
-            bufsize = StackValue.get(SizeOf.get(CIntPointer.class));
+            bufsize = StackValue.get(CIntPointer.class);
             //     1298
             //     1299 #ifdef __APPLE__
             if (IsDefined.__APPLE__()) {
@@ -1603,7 +1844,7 @@ class JavaNetNetUtilMD {
         //     1317     if (level == IPPROTO_IP && opt == IP_TOS) {
         if (level == NetinetIn.IPPROTO_IP() && opt == NetinetIn.IP_TOS()) {
             //     1318         int *iptos;
-            CIntPointer iptos = StackValue.get(SizeOf.get(CIntPointer.class));
+            CIntPointer iptos = StackValue.get(CIntPointer.class);
             //     1319
             //     1320 #if defined(AF_INET6) && (defined(__solaris__) || defined(MACOSX))
             if (IsDefined.socket_AF_INET6() && (IsDefined.__solaris__() || IsDefined.MACOSX())) {
@@ -1952,147 +2193,8 @@ class JavaNetNetUtilMD {
     /* @formatter:on */
 }
 
-/** Native methods (and macros) from src/share/vm/prims/jvm.cpp translated to Java. */
-class VmPrimsJVM {
-    /* Do not re-wrap commented-out code.  @formatter:off */
-
-    /* Private constructor: No instances. */
-    private VmPrimsJVM() {
-    }
-
-    // 3719 JVM_LEAF(jint, JVM_Socket(jint domain, jint type, jint protocol))
-    static int JVM_Socket(int domain, int type, int protocol) {
-        // 3720   JVMWrapper("JVM_Socket");
-        // 3721   return os::socket(domain, type, protocol);
-        return Socket.socket(domain, type, protocol);
-        // 3722 JVM_END
-    }
-
-    // 3767 JVM_LEAF(jint, JVM_Connect(jint fd, struct sockaddr *him, jint len))
-    static int JVM_Connect(int fd, Socket.sockaddr him, int len) {
-        // 3768   JVMWrapper2("JVM_Connect (0x%x)", fd);
-        // 3769   //%note jvm_r6
-        // 3770   return os::connect(fd, him, (socklen_t)len);
-        return Socket.connect(fd, him, len);
-        // 3771 JVM_END
-    }
-
-    // 3732 JVM_LEAF(jint, JVM_SocketShutdown(jint fd, jint howto))
-    static int JVM_SocketShutdown(int fd, int howto) {
-        // 3733   JVMWrapper2("JVM_SocketShutdown (0x%x)", fd);
-        // 3734   //%note jvm_r6
-        // 3735   return os::socket_shutdown(fd, howto);
-        return Socket.shutdown(fd, howto);
-        // 3736 JVM_END
-    }
-
-    // 3781 JVM_LEAF(jint, JVM_Accept(jint fd, struct sockaddr *him, jint *len))
-    static int JVM_Accept(int fd, Socket.sockaddr him, CIntPointer len_Pointer) {
-        // 3782   JVMWrapper2("JVM_Accept (0x%x)", fd);
-        // 3783   //%note jvm_r6
-        // 3784   socklen_t socklen = (socklen_t)(*len);
-        CIntPointer socklen_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
-        socklen_Pointer.write(len_Pointer.read());
-        // 3785   jint result = os::accept(fd, him, &socklen);
-        int result = Socket.accept(fd, him, socklen_Pointer);
-        // 3786   *len = (jint)socklen;
-        len_Pointer.write(socklen_Pointer.read());
-        // 3787   return result;
-        return result;
-        // 3788 JVM_END
-    }
-
-    // 3825 JVM_LEAF(jint, JVM_GetSockOpt(jint fd, int level, int optname, char *optval, int *optlen))
-    static int JVM_GetSockOpt(int fd, int level, int optname, CCharPointer optval, CIntPointer optlen) {
-        // 3826   JVMWrapper2("JVM_GetSockOpt (0x%x)", fd);
-        // 3827   //%note jvm_r6
-        /* typedef u_int socklen_t; */
-        // 3828   socklen_t socklen = (socklen_t)(*optlen);
-        CIntPointer socklen_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
-        socklen_Pointer.write(optlen.read());
-         // 3829   jint result = os::get_sock_opt(fd, level, optname, optval, &socklen);
-        int result = Socket.getsockopt(fd, level, optname, optval, optlen);
-        // 3830   *optlen = (int)socklen;
-        optlen.write(socklen_Pointer.read());
-        // 3831   return result;
-        return result;
-        // 3832 JVM_END    /* @formatter:on */
-    }
-
-    // 3801 JVM_LEAF(jint, JVM_GetSockName(jint fd, struct sockaddr *him, int *len))
-    static int JVM_GetSockName(int fd, Socket.sockaddr him, CIntPointer len_Pointer) {
-        // 3802 JVMWrapper2("JVM_GetSockName (0x%x)", fd);
-        // 3803 //%note jvm_r6
-        // 3804 socklen_t socklen = (socklen_t)(*len);
-        CIntPointer socklen_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
-        socklen_Pointer.write(len_Pointer.read());
-        // 3805 jint result = os::get_sock_name(fd, him, &socklen);
-        int result = Target_os.get_sock_name(fd, him, socklen_Pointer);
-        // 3806 *len = (int)socklen;
-        len_Pointer.write(socklen_Pointer.read());
-        // 3807 return result;
-        return result;
-        // 3808 JVM_END
-    }
-
-    // 2725 JVM_LEAF(jint, JVM_Read(jint fd, char *buf, jint nbytes))
-    static int JVM_Read(int fd, CCharPointer buf, int nbytes) {
-        // 2726 JVMWrapper2("JVM_Read (0x%x)", fd);
-        // 2727
-        // 2728 //%note jvm_r6
-        // 2729 return (jint)os::restartable_read(fd, buf, nbytes);
-        return (int) Target_os.restartable_read(fd, buf, nbytes);
-        // 2730 JVM_END
-    }
-
-    // 3818 JVM_LEAF(jint, JVM_SocketAvailable(jint fd, jint *pbytes))
-    static int JVM_SocketAvailable(int fd, CIntPointer pbytes) {
-        // 3819 JVMWrapper2("JVM_SocketAvailable (0x%x)", fd);
-        // 3820 //%note jvm_r6
-        // 3821 return os::socket_available(fd, pbytes);
-        return Target_os.socket_available(fd, pbytes);
-        // 3822 JVM_END
-    }
-
-    // 3746 JVM_LEAF(jint, JVM_Send(jint fd, char *buf, jint nBytes, jint flags))
-    static int JVM_Send(int fd, CCharPointer buf, int nBytes, int flags) {
-        // 3747 JVMWrapper2("JVM_Send (0x%x)", fd);
-        // 3748 //%note jvm_r6
-        // 3749 return os::send(fd, buf, (size_t)nBytes, (uint)flags);
-        return Target_os.send(fd, buf, nBytes, flags);
-        // 3750 JVM_END
-    }
-
-    // 3725 JVM_LEAF(jint, JVM_SocketClose(jint fd))
-    static int JVM_SocketClose(int fd) {
-        // 3726 JVMWrapper2("JVM_SocketClose (0x%x)", fd);
-        // 3727 //%note jvm_r6
-        // 3728 return os::socket_close(fd);
-        return Target_os.socket_close(fd);
-        // 3729 JVM_END
-    }
-
-    // 3842 JVM_LEAF(int, JVM_GetHostName(char* name, int namelen))
-    static int JVM_GetHostName(CCharPointer name, int namelen) {
-        // 3843 JVMWrapper("JVM_GetHostName");
-        // 3844 return os::get_host_name(name, namelen);
-        return Target_os.get_host_name(name, namelen);
-        // 3845 JVM_END
-    }
-
-    // 3760 JVM_LEAF(jint, JVM_Listen(jint fd, jint count))
-    static int JVM_Listen(int fd, int count) {
-        // 3761 JVMWrapper2("JVM_Listen (0x%x)", fd);
-        // 3762 //%note jvm_r6
-        // 3763 return os::listen(fd, count);
-        return Target_os.listen(fd, count);
-        // 3764 JVM_END
-    }
-
-    /* @formatter:on */
-}
-
 /** Native methods (and macros) from src/share/vm/prims/jni.cpp translated to Java. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class VmPrimsJNI {
     /* Do not re-format commented-out code: @formatter:off */
 
@@ -2177,6 +2279,7 @@ class VmPrimsJNI {
 
 /** Translations of methods from src/os/bsd/vm/os_bsd.inline.hpp or src/os/bsd/vm/os_bsd.cpp. */
 // TODO: Maybe this should be Target_bsd_vm_os?
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class Target_os {
     /* Do not re-format commented-out code: @formatter:off */
 
@@ -2203,7 +2306,7 @@ class Target_os {
         // 204
         // 205   for(;;) {
         // 206     struct pollfd pfd;
-        Poll.pollfd pfd = StackValue.get(2, SizeOf.get(Time.timeval.class));
+        Poll.pollfd pfd = StackValue.get(Poll.pollfd.class);
         for (;;) {
             // 207
             // 208     pfd.fd = fd;
@@ -2212,20 +2315,7 @@ class Target_os {
             pfd.set_events(Poll.POLLIN() | Poll.POLLERR());
             // 210
             // 211     int res = ::poll(&pfd, 1, timeout);
-            /* { FIXME: Limited timeout. */
-            int res;
-            final boolean limitedTimeout = false;
-            if (limitedTimeout) {
-                /* This is a compromise between frequent poll requests and promptness of interruption. */
-                final int limitedTimeoutMillis = 2_000;
-                res = Poll.poll(pfd, 1, limitedTimeoutMillis);
-                if (Thread.interrupted()) {
-                    return VmRuntimeOS.OSReturn.OS_OK();
-                }
-            } else {
-                res = Poll.poll(pfd, 1, timeout);
-            }
-            /* } FIXME: Limited timeout. */
+            int res = Poll.poll(pfd, 1, timeout);
             // 212
             // 213     if (res == OS_ERR && errno == EINTR) {
             if (res == VmRuntimeOS.OSReturn.OS_ERR() && Errno.errno() == Errno.EINTR()) {
@@ -2254,10 +2344,15 @@ class Target_os {
         }
     }
 
+    /* RESTARTABLE loops over a syscall if the call is interrupted. */
     // 149 #define RESTARTABLE(_cmd, _result) do { \
     // 150     _result = _cmd; \
     // 151   } while(((int)_result == OS_ERR) && (errno == EINTR))
 
+    /* The translation of RESTARTABLE_RETURN_INT is to expand the body without the wrapper
+     *     do { .... } while (false)
+     * whose purpose is to make the macro expansion into a single C statement.
+     */
     // 153 #define RESTARTABLE_RETURN_INT(_cmd) do { \
     // 154   int _result; \
     // 155   RESTARTABLE(_cmd, _result); \
@@ -2272,7 +2367,7 @@ class Target_os {
         // 164   RESTARTABLE( (size_t) ::read(fd, buf, (size_t) nBytes), res);
         do {
             res = Unistd.read(fd, buf, WordFactory.unsigned(nBytes)).rawValue();
-        } while ((res == VmRuntimeOS.OSReturn.OS_ERR()) || (Errno.errno() == Errno.EINTR()));
+        } while ((res == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
         // 165   return res;
         return res;
     }
@@ -2289,7 +2384,7 @@ class Target_os {
         // 4095 RESTARTABLE(::ioctl(fd, FIONREAD, pbytes), ret);
         do {
             ret = Ioctl.ioctl(fd, Ioctl.FIONREAD(), pbytes);
-        } while ((ret == VmRuntimeOS.OSReturn.OS_ERR()) || (Errno.errno() == Errno.EINTR()));
+        } while ((ret == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
         // 4096
         // 4097 //%% note ioctl can return 0 when successful, JVM_SocketAvailable
         // 4098 // is expected to return 0 on failure and 1 on success to the jdk.
@@ -2301,13 +2396,31 @@ class Target_os {
     // 190 inline int os::send(int fd, char* buf, size_t nBytes, uint flags) {
     static int send(int fd, CCharPointer buf, long nBytes, int flags) {
         // 191   RESTARTABLE_RETURN_INT(::send(fd, buf, nBytes, flags));
+        int _result;
         do {
-            int _result;
-            do {
-                _result = (int) Socket.send(fd, buf, WordFactory.unsigned(nBytes), flags).rawValue();
-            } while ((_result == VmRuntimeOS.OSReturn.OS_ERR()) || (Errno.errno() == Errno.EINTR()));
-            return _result;
-        } while (false);
+            _result = (int) Socket.send(fd, buf, WordFactory.unsigned(nBytes), flags).rawValue();
+        } while ((_result == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
+        return _result;
+    }
+
+    // 248 inline int os::sendto(int fd, char* buf, size_t len, uint flags, struct sockaddr *to, socklen_t tolen) {
+    static int sendto(int fd, CCharPointer buf, int n, int flags, Socket.sockaddr addr, int addr_len) {
+        // 250   RESTARTABLE_RETURN_INT((int)::sendto(fd, buf, len, flags, to, tolen));
+        int _result;
+        do {
+            _result = (int) Socket.sendto(fd, buf, WordFactory.unsigned(n), flags, addr, addr_len).rawValue();
+        } while ((_result == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
+        return _result;
+    }
+
+    // 243 inline int os::recvfrom(int fd, char* buf, size_t nBytes, uint flags, sockaddr* from, socklen_t* fromlen) {
+    static int recvfrom(int fd, CCharPointer buf, int n, int flags, Socket.sockaddr addr, CIntPointer addr_len) {
+        // 245   RESTARTABLE_RETURN_INT((int)::recvfrom(fd, buf, nBytes, flags, from, fromlen));
+        int _result;
+        do {
+            _result = (int) Socket.recvfrom(fd, buf, WordFactory.unsigned(n), flags, addr, addr_len).rawValue();
+        } while ((_result == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
+        return _result;
     }
 
     //     178 inline int os::socket_close(int fd) {
@@ -2338,10 +2451,22 @@ class Target_os {
         return Socket.listen(fd, count);
     }
 
+    // 238  inline int os::accept(int fd, struct sockaddr* him, socklen_t* len) {
+    static int accept(int fd, Socket.sockaddr him, CIntPointer len_Pointer) {
+        // 239    // At least OpenBSD and FreeBSD can return EINTR from accept.
+        // 240    RESTARTABLE_RETURN_INT(::accept(fd, him, len));
+        int _result;
+        do {
+            _result = Socket.accept(fd, him, len_Pointer);
+        } while ((_result == VmRuntimeOS.OSReturn.OS_ERR()) && (Errno.errno() == Errno.EINTR()));
+        return _result;
+    }
+
     /* formatter:on */
 }
 
 /** Translations from src/share/vm/runtime/os.hpp. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class VmRuntimeOS {
 
     /* Do not re-format commented-out code: @formatter:off */
@@ -2384,6 +2509,7 @@ class VmRuntimeOS {
 }
 
 /** Translations from src/share/javavm/export/jvm.h. */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 class JavavmExportJvm {
 
     // 1100 #define JVM_IO_ERR (-1)

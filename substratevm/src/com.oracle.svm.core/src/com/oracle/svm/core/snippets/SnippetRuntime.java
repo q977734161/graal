@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,78 +31,49 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
-import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
 import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.c.function.CodePointer;
+import org.graalvm.util.DirectAnnotationAccess;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.RestrictHeapAccess;
-import com.oracle.svm.core.code.CodeInfoQueryResult;
-import com.oracle.svm.core.code.CodeInfoTable;
-import com.oracle.svm.core.code.DeoptimizationSourcePositionDecoder;
-import com.oracle.svm.core.deopt.DeoptTester;
+import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.core.code.CodeInfoAccess;
+import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
-import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.jdk.JDKUtils;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
+import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.core.util.VMError;
 
-import jdk.vm.ci.meta.DeoptimizationAction;
-import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
 
 public class SnippetRuntime {
 
-    public static final SubstrateForeignCallDescriptor THROW_NULL_POINTER_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwNullPointerException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CLASS_CAST_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwClassCastException", true);
-    public static final SubstrateForeignCallDescriptor THROW_ARRAY_STORE_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwArrayStoreException", true);
-    public static final SubstrateForeignCallDescriptor THROW_ARITHMETIC_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwArithmeticException", true);
-    public static final SubstrateForeignCallDescriptor THROW_ARRAY_INDEX_OUT_OF_BOUNDS_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwArrayIndexOutOfBoundsException", true);
-    public static final SubstrateForeignCallDescriptor THROW_OUT_OF_MEMORY_ERROR = findForeignCall(SnippetRuntime.class, "throwOutOfMemoryError", true);
-    public static final SubstrateForeignCallDescriptor THROW_ASSERTION_ERROR = findForeignCall(SnippetRuntime.class, "throwAssertionError", true);
-
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_NULL_POINTER_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwCachedNullPointerException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_CLASS_CAST_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwCachedClassCastException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARRAY_STORE_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwCachedArrayStoreException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARITHMETIC_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwCachedArithmeticException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ARRAY_INDEX_OUT_OF_BOUNDS_EXCEPTION = findForeignCall(SnippetRuntime.class, "throwCachedArrayIndexOutOfBoundsException", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_OUT_OF_MEMORY_ERROR = findForeignCall(SnippetRuntime.class, "throwCachedOutOfMemoryError", true);
-    public static final SubstrateForeignCallDescriptor THROW_CACHED_ASSERTION_ERROR = findForeignCall(SnippetRuntime.class, "throwCachedAssertionError", true);
-
-    public static final SubstrateForeignCallDescriptor REPORT_TYPE_ASSERTION_ERROR = findForeignCall(SnippetRuntime.class, "reportTypeAssertionError", true, LocationIdentity.any());
     public static final SubstrateForeignCallDescriptor UNREACHED_CODE = findForeignCall(SnippetRuntime.class, "unreachedCode", true, LocationIdentity.any());
     public static final SubstrateForeignCallDescriptor UNRESOLVED = findForeignCall(SnippetRuntime.class, "unresolved", true, LocationIdentity.any());
-    public static final SubstrateForeignCallDescriptor DEOPTIMIZE = findForeignCall(SnippetRuntime.class, "deoptimize", true, LocationIdentity.any());
-    public static final SubstrateForeignCallDescriptor DEOPTTEST = findForeignCall(DeoptTester.class, "deoptTest", false, LocationIdentity.any());
 
     public static final SubstrateForeignCallDescriptor UNWIND_EXCEPTION = findForeignCall(SnippetRuntime.class, "unwindException", true, LocationIdentity.any());
 
     /* Implementation of runtime calls defined in a VM-independent way by Graal. */
     public static final SubstrateForeignCallDescriptor REGISTER_FINALIZER = findForeignCall(SnippetRuntime.class, "registerFinalizer", true);
-
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatal", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_OBJ = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalObj", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_OBJ_OBJ = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalObjObj", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_INT = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalInt", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_LONG = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalLong", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_FLOAT = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalFloat", true);
-    public static final SubstrateForeignCallDescriptor FATAL_RUNTIME_ASSERTION_DOUBLE = findForeignCall(SnippetRuntime.class, "reportRuntimeAssertionFatalDouble", true);
 
     /*
      * Graal-defined math functions where we have optimized machine code sequences: We just register
@@ -112,12 +85,8 @@ public class SnippetRuntime {
     public static final SubstrateForeignCallDescriptor ARITHMETIC_TAN = findForeignCall(UnaryOperation.TAN.foreignCallDescriptor.getName(), Math.class, "tan", true);
     public static final SubstrateForeignCallDescriptor ARITHMETIC_LOG = findForeignCall(UnaryOperation.LOG.foreignCallDescriptor.getName(), Math.class, "log", true);
     public static final SubstrateForeignCallDescriptor ARITHMETIC_LOG10 = findForeignCall(UnaryOperation.LOG10.foreignCallDescriptor.getName(), Math.class, "log10", true);
-    /*
-     * Graal-defined math functions where we do not have optimized code sequences: StrictMath is the
-     * always-available fall-back.
-     */
-    public static final SubstrateForeignCallDescriptor ARITHMETIC_EXP = findForeignCall(UnaryOperation.EXP.foreignCallDescriptor.getName(), StrictMath.class, "exp", true);
-    public static final SubstrateForeignCallDescriptor ARITHMETIC_POW = findForeignCall(BinaryOperation.POW.foreignCallDescriptor.getName(), StrictMath.class, "pow", true);
+    public static final SubstrateForeignCallDescriptor ARITHMETIC_EXP = findForeignCall(UnaryOperation.EXP.foreignCallDescriptor.getName(), Math.class, "exp", true);
+    public static final SubstrateForeignCallDescriptor ARITHMETIC_POW = findForeignCall(BinaryOperation.POW.foreignCallDescriptor.getName(), Math.class, "pow", true);
 
     /*
      * These methods are intrinsified as nodes at first, but can then lowered back to a call. Ensure
@@ -143,7 +112,16 @@ public class SnippetRuntime {
         return findForeignCall(methodName, declaringClass, methodName, isReexecutable, killedLocations);
     }
 
+    public static SubstrateForeignCallDescriptor findForeignCall(Class<?> declaringClass, String methodName, boolean isReexecutable, boolean needsDebugInfo, LocationIdentity... killedLocations) {
+        return findForeignCall(methodName, declaringClass, methodName, isReexecutable, needsDebugInfo, killedLocations);
+    }
+
     private static SubstrateForeignCallDescriptor findForeignCall(String descriptorName, Class<?> declaringClass, String methodName, boolean isReexecutable, LocationIdentity... killedLocations) {
+        return findForeignCall(descriptorName, declaringClass, methodName, isReexecutable, true, killedLocations);
+    }
+
+    private static SubstrateForeignCallDescriptor findForeignCall(String descriptorName, Class<?> declaringClass, String methodName, boolean isReexecutable, boolean needsDebugInfo,
+                    LocationIdentity... killedLocations) {
         Method foundMethod = null;
         for (Method method : declaringClass.getDeclaredMethods()) {
             if (method.getName().equals(methodName)) {
@@ -157,10 +135,11 @@ public class SnippetRuntime {
          * We cannot annotate methods from the JDK, but all other foreign call targets we want to be
          * annotated for documentation, and to avoid stripping.
          */
-        VMError.guarantee(declaringClass.getName().startsWith("java.lang") || foundMethod.getAnnotation(SubstrateForeignCallTarget.class) != null,
+        VMError.guarantee(declaringClass.getName().startsWith("java.lang") || DirectAnnotationAccess.isAnnotationPresent(foundMethod, SubstrateForeignCallTarget.class),
                         "Add missing @SubstrateForeignCallTarget to " + declaringClass.getName() + "." + methodName);
 
-        return new SubstrateForeignCallDescriptor(descriptorName, foundMethod, isReexecutable, killedLocations);
+        boolean isGuaranteedSafepoint = needsDebugInfo && !DirectAnnotationAccess.isAnnotationPresent(foundMethod, Uninterruptible.class);
+        return new SubstrateForeignCallDescriptor(descriptorName, foundMethod, isReexecutable, killedLocations, needsDebugInfo, isGuaranteedSafepoint);
     }
 
     public static class SubstrateForeignCallDescriptor extends ForeignCallDescriptor {
@@ -169,13 +148,17 @@ public class SnippetRuntime {
         private final String methodName;
         private final boolean isReexecutable;
         private final LocationIdentity[] killedLocations;
+        private final boolean needsDebugInfo;
+        private final boolean isGuaranteedSafepoint;
 
-        SubstrateForeignCallDescriptor(String descriptorName, Method method, boolean isReexecutable, LocationIdentity[] killedLocations) {
+        SubstrateForeignCallDescriptor(String descriptorName, Method method, boolean isReexecutable, LocationIdentity[] killedLocations, boolean needsDebugInfo, boolean isGuaranteedSafepoint) {
             super(descriptorName, method.getReturnType(), method.getParameterTypes());
             this.declaringClass = method.getDeclaringClass();
             this.methodName = method.getName();
             this.isReexecutable = isReexecutable;
             this.killedLocations = killedLocations;
+            this.needsDebugInfo = needsDebugInfo;
+            this.isGuaranteedSafepoint = isGuaranteedSafepoint;
         }
 
         public Class<?> getDeclaringClass() {
@@ -198,110 +181,14 @@ public class SnippetRuntime {
         public LocationIdentity[] getKilledLocations() {
             return killedLocations;
         }
-    }
 
-    /** Foreign call: {@link #THROW_NULL_POINTER_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwNullPointerException() {
-        throw new NullPointerException();
-    }
+        public boolean needsDebugInfo() {
+            return needsDebugInfo;
+        }
 
-    /** Foreign call: {@link #THROW_CLASS_CAST_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwClassCastException() {
-        throw new ClassCastException();
-    }
-
-    /** Foreign call: {@link #THROW_ARRAY_STORE_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwArrayStoreException() {
-        throw new ArrayStoreException();
-    }
-
-    /** Foreign call: {@link #THROW_ARITHMETIC_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwArithmeticException() {
-        throw new ArithmeticException();
-    }
-
-    /** Foreign call: {@link #THROW_ARRAY_INDEX_OUT_OF_BOUNDS_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwArrayIndexOutOfBoundsException() {
-        throw new ArrayIndexOutOfBoundsException();
-    }
-
-    /** Foreign call: {@link #THROW_OUT_OF_MEMORY_ERROR}. */
-    @SubstrateForeignCallTarget
-    private static void throwOutOfMemoryError() {
-        throw new OutOfMemoryError();
-    }
-
-    /** Foreign call: {@link #THROW_ASSERTION_ERROR}. */
-    @SubstrateForeignCallTarget
-    private static void throwAssertionError() {
-        throw new AssertionError();
-    }
-
-    private static <T extends Throwable> T setEmptyStackTrace(T exception) {
-        exception.setStackTrace(new StackTraceElement[0]);
-        return exception;
-    }
-
-    public static final NullPointerException cachedNullPointerException = setEmptyStackTrace(new NullPointerException());
-    private static final ClassCastException cachedClassCastException = setEmptyStackTrace(new ClassCastException());
-    private static final ArrayStoreException cachedArrayStoreException = setEmptyStackTrace(new ArrayStoreException());
-    private static final ArithmeticException cachedArithmeticException = setEmptyStackTrace(new ArithmeticException());
-    public static final ArrayIndexOutOfBoundsException cachedArrayIndexOutOfBoundsException = setEmptyStackTrace(new ArrayIndexOutOfBoundsException());
-    private static final OutOfMemoryError cachedOutOfMemoryError = setEmptyStackTrace(new OutOfMemoryError());
-    public static final AssertionError cachedAssertionError = setEmptyStackTrace(new AssertionError());
-
-    /** Foreign call: {@link #THROW_CACHED_NULL_POINTER_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedNullPointerException() {
-        throw cachedNullPointerException;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_CLASS_CAST_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedClassCastException() {
-        throw cachedClassCastException;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_ARRAY_STORE_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedArrayStoreException() {
-        throw cachedArrayStoreException;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_ARITHMETIC_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedArithmeticException() {
-        throw cachedArithmeticException;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_ARRAY_INDEX_OUT_OF_BOUNDS_EXCEPTION}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedArrayIndexOutOfBoundsException() {
-        throw cachedArrayIndexOutOfBoundsException;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_OUT_OF_MEMORY_ERROR}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedOutOfMemoryError() {
-        throw cachedOutOfMemoryError;
-    }
-
-    /** Foreign call: {@link #THROW_CACHED_ASSERTION_ERROR}. */
-    @SubstrateForeignCallTarget
-    private static void throwCachedAssertionError() {
-        throw cachedAssertionError;
-    }
-
-    /** Foreign call: {@link #REPORT_TYPE_ASSERTION_ERROR}. */
-    @SubstrateForeignCallTarget
-    private static void reportTypeAssertionError(byte[] msg, Object object) {
-        Log.log().string(msg).string(object == null ? "null" : object.getClass().getName()).newline();
-        throw VMError.shouldNotReachHere("type assertion error");
+        public boolean isGuaranteedSafepoint() {
+            return isGuaranteedSafepoint;
+        }
     }
 
     /** Foreign call: {@link #UNREACHED_CODE}. */
@@ -316,108 +203,84 @@ public class SnippetRuntime {
         throw VMError.unsupportedFeature("Unresolved element found " + (sourcePosition != null ? sourcePosition : ""));
     }
 
-    /** Foreign call: {@link #DEOPTIMIZE}. */
-    @SubstrateForeignCallTarget
-    private static void deoptimize(long actionAndReason, SpeculationReason speculation) {
-        Pointer sp = KnownIntrinsics.readCallerStackPointer();
-        DeoptimizationAction action = Deoptimizer.decodeDeoptAction(actionAndReason);
-
-        if (Deoptimizer.Options.TraceDeoptimization.getValue()) {
-            Log log = Log.log().string("[Deoptimization initiated").newline();
-
-            CodePointer ip = KnownIntrinsics.readReturnAddress();
-            SubstrateInstalledCode installedCode = CodeInfoTable.lookupInstalledCode(ip);
-            if (installedCode != null) {
-                log.string("    name: ").string(installedCode.getName()).newline();
-            }
-            log.string("    sp: ").hex(sp).string("  ip: ").hex(ip).newline();
-
-            DeoptimizationReason reason = Deoptimizer.decodeDeoptReason(actionAndReason);
-            log.string("    reason: ").string(reason.toString()).string("  action: ").string(action.toString()).newline();
-
-            int debugId = Deoptimizer.decodeDebugId(actionAndReason);
-            log.string("    debugId: ").signed(debugId).string("  speculation: ").string(Objects.toString(speculation)).newline();
-
-            CodeInfoQueryResult info = CodeInfoTable.lookupCodeInfoQueryResult(ip);
-            if (info != null) {
-                NodeSourcePosition sourcePosition = DeoptimizationSourcePositionDecoder.decode(debugId, info);
-                if (sourcePosition != null) {
-                    log.string("    stack trace that triggered deoptimization:").newline();
-                    NodeSourcePosition cur = sourcePosition;
-                    while (cur != null) {
-                        log.string("        at ");
-                        if (cur.getMethod() != null) {
-                            StackTraceElement element = cur.getMethod().asStackTraceElement(cur.getBCI());
-                            if (element.getFileName() != null && element.getLineNumber() >= 0) {
-                                log.string(element.toString());
-                            } else {
-                                log.string(cur.getMethod().format("%H.%n(%p)")).string(" bci ").signed(cur.getBCI());
-                            }
-                        } else {
-                            log.string("[unknown method]");
-                        }
-                        log.newline();
-
-                        cur = cur.getCaller();
-                    }
-                }
-            }
-        }
-
-        if (action.doesInvalidateCompilation()) {
-            Deoptimizer.invalidateMethodOfFrame(sp, speculation);
-        } else {
-            Deoptimizer.deoptimizeFrame(sp, false, speculation);
-        }
-
-        if (Deoptimizer.Options.TraceDeoptimization.getValue()) {
-            Log.log().string("]").newline();
-        }
-    }
-
-    static class ExceptionStackFrameVisitor implements StackFrameVisitor {
+    /*
+     * The stack walking objects must be stateless (no instance fields), because multiple threads
+     * can use them simultaneously. All state must be in separate VMThreadLocals.
+     */
+    public static class ExceptionStackFrameVisitor implements StackFrameVisitor {
+        @Uninterruptible(reason = "Deoptimization; set currentException atomically with regard to the safepoint mechanism")
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when unwinding the stack.")
         @Override
-        public boolean visitFrame(Pointer sp, CodePointer ip, DeoptimizedFrame deoptFrame) {
-            CodePointer continueIP;
-            if (deoptFrame != null) {
-                /* Deoptimization entry points always have an exception handler. */
-                deoptFrame.takeException();
-                continueIP = ip;
+        public boolean visitFrame(Pointer sp, CodePointer ip, CodeInfo codeInfo, DeoptimizedFrame initialDeoptFrame) {
+            CodePointer handlerIP = WordFactory.nullPointer();
+            DeoptimizedFrame deoptFrame = initialDeoptFrame;
 
-            } else {
-                long handler = CodeInfoTable.lookupExceptionOffset(ip);
+            if (deoptFrame == null) {
+                long handler = lookupExceptionOffset(codeInfo, ip);
                 if (handler == 0) {
                     /* No handler found in this frame, walk to caller frame. */
                     return true;
                 }
-                continueIP = (CodePointer) ((UnsignedWord) ip).add(WordFactory.signed(handler));
+                handlerIP = (CodePointer) ((UnsignedWord) ip).add(WordFactory.signed(handler));
+
+                // Frame could have been deoptimized during interruptible lookup above, check again
+                deoptFrame = Deoptimizer.checkDeoptimized(sp);
+            }
+
+            if (deoptFrame != null && DeoptimizationSupport.enabled()) {
+                /* Deoptimization entry points always have an exception handler. */
+                deoptTakeException(deoptFrame);
+                handlerIP = DeoptimizationSupport.getDeoptStubPointer();
             }
 
             Throwable exception = currentException.get();
             currentException.set(null);
 
-            KnownIntrinsics.farReturn(exception, sp, continueIP);
+            StackOverflowCheck.singleton().protectYellowZone();
+
+            KnownIntrinsics.farReturn(exception, sp, handlerIP);
             /*
              * The intrinsic performs a jump to the specified instruction pointer, so this code is
              * unreachable.
              */
             return false;
         }
+
+        @Uninterruptible(reason = "Wrap call to interruptible code.", calleeMustBe = false)
+        private static void deoptTakeException(DeoptimizedFrame deoptFrame) {
+            deoptFrame.takeException();
+        }
+
+        @Uninterruptible(reason = "Wrap call to interruptible code.", calleeMustBe = false)
+        private static long lookupExceptionOffset(CodeInfo codeInfo, CodePointer ip) {
+            return CodeInfoAccess.lookupExceptionOffset(codeInfo, CodeInfoAccess.relativeIP(codeInfo, ip));
+        }
     }
 
-    /*
-     * The stack walking objects must be stateless (no instance fields), because multiple threads
-     * can use them simultaneously. All state must be in separate VMThreadLocals.
-     */
-    private static final ExceptionStackFrameVisitor exceptionStackFrameVisitor = new ExceptionStackFrameVisitor();
+    public static final FastThreadLocalObject<Throwable> currentException = FastThreadLocalFactory.createObject(Throwable.class);
 
-    protected static final FastThreadLocalObject<Throwable> currentException = FastThreadLocalFactory.createObject(Throwable.class);
+    @Uninterruptible(reason = "Called from uninterruptible callers.", mayBeInlined = true)
+    public static boolean isUnwindingForException() {
+        return currentException.get() != null;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible callers.", mayBeInlined = true)
+    static boolean exceptionsAreFatal() {
+        /*
+         * If an exception is thrown while the thread is not in the Java state, most likely
+         * something went wrong in our state transition code. We cannot reliably unwind the stack,
+         * so exiting quickly is better.
+         */
+        return SubstrateOptions.MultiThreaded.getValue() && !VMThreads.StatusSupport.isStatusJava();
+    }
 
     /** Foreign call: {@link #UNWIND_EXCEPTION}. */
     @SubstrateForeignCallTarget
+    @Uninterruptible(reason = "Set currentException atomically with regard to the safepoint mechanism", calleeMustBe = false)
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate when unwinding the stack.")
-    private static void unwindException(Throwable exception, Pointer callerSP, CodePointer callerIP) {
+    private static void unwindException(Throwable exception, Pointer callerSP) {
+        StackOverflowCheck.singleton().makeYellowZoneAvailable();
+
         if (currentException.get() != null) {
             /*
              * Exception unwinding cannot be called recursively. The most likely reason to end up
@@ -431,12 +294,17 @@ public class SnippetRuntime {
         }
         currentException.set(exception);
 
+        if (exceptionsAreFatal()) {
+            Log.log().string("Fatal error: exception unwind while thread is not in Java state: ").string(exception.getClass().getName());
+            ImageSingletons.lookup(LogHandler.class).fatalError();
+            return;
+        }
         /*
          * callerSP and callerIP identify already the caller of the frame that wants to unwind an
          * exception. So we can start looking for the exception handler immediately in that frame,
          * without skipping any frames in between.
          */
-        JavaStackWalker.walkCurrentThread(callerSP, callerIP, exceptionStackFrameVisitor);
+        ImageSingletons.lookup(ExceptionUnwind.class).unwindException(callerSP);
 
         /*
          * The stack walker does not return if an exception handler is found, but instead performs a
@@ -446,7 +314,15 @@ public class SnippetRuntime {
         reportUnhandledExceptionRaw(exception);
     }
 
-    public static void reportUnhandledExceptionRaw(Throwable exception) {
+    public static class ExceptionUnwind {
+        private static final ExceptionStackFrameVisitor stackFrameVisitor = new ExceptionStackFrameVisitor();
+
+        public void unwindException(Pointer callerSP) {
+            JavaStackWalker.walkCurrentThread(callerSP, stackFrameVisitor);
+        }
+    }
+
+    private static void reportUnhandledExceptionRaw(Throwable exception) {
         Log.log().string(exception.getClass().getName());
         String detail = JDKUtils.getRawMessage(exception);
         if (detail != null) {
@@ -460,68 +336,5 @@ public class SnippetRuntime {
     @SubstrateForeignCallTarget
     private static void registerFinalizer(@SuppressWarnings("unused") Object obj) {
         // We do not support finalizers, so nothing to do.
-    }
-
-    private static String assertionErrorName() {
-        return AssertionError.class.getName();
-    }
-
-    private static Log runtimeAssertionPrefix() {
-        return Log.log().string(assertionErrorName()).string(": ");
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatal(@SuppressWarnings("unused") Object obj) {
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_OBJ}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalObj(@SuppressWarnings("unused") Object obj, Object detailMessage) {
-        if (detailMessage instanceof String) {
-            runtimeAssertionPrefix().string((String) detailMessage).newline();
-        } else {
-            /*
-             * We do not want to convert detailMessage to a string, since that requires allocation.
-             */
-            runtimeAssertionPrefix().string(detailMessage.getClass().getName()).newline();
-        }
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_OBJ_OBJ}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalObjObj(@SuppressWarnings("unused") Object obj, String detailMessage, @SuppressWarnings("unused") Throwable cause) {
-        runtimeAssertionPrefix().string(detailMessage).newline();
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_INT}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalInt(@SuppressWarnings("unused") Object obj, int val) {
-        runtimeAssertionPrefix().signed(val).newline();
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_LONG}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalLong(@SuppressWarnings("unused") Object obj, long val) {
-        runtimeAssertionPrefix().signed(val).newline();
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_FLOAT}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalFloat(@SuppressWarnings("unused") Object obj, @SuppressWarnings("unused") float val) {
-        runtimeAssertionPrefix().string("[float number supressed]").newline();
-        throw VMError.shouldNotReachHere(assertionErrorName());
-    }
-
-    /** Foreign call: {@link #FATAL_RUNTIME_ASSERTION_DOUBLE}. */
-    @SubstrateForeignCallTarget
-    private static void reportRuntimeAssertionFatalDouble(@SuppressWarnings("unused") Object obj, @SuppressWarnings("unused") double val) {
-        runtimeAssertionPrefix().string("[double number supressed]").newline();
-        throw VMError.shouldNotReachHere(assertionErrorName());
     }
 }

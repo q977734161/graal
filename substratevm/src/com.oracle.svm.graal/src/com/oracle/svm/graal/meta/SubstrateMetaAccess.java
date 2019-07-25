@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,8 @@
  */
 package com.oracle.svm.graal.meta;
 
+import static com.oracle.svm.core.config.ConfigurationValues.getObjectLayout;
+import static com.oracle.svm.core.snippets.KnownIntrinsics.convertUnknownValue;
 import static com.oracle.svm.core.util.VMError.unimplemented;
 
 import java.lang.reflect.Executable;
@@ -32,6 +36,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.deopt.Deoptimizer;
+import com.oracle.svm.core.deopt.SubstrateSpeculationLog.SubstrateSpeculation;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.util.Replaced;
@@ -45,6 +50,9 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
+import jdk.vm.ci.meta.SpeculationLog;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
+import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
 
 public class SubstrateMetaAccess implements MetaAccessProvider, Replaced {
 
@@ -116,6 +124,36 @@ public class SubstrateMetaAccess implements MetaAccessProvider, Replaced {
     @Override
     public int decodeDebugId(JavaConstant constant) {
         return Deoptimizer.decodeDebugId(constant);
+    }
+
+    /**
+     * The offset from the origin of an array to the first element.
+     *
+     * @return the offset in bytes
+     */
+    @Override
+    public int getArrayBaseOffset(JavaKind kind) {
+        return getObjectLayout().getArrayBaseOffset(kind);
+    }
+
+    /**
+     * The scale used for the index when accessing elements of an array of this kind.
+     *
+     * @return the scale in order to convert the index into a byte offset
+     */
+    @Override
+    public int getArrayIndexScale(JavaKind elementKind) {
+        return getObjectLayout().getArrayIndexScale(elementKind);
+    }
+
+    @Override
+    public JavaConstant encodeSpeculation(Speculation speculation) {
+        return SubstrateObjectConstant.forObject(speculation.getReason());
+    }
+
+    @Override
+    public Speculation decodeSpeculation(JavaConstant constant, SpeculationLog speculationLog) {
+        return new SubstrateSpeculation((SpeculationReason) convertUnknownValue(SubstrateObjectConstant.asObject(constant), Object.class));
     }
 
     @Override

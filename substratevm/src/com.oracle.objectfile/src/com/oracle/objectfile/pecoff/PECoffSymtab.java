@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,10 +41,10 @@ import com.oracle.objectfile.ObjectFile.Element;
 import com.oracle.objectfile.ObjectFile.Section;
 import com.oracle.objectfile.ObjectFile.Symbol;
 import com.oracle.objectfile.SymbolTable;
-import com.oracle.objectfile.pecoff.PECoffObjectFile.PECoffSection;
 import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.objectfile.io.OutputAssembler;
 import com.oracle.objectfile.pecoff.PECoff.IMAGE_SYMBOL;
+import com.oracle.objectfile.pecoff.PECoffObjectFile.PECoffSection;
 
 public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
 
@@ -180,6 +182,9 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
     private SortedSet<Entry> entries = new TreeSet<>(PECoffSymtab::compareEntries);
 
     private Map<String, Entry> entriesByName = new HashMap<>();
+    private Map<Entry, Integer> entriesToIndex;
+
+    private PECoffSymtabStruct symtabStruct;
 
     /**
      * PECoffSymtab Element encompases the Symbol table array and the String table. The String table
@@ -188,8 +193,6 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
     public PECoffSymtab(PECoffObjectFile owner, String name) {
         owner.super(name);
     }
-
-    private PECoffSymtabStruct symtabStruct = null;
 
     /**
      * This function uses the entries Set to create the native byte array that will be written out
@@ -200,11 +203,14 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
             return symtabStruct;
         }
         symtabStruct = new PECoffSymtabStruct();
+        entriesToIndex = new HashMap<>();
 
+        int i = 0;
         for (Entry e : entries) {
             PECoffSection sect = e.getReferencedSection();
-            // The NULL Entry doesn't have a section associated with it
-            int sectID = sect == null ? 0 : sect.getSectionID();
+            // Undefined symbols have a null ReferencedSection
+            // Pass -1 as sectID since addSymbolEntry will add 1
+            int sectID = sect == null ? -1 : sect.getSectionID();
             long offset = e.isDefined() ? e.getDefinedOffset() : 0L;
 
             symtabStruct.addSymbolEntry(e.getName(),
@@ -212,6 +218,7 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
                             (byte) e.getSymClass(),
                             (byte) sectID,
                             offset);
+            entriesToIndex.put(e, i++);
         }
 
         return symtabStruct;
@@ -240,8 +247,7 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
 
     @Override
     public Iterable<BuildDependency> getDependencies(Map<Element, LayoutDecisionMap> decisions) {
-        ArrayList<BuildDependency> ourDeps = new ArrayList<>(ObjectFile.defaultDependencies(decisions, this));
-        return ourDeps;
+        return new ArrayList<>(ObjectFile.defaultDependencies(decisions, this));
     }
 
     @Override
@@ -272,6 +278,9 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
     }
 
     private Entry addEntry(Entry entry) {
+        if (symtabStruct != null) {
+            throw new IllegalStateException("Symbol table content is already decided.");
+        }
         entries.add(entry);
         entriesByName.put(entry.getName(), entry);
         return entry;
@@ -282,14 +291,10 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
     }
 
     public int indexOf(Symbol sym) {
-        int i = 0;
-        for (Entry entry : entries) {
-            if (entry.equals(sym)) {
-                return i;
-            }
-            i++;
+        if (symtabStruct == null) {
+            throw new IllegalStateException("Symbol table content is not decided yet.");
         }
-        return -1;
+        return entriesToIndex.get(sym);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -304,15 +309,21 @@ public class PECoffSymtab extends ObjectFile.Element implements SymbolTable {
     }
 
     public int getSymbolCount() {
-        PECoffSymtabStruct sts = getNativeSymtab();
-        int count = sts.getSymtabCount();
+        int count = getNativeSymtab().getSymtabCount();
         int entcount = entries.size();
 
         if (entcount != count) {
             System.out.println("Counts don't match, entcount: " + entcount + " count: " + count);
         }
+        return entcount;
+    }
 
-        return entries.size();
+    public int getDirectiveSize() {
+        return getNativeSymtab().getDirectiveSize();
+    }
+
+    public byte[] getDirectiveArray() {
+        return getNativeSymtab().getDirectiveArray();
     }
 
     @Override

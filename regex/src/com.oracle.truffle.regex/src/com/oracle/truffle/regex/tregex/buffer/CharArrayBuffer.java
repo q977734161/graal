@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@ import java.util.Arrays;
  * <p>
  * Usage Example:
  * </p>
- * 
+ *
  * <pre>
  * CharArrayBuffer buf = new CharArrayBuffer();
  * List<char[]> results = new ArrayList<>();
@@ -46,29 +46,22 @@ import java.util.Arrays;
  * }
  * </pre>
  */
-public class CharArrayBuffer {
+public class CharArrayBuffer extends AbstractArrayBuffer {
 
-    private char[] buf;
-    private int size = 0;
+    protected char[] buf;
 
     public CharArrayBuffer(int initialSize) {
         buf = new char[initialSize];
     }
 
-    public void clear() {
-        size = 0;
+    @Override
+    int getBufferLength() {
+        return buf.length;
     }
 
-    public boolean isEmpty() {
-        return size == 0;
-    }
-
-    public int size() {
-        return size;
-    }
-
-    public void setSize(int size) {
-        this.size = size;
+    @Override
+    void grow(int newSize) {
+        buf = Arrays.copyOf(buf, newSize);
     }
 
     public char[] getBuffer() {
@@ -76,27 +69,13 @@ public class CharArrayBuffer {
     }
 
     public void add(char c) {
-        if (size == buf.length) {
-            grow(size * 2);
+        if (length == buf.length) {
+            grow(length * 2);
         }
-        buf[size++] = c;
-    }
-
-    public void ensureCapacity(int newSize) {
-        if (buf.length < newSize) {
-            int newBufferSize = buf.length * 2;
-            while (newBufferSize < newSize) {
-                newBufferSize *= 2;
-            }
-            grow(newBufferSize);
-        }
-    }
-
-    private void grow(int newSize) {
-        buf = Arrays.copyOf(buf, newSize);
+        buf[length++] = c;
     }
 
     public char[] toArray() {
-        return Arrays.copyOf(buf, size);
+        return Arrays.copyOf(buf, length);
     }
 }

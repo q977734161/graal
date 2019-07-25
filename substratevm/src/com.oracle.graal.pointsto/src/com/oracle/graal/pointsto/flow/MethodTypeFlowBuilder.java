@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,12 +28,15 @@ import static jdk.vm.ci.common.JVMCIError.guarantee;
 import static jdk.vm.ci.common.JVMCIError.shouldNotReachHere;
 
 import java.lang.reflect.Modifier;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
+import org.graalvm.compiler.api.runtime.GraalJVMCICompiler;
 import org.graalvm.compiler.bytecode.Bytecode;
 import org.graalvm.compiler.bytecode.ResolvedJavaMethodBytecode;
 import org.graalvm.compiler.core.common.PermanentBailoutException;
@@ -39,6 +44,7 @@ import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.debug.DebugContext.Description;
 import org.graalvm.compiler.debug.Indent;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
@@ -68,7 +74,6 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.ObjectEqualsNode;
 import org.graalvm.compiler.nodes.extended.BoxNode;
-import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
 import org.graalvm.compiler.nodes.extended.ForeignCallNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.RawLoadNode;
@@ -98,13 +103,13 @@ import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.graph.MergeableState;
 import org.graalvm.compiler.phases.graph.PostOrderNodeIterator;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
 import org.graalvm.compiler.replacements.nodes.BasicArrayCopyNode;
 import org.graalvm.compiler.replacements.nodes.BasicObjectCloneNode;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode;
 import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import org.graalvm.compiler.word.WordCastNode;
+import org.graalvm.util.GuardedAnnotationAccess;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.api.PointstoOptions;
@@ -138,6 +143,7 @@ import com.oracle.graal.pointsto.typestate.TypeState;
 import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.runtime.JVMCI;
 
 public class MethodTypeFlowBuilder {
 
@@ -157,10 +163,22 @@ public class MethodTypeFlowBuilder {
         typeFlowGraphBuilder = new TypeFlowGraphBuilder(bb);
     }
 
+    public MethodTypeFlowBuilder(BigBang bb, StructuredGraph graph) {
+        this.bb = bb;
+        this.graph = graph;
+        this.method = (AnalysisMethod) graph.method();
+        this.methodFlow = method.getTypeFlow();
+        this.typeFlowGraphBuilder = null;
+    }
+
     @SuppressWarnings("try")
     private boolean parse() {
         OptionValues options = bb.getOptions();
-        DebugContext debug = DebugContext.create(options, new GraalDebugHandlersFactory(bb.getProviders().getSnippetReflection()));
+        GraalJVMCICompiler compiler = (GraalJVMCICompiler) JVMCI.getRuntime().getCompiler();
+        SnippetReflectionProvider snippetReflection = compiler.getGraalRuntime().getRequiredCapability(SnippetReflectionProvider.class);
+        // Use the real SnippetReflectionProvider for dumping
+        Description description = new Description(method, toString());
+        DebugContext debug = DebugContext.create(options, description, Collections.singletonList(new GraalDebugHandlersFactory(snippetReflection)));
         try (Indent indent = debug.logAndIndent("parse graph %s", method)) {
 
             boolean needParsing = false;
@@ -169,16 +187,16 @@ public class MethodTypeFlowBuilder {
                 InvocationPlugin plugin = bb.getProviders().getGraphBuilderPlugins().getInvocationPlugins().lookupInvocation(method);
                 if (plugin != null && !plugin.inlineOnly()) {
                     Bytecode code = new ResolvedJavaMethodBytecode(method);
-                    graph = new SubstrateIntrinsicGraphBuilder(options, debug, bb.getProviders().getMetaAccess(), bb.getProviders().getConstantReflection(),
-                                    bb.getProviders().getConstantFieldProvider(),
-                                    bb.getProviders().getStampProvider(), code).buildGraph(plugin);
+                    graph = new SubstrateIntrinsicGraphBuilder(options, debug, bb.getProviders(), code).buildGraph(plugin);
+                    if (graph != null) {
+                        method.registerAsIntrinsicMethod();
+                    }
                 }
             }
             if (graph == null) {
                 if (!method.hasBytecodes()) {
                     return false;
                 }
-
                 needParsing = true;
                 graph = new StructuredGraph.Builder(options, debug).method(method).build();
             }
@@ -192,6 +210,14 @@ public class MethodTypeFlowBuilder {
                         GraphBuilderConfiguration config = GraphBuilderConfiguration.getDefault(bb.getProviders().getGraphBuilderPlugins()).withEagerResolving(true)
                                         .withUnresolvedIsError(PointstoOptions.UnresolvedIsError.getValue(bb.getOptions()))
                                         .withNodeSourcePosition(true).withBytecodeExceptionMode(BytecodeExceptionMode.CheckAll);
+
+                        /*
+                         * We want to always disable the liveness analysis, since we want the
+                         * points-to analysis to be as conservative as possible. The analysis
+                         * results can then be used with the liveness analysis enabled or disabled.
+                         */
+                        config = config.withRetainLocalVariables(true);
+
                         bb.getHostVM().createGraphBuilderPhase(bb.getProviders(), config, OptimisticOptimizations.NONE, null).apply(graph);
                     }
                 } catch (PermanentBailoutException ex) {
@@ -200,12 +226,12 @@ public class MethodTypeFlowBuilder {
                 }
 
                 // Register used types and fields before canonicalization can optimize them.
-                registerUsedElements(bb, graph, methodFlow);
+                registerUsedElements();
 
-                new CanonicalizerPhase().apply(graph, new PhaseContext(bb.getProviders()));
+                new CanonicalizerPhase().apply(graph, bb.getProviders());
 
                 // Do it again after canonicalization changed type checks and field accesses.
-                registerUsedElements(bb, graph, methodFlow);
+                registerUsedElements();
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
@@ -213,7 +239,7 @@ public class MethodTypeFlowBuilder {
         return true;
     }
 
-    public static void registerUsedElements(BigBang bb, StructuredGraph graph, MethodTypeFlow methodFlow) {
+    public void registerUsedElements() {
         for (Node n : graph.getNodes()) {
             if (n instanceof InstanceOfNode) {
                 InstanceOfNode node = (InstanceOfNode) n;
@@ -261,11 +287,6 @@ public class MethodTypeFlowBuilder {
                     arrayType.getComponentType().registerAsInTypeCheck();
                 }
 
-            } else if (n instanceof BytecodeExceptionNode) {
-                BytecodeExceptionNode node = (BytecodeExceptionNode) n;
-                AnalysisType type = bb.getMetaAccess().lookupJavaType(node.getExceptionClass());
-                type.registerAsInHeap();
-
             } else if (n instanceof ConstantNode) {
                 ConstantNode cn = (ConstantNode) n;
                 if (cn.hasUsages() && cn.asJavaConstant().getJavaKind() == JavaKind.Object && cn.asJavaConstant().isNonNull()) {
@@ -296,7 +317,7 @@ public class MethodTypeFlowBuilder {
 
     protected void apply() {
         // assert method.getAnnotation(Fold.class) == null : method;
-        if (method.getAnnotation(NodeIntrinsic.class) != null) {
+        if (GuardedAnnotationAccess.isAnnotationPresent(method, NodeIntrinsic.class)) {
             graph.getDebug().log("apply MethodTypeFlow on node intrinsic %s", method);
             AnalysisType returnType = (AnalysisType) method.getSignature().getReturnType(method.getDeclaringClass());
             if (returnType.getJavaKind() == JavaKind.Object) {
@@ -606,7 +627,7 @@ public class MethodTypeFlowBuilder {
                 BytecodeLocation location = BytecodeLocation.create(bciKey, method);
                 TypeFlowBuilder<?> instanceOfBuilder = TypeFlowBuilder.create(bb, node, InstanceOfTypeFlow.class, () -> {
                     InstanceOfTypeFlow instanceOf = new InstanceOfTypeFlow(node, location, declaredType);
-                    methodFlow.addInstanceOf(instanceOf);
+                    methodFlow.addInstanceOf(key, instanceOf);
                     return instanceOf;
                 });
                 /* InstanceOf must not be removed as it is reported by the analysis results. */
@@ -950,7 +971,7 @@ public class MethodTypeFlowBuilder {
                 AnalysisUnsafePartitionLoadNode node = (AnalysisUnsafePartitionLoadNode) n;
                 assert node.object().getStackKind() == JavaKind.Object;
 
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
 
                 AnalysisType partitionType = (AnalysisType) node.partitionType();
 
@@ -975,7 +996,7 @@ public class MethodTypeFlowBuilder {
                 assert node.object().getStackKind() == JavaKind.Object;
                 assert node.value().getStackKind() == JavaKind.Object;
 
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
 
                 AnalysisType partitionType = (AnalysisType) node.partitionType();
 
@@ -1005,7 +1026,7 @@ public class MethodTypeFlowBuilder {
             } else if (n instanceof RawLoadNode) {
                 RawLoadNode node = (RawLoadNode) n;
 
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
 
                 if (node.object().getStackKind() == JavaKind.Object && node.getStackKind() == JavaKind.Object) {
                     AnalysisType objectType = (AnalysisType) StampTool.typeOrNull(node.object());
@@ -1038,7 +1059,7 @@ public class MethodTypeFlowBuilder {
             } else if (n instanceof RawStoreNode) {
                 RawStoreNode node = (RawStoreNode) n;
 
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
 
                 if (node.object().getStackKind() == JavaKind.Object && node.value().getStackKind() == JavaKind.Object) {
                     AnalysisType objectType = (AnalysisType) StampTool.typeOrNull(node.object());
@@ -1072,7 +1093,7 @@ public class MethodTypeFlowBuilder {
                 }
             } else if (n instanceof UnsafeCompareAndSwapNode) {
                 UnsafeCompareAndSwapNode node = (UnsafeCompareAndSwapNode) n;
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
                 if (node.object().getStackKind() == JavaKind.Object && node.newValue().getStackKind() == JavaKind.Object) {
                     AnalysisType objectType = (AnalysisType) StampTool.typeOrNull(node.object());
                     TypeFlowBuilder<?> objectBuilder = state.lookup(node.object());
@@ -1107,7 +1128,7 @@ public class MethodTypeFlowBuilder {
 
             } else if (n instanceof AtomicReadAndWriteNode) {
                 AtomicReadAndWriteNode node = (AtomicReadAndWriteNode) n;
-                checkUnsafeOffset(node.offset());
+                checkUnsafeOffset(node.object(), node.offset());
                 if (node.object().getStackKind() == JavaKind.Object && node.newValue().getStackKind() == JavaKind.Object) {
 
                     AnalysisType objectType = (AnalysisType) StampTool.typeOrNull(node.object());
@@ -1288,13 +1309,7 @@ public class MethodTypeFlowBuilder {
                     AnalysisMethod targetMethod = (AnalysisMethod) target.targetMethod();
                     bb.isCallAllowed(bb, callerMethod, targetMethod, target.getNodeSourcePosition());
 
-                    Object key;
-                    if (invoke.bci() >= 0) {
-                        key = invoke.bci();
-                    } else {
-                        shouldNotReachHere("InvokeTypeFlow has a negative BCI");
-                        key = new Object();
-                    }
+                    Object key = uniqueKey(n);
                     BytecodeLocation location = BytecodeLocation.create(key, methodFlow.getMethod());
 
                     /*
@@ -1498,7 +1513,7 @@ public class MethodTypeFlowBuilder {
     }
 
     /** Hook for unsafe offset value checks. */
-    protected void checkUnsafeOffset(@SuppressWarnings("unused") ValueNode offset) {
+    protected void checkUnsafeOffset(@SuppressWarnings("unused") ValueNode base, @SuppressWarnings("unused") ValueNode offset) {
     }
 
 }

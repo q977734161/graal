@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -371,7 +373,7 @@ class ExportTrieElement extends MachOObjectFile.LinkEditElement {
     public byte[] getOrDecideContent(Map<Element, LayoutDecisionMap> alreadyDecided, byte[] contentHint) {
         /* We need to build a prefix tree out of our exported symbols. */
 
-        for (MachOSymtab.Entry ent : ((LinkEditSegment64Command) owner.getLinkEditSegment()).getSymtab().getEntries()) {
+        for (MachOSymtab.Entry ent : ((LinkEditSegment64Command) owner.getLinkEditSegment()).getSymtab().getSortedEntries()) {
             if (ent.isExternal() && ent.isDefined()) {
                 // FIXME: do we really want the vaddr?
                 long symbolVaddr = (int) alreadyDecided.get(ent.getDefinedSection()).getDecidedValue(LayoutDecision.Kind.VADDR) + ent.getDefinedOffset();

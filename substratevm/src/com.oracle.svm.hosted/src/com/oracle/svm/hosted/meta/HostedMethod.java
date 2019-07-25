@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,6 +30,7 @@ import static com.oracle.svm.core.util.VMError.unimplemented;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
 
+import com.oracle.svm.core.util.VMError;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.JavaMethodContext;
 import org.graalvm.compiler.nodes.StructuredGraph;
@@ -75,6 +78,7 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
      */
     private int codeAddressOffset;
     private boolean codeAddressOffsetValid;
+    private boolean compiled;
 
     /**
      * All concrete methods that can actually be called when calling this method. This includes all
@@ -120,7 +124,12 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
         return implementations;
     }
 
+    public String getQualifiedName() {
+        return wrapped.getQualifiedName();
+    }
+
     public void setCodeAddressOffset(int address) {
+        assert isCompiled();
         codeAddressOffset = address;
         codeAddressOffsetValid = true;
     }
@@ -130,12 +139,22 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
      * the buffer.
      */
     public int getCodeAddressOffset() {
-        assert codeAddressOffsetValid : "method " + getName() + " has no code address offset set";
+        if (!codeAddressOffsetValid) {
+            throw VMError.shouldNotReachHere(format("%H.%n(%p)") + ": has no code address offset set.");
+        }
         return codeAddressOffset;
     }
 
     public boolean isCodeAddressOffsetValid() {
         return codeAddressOffsetValid;
+    }
+
+    public void setCompiled() {
+        this.compiled = true;
+    }
+
+    public boolean isCompiled() {
+        return compiled;
     }
 
     /*
@@ -229,6 +248,11 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
     @Override
     public StructuredGraph buildGraph(DebugContext debug, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
         return wrapped.buildGraph(debug, method, providers, purpose);
+    }
+
+    @Override
+    public boolean allowRuntimeCompilation() {
+        return wrapped.allowRuntimeCompilation();
     }
 
     @Override

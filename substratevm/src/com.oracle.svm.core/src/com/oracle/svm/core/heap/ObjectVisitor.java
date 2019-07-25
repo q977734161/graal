@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,17 +31,6 @@ import com.oracle.svm.core.annotate.RestrictHeapAccess;
  *
  */
 public interface ObjectVisitor {
-
-    /**
-     * Called before any Objects are visited. For example, from the client who creates the
-     * ObjectVisitor.
-     *
-     * @return true if visiting should continue, false if visiting should stop.
-     */
-    default boolean prologue() {
-        return true;
-    }
-
     /**
      * Visit an Object.
      *
@@ -53,16 +44,5 @@ public interface ObjectVisitor {
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate while visiting the heap.")
     default boolean visitObjectInline(Object o) {
         return visitObject(o);
-    }
-
-    /**
-     * Called after all Objects have been visited. For example, from the client who creates the
-     * ObjectVisitor. If visiting terminates because a visitor returned false, this method might not
-     * be called.
-     *
-     * @return true if the epilogue executed successfully, false otherwise.
-     */
-    default boolean epilogue() {
-        return true;
     }
 }

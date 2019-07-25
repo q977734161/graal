@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,13 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import org.graalvm.compiler.code.SourceStackTraceBailoutException;
+import org.graalvm.compiler.core.common.GraalBailoutException;
 import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.replacements.PEGraphDecoder;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
+import org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions;
+import org.graalvm.compiler.truffle.runtime.TruffleRuntimeOptions;
 import org.graalvm.compiler.truffle.test.nodes.AbstractTestNode;
 import org.graalvm.compiler.truffle.test.nodes.AddTestNode;
 import org.graalvm.compiler.truffle.test.nodes.BlockTestNode;
@@ -43,6 +47,7 @@ import org.graalvm.compiler.truffle.test.nodes.NestedExplodedLoopTestNode;
 import org.graalvm.compiler.truffle.test.nodes.NeverPartOfCompilationTestNode;
 import org.graalvm.compiler.truffle.test.nodes.ObjectEqualsNode;
 import org.graalvm.compiler.truffle.test.nodes.ObjectHashCodeNode;
+import org.graalvm.compiler.truffle.test.nodes.PartialIntrinsicNode;
 import org.graalvm.compiler.truffle.test.nodes.RecursionTestNode;
 import org.graalvm.compiler.truffle.test.nodes.RootTestNode;
 import org.graalvm.compiler.truffle.test.nodes.StoreLocalTestNode;
@@ -51,7 +56,9 @@ import org.graalvm.compiler.truffle.test.nodes.StringHashCodeFinalNode;
 import org.graalvm.compiler.truffle.test.nodes.StringHashCodeNonFinalNode;
 import org.graalvm.compiler.truffle.test.nodes.SynchronizedExceptionMergeNode;
 import org.graalvm.compiler.truffle.test.nodes.TwoMergesExplodedLoopTestNode;
+import org.junit.AfterClass;
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.frame.FrameDescriptor;
@@ -60,6 +67,18 @@ import com.oracle.truffle.api.nodes.RootNode;
 import jdk.vm.ci.code.BailoutException;
 
 public class SimplePartialEvaluationTest extends PartialEvaluationTest {
+
+    private static TruffleRuntimeOptions.TruffleRuntimeOptionsOverrideScope immediateCompilationScope;
+
+    @BeforeClass
+    public static void setup() {
+        immediateCompilationScope = TruffleRuntimeOptions.overrideOptions(SharedTruffleRuntimeOptions.TruffleCompileImmediately, false);
+    }
+
+    @AfterClass
+    public static void tearDown() {
+        immediateCompilationScope.close();
+    }
 
     public static Object constant42() {
         return 42;
@@ -80,16 +99,17 @@ public class SimplePartialEvaluationTest extends PartialEvaluationTest {
     }
 
     @Test
+    @SuppressWarnings("try")
     public void neverPartOfCompilationTest() {
         FrameDescriptor fd = new FrameDescriptor();
         AbstractTestNode firstTree = new NeverPartOfCompilationTestNode(new ConstantTestNode(1), 2);
         assertPartialEvalEquals("constant42", new RootTestNode(fd, "neverPartOfCompilationTest", firstTree));
 
         AbstractTestNode secondTree = new NeverPartOfCompilationTestNode(new ConstantTestNode(1), 1);
-        try {
+        try (PreventDumping noDump = new PreventDumping()) {
             assertPartialEvalEquals("constant42", new RootTestNode(fd, "neverPartOfCompilationTest", secondTree));
             Assert.fail("Expected verification error!");
-        } catch (SourceStackTraceBailoutException t) {
+        } catch (GraalBailoutException t) {
             // Expected verification error occurred.
             StackTraceElement[] trace = t.getStackTrace();
             if (truffleCompiler.getPartialEvaluator().getConfigForParsing().trackNodeSourcePosition() || GraalOptions.TrackNodeSourcePosition.getValue(getInitialOptions())) {
@@ -334,5 +354,20 @@ public class SimplePartialEvaluationTest extends PartialEvaluationTest {
         OptimizedCallTarget compilable = compileHelper("loopExplosionPhi", rootNode, new Object[0]);
 
         Assert.assertEquals(1, compilable.call(new Object[0]));
+    }
+
+    @Test
+    public void partialIntrinsic() {
+        /*
+         * Object.notifyAll() is a partial intrinsic on JDK 11, i.e., the intrinsic calls the
+         * original implementation. Test that the call to the original implementation is not
+         * recursively inlined as an intrinsic again.
+         */
+        FrameDescriptor fd = new FrameDescriptor();
+        AbstractTestNode result = new PartialIntrinsicNode();
+        RootNode rootNode = new RootTestNode(fd, "partialIntrinsic", result);
+        OptimizedCallTarget compilable = compileHelper("partialIntrinsic", rootNode, new Object[0]);
+
+        Assert.assertEquals(42, compilable.call(new Object[0]));
     }
 }

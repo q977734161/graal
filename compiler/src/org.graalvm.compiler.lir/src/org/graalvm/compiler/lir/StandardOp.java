@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,7 @@ import java.util.EnumSet;
 
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.compiler.asm.Label;
+import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.core.common.cfg.AbstractBlockBase;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.lir.asm.CompilationResultBuilder;
@@ -68,10 +71,14 @@ public class StandardOp {
         boolean makeNullCheckFor(Value value, LIRFrameState nullCheckState, int implicitNullCheckLimit);
     }
 
+    public interface LabelHoldingOp {
+        Label getLabel();
+    }
+
     /**
      * LIR operation that defines the position of a label.
      */
-    public static final class LabelOp extends LIRInstruction {
+    public static final class LabelOp extends LIRInstruction implements LabelHoldingOp {
         public static final LIRInstructionClass<LabelOp> TYPE = LIRInstructionClass.create(LabelOp.class);
         public static final EnumSet<OperandFlag> incomingFlags = EnumSet.of(REG, STACK);
 
@@ -148,11 +155,12 @@ public class StandardOp {
         @Override
         public void emitCode(CompilationResultBuilder crb) {
             if (align) {
-                crb.asm.align(crb.target.wordSize * 2);
+                crb.asm.align(GraalOptions.LoopHeaderAlignment.getValue(crb.getOptions()));
             }
             crb.asm.bind(label);
         }
 
+        @Override
         public Label getLabel() {
             return label;
         }

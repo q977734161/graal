@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,13 +44,16 @@ import java.util.stream.Stream;
 
 final class MacroOption {
     enum MacroOptionKind {
-        Language("languages"),
-        Tool("tools");
+        Language("languages", true),
+        Tool("tools", true),
+        Macro("macros", false);
 
         final String subdir;
+        final boolean allowAll;
 
-        MacroOptionKind(String subdir) {
+        MacroOptionKind(String subdir, boolean allowAll) {
             this.subdir = subdir;
+            this.allowAll = allowAll;
         }
 
         static MacroOptionKind fromSubdir(String subdir) {
@@ -169,33 +174,12 @@ final class MacroOption {
         private final String optionArg;
 
         private EnabledOption(MacroOption option, String optionArg) {
-            this.option = option;
+            this.option = Objects.requireNonNull(option);
             this.optionArg = optionArg;
         }
 
         private String resolvePropertyValue(String val) {
-            String resultVal = val;
-            if (optionArg != null) {
-                /* Substitute ${*} -> optionArg in resultVal (always possible) */
-                resultVal = resultVal.replace("${*}", optionArg);
-                /*
-                 * If optionArg consists of "<argName>:<argValue>,..." additionally perform
-                 * substitutions of kind ${<argName>} -> <argValue> on resultVal.
-                 */
-                for (String argNameValue : optionArg.split(",")) {
-                    String[] splitted = argNameValue.split(":");
-                    if (splitted.length == 2) {
-                        String argName = splitted[0];
-                        String argValue = splitted[1];
-                        if (!argName.isEmpty()) {
-                            resultVal = resultVal.replace("${" + argName + "}", argValue);
-                        }
-                    }
-                }
-            }
-            /* Substitute ${.} -> absolute path to optionDirectory */
-            resultVal = resultVal.replace("${.}", getOption().optionDirectory.toString());
-            return resultVal;
+            return NativeImage.resolvePropertyValue(val, optionArg, getOption().optionDirectory.toString());
         }
 
         String getProperty(String key, String defaultVal) {
@@ -211,14 +195,11 @@ final class MacroOption {
         }
 
         boolean forEachPropertyValue(String propertyKey, Consumer<String> target) {
-            String propertyValueRaw = option.properties.get(propertyKey);
-            if (propertyValueRaw != null) {
-                for (String propertyValue : propertyValueRaw.split(" ")) {
-                    target.accept(resolvePropertyValue(propertyValue));
-                }
-                return true;
-            }
-            return false;
+            return forEachPropertyValue(propertyKey, target, " ");
+        }
+
+        boolean forEachPropertyValue(String propertyKey, Consumer<String> target, String separatorRegex) {
+            return NativeImage.forEachPropertyValue(option.properties.get(propertyKey), target, this::resolvePropertyValue, separatorRegex);
         }
 
         MacroOption getOption() {
@@ -233,13 +214,11 @@ final class MacroOption {
         private static Map<MacroOptionKind, Map<String, MacroOption>> collectMacroOptions(Path rootDir) throws IOException {
             Map<MacroOptionKind, Map<String, MacroOption>> result = new HashMap<>();
             for (MacroOptionKind kind : MacroOptionKind.values()) {
-                if (kind.subdir.isEmpty()) {
-                    continue;
-                }
-                Path optionDir = rootDir.resolve(kind.subdir);
+                Path optionsDir = rootDir.resolve(kind.subdir);
                 Map<String, MacroOption> collectedOptions = Collections.emptyMap();
-                if (Files.isDirectory(optionDir)) {
-                    collectedOptions = Files.list(optionDir).filter(Files::isDirectory)
+                if (Files.isDirectory(optionsDir)) {
+                    collectedOptions = Files.list(optionsDir).filter(Files::isDirectory)
+                                    .filter(optionDir -> Files.isReadable(optionDir.resolve(NativeImage.nativeImagePropertiesFilename)))
                                     .map(MacroOption::create).filter(Objects::nonNull)
                                     .collect(Collectors.toMap(MacroOption::getOptionName, Function.identity()));
                 }
@@ -248,20 +227,17 @@ final class MacroOption {
             return result;
         }
 
-        Registry(Path rootDir) {
-            addMacroOptionRoot(rootDir);
+        Registry() {
+            for (MacroOptionKind kind : MacroOptionKind.values()) {
+                supported.put(kind, new HashMap<>());
+            }
         }
 
         void addMacroOptionRoot(Path rootDir) {
             /* Discover MacroOptions and add to supported */
             try {
                 collectMacroOptions(rootDir).forEach((optionKind, optionMap) -> {
-                    Map<String, MacroOption> existingOptionMap = supported.get(optionKind);
-                    if (existingOptionMap == null) {
-                        supported.put(optionKind, optionMap);
-                    } else {
-                        existingOptionMap.putAll(optionMap);
-                    }
+                    supported.get(optionKind).putAll(optionMap);
                 });
             } catch (IOException e) {
                 throw new InvalidMacroException("Error while discovering supported MacroOptions in " + rootDir + ": " + e.getMessage());
@@ -276,6 +252,10 @@ final class MacroOption {
             List<String> optionsToShow = new ArrayList<>();
             for (MacroOptionKind kind : MacroOptionKind.values()) {
                 if (forKind != null && !kind.equals(forKind)) {
+                    continue;
+                }
+                if (forKind == null && kind == MacroOptionKind.Macro) {
+                    // skip non-API macro options by default
                     continue;
                 }
                 for (MacroOption option : supported.get(kind).values()) {
@@ -341,6 +321,20 @@ final class MacroOption {
                 throw new VerboseInvalidMacroException("Empty option specification: " + optionString, kindPart, context);
             }
 
+            if (specNameParts.equals("all")) {
+                if (!kindPart.allowAll) {
+                    throw new VerboseInvalidMacroException("Empty option specification: " + kindPart + " does no support 'all'", kindPart, context);
+                }
+                for (String optionName : getAvailableOptions(kindPart)) {
+                    MacroOption option = getMacroOption(kindPart, optionName);
+                    if (Boolean.parseBoolean(option.properties.getOrDefault("ExcludeFromAll", "false"))) {
+                        continue;
+                    }
+                    enableResolved(option, null, addedCheck, context, enabler);
+                }
+                return true;
+            }
+
             String[] parts = specNameParts.split("=", 2);
             String optionName = parts[0];
             MacroOption option = getMacroOption(kindPart, optionName);
@@ -366,7 +360,7 @@ final class MacroOption {
                 }
             }
 
-            MacroOption truffleOption = getMacroOption(MacroOptionKind.Tool, "truffle");
+            MacroOption truffleOption = getMacroOption(MacroOptionKind.Macro, "truffle");
             if (option.kind.equals(MacroOptionKind.Language) && !addedCheck.contains(truffleOption)) {
                 /*
                  * Every language requires Truffle. If it is not specified explicitly as a
@@ -414,7 +408,7 @@ final class MacroOption {
         this.kind = MacroOptionKind.fromSubdir(optionDirectory.getParent().getFileName().toString());
         this.optionName = optionDirectory.getFileName().toString();
         this.optionDirectory = optionDirectory;
-        this.properties = NativeImage.loadProperties(optionDirectory.resolve("native-image.properties"));
+        this.properties = NativeImage.loadProperties(optionDirectory.resolve(NativeImage.nativeImagePropertiesFilename));
     }
 
     @Override

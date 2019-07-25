@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -54,6 +56,11 @@ public class NetIf {
     @CConstant
     public static native int IFNAMSIZ();
 
+    // #define IFHWADDRLEN 6;
+    @CConstant
+    @Platforms(Platform.LINUX.class)
+    public static native int IFHWADDRLEN();
+
     @CConstant
     public static native int IFF_BROADCAST();
 
@@ -93,7 +100,7 @@ public class NetIf {
 
         /*
          * The definition of `struct ifreq` is slightly different between Linux and Darwin but they both
-         * have identically-named macros to access the fields.
+         * have identically-named macros to access the fields that exist on both platforms.
          *
          * `ifr_ifrn` and `ifr_ifru` are inline unnamed unions, but there are C macros to access them.
          */
@@ -139,6 +146,10 @@ public class NetIf {
         int ifr_ifindex();
 
         NetIf.ifreq addressOf(int index);
+
+        @Platforms(Platform.LINUX.class)
+        @CFieldAddress
+        Socket.sockaddr ifr_hwaddr();
 
     }
     /* } Do not reformat commented out C code: @formatter:on */

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,17 +35,20 @@ import java.util.function.Function;
 import org.graalvm.compiler.api.runtime.GraalRuntime;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
-import org.graalvm.nativeimage.Feature.CompilationAccess;
 import org.graalvm.nativeimage.c.function.RelocatedPointer;
+import org.graalvm.nativeimage.hosted.Feature.CompilationAccess;
 
+import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.graal.nodes.SubstrateFieldLocationIdentity;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.ReadableJavaField;
+import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.Replaced;
 import com.oracle.svm.graal.GraalSupport;
 import com.oracle.svm.graal.SubstrateGraalRuntime;
@@ -54,7 +59,6 @@ import com.oracle.svm.graal.meta.SubstrateMetaAccess;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.graal.meta.SubstrateSignature;
 import com.oracle.svm.graal.meta.SubstrateType;
-import com.oracle.svm.graal.meta.UniqueStringTable;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.ameta.AnalysisConstantFieldProvider;
 import com.oracle.svm.hosted.ameta.AnalysisConstantReflectionProvider;
@@ -65,6 +69,11 @@ import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaField;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaType;
+import jdk.vm.ci.hotspot.HotSpotSignature;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -73,7 +82,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 
 /**
- * Replaces graal related objects during analysis in the universe.
+ * Replaces Graal related objects during analysis in the universe.
  *
  * It is mainly used to replace the Hosted* meta data with the Substrate* meta data.
  */
@@ -91,13 +100,13 @@ public class GraalObjectReplacer implements Function<Object, Object> {
     private final SubstrateConstantFieldProvider sConstantFieldProvider;
     private SubstrateGraalRuntime sGraalRuntime;
 
-    private final UniqueStringTable stringTable;
+    private final HostedStringDeduplication stringTable;
 
     public GraalObjectReplacer(AnalysisUniverse aUniverse, AnalysisMetaAccess aMetaAccess) {
         this.aUniverse = aUniverse;
         this.aMetaAccess = aMetaAccess;
         this.sMetaAccess = new SubstrateMetaAccess();
-        this.stringTable = new UniqueStringTable();
+        this.stringTable = HostedStringDeduplication.singleton();
         this.sConstantReflectionProvider = new SubstrateConstantReflectionProvider(sMetaAccess);
         this.sConstantFieldProvider = new SubstrateConstantFieldProvider(aMetaAccess);
     }
@@ -122,6 +131,9 @@ public class GraalObjectReplacer implements Function<Object, Object> {
 
         if (source instanceof MetaAccessProvider) {
             dest = sMetaAccess;
+        } else if (source instanceof HotSpotJVMCIRuntime) {
+            // Throw UnsupportedFeatureException since that provides better diagnostics
+            throw new UnsupportedFeatureException("HotSpotJVMCIRuntime should not appear in the image: " + source);
         } else if (source instanceof GraalRuntime) {
             dest = sGraalRuntime;
         } else if (source instanceof AnalysisConstantReflectionProvider) {
@@ -139,7 +151,15 @@ public class GraalObjectReplacer implements Function<Object, Object> {
              * BigBang.finish(), which is multi-threaded.
              */
             synchronized (this) {
-                if (source instanceof ResolvedJavaMethod) {
+                if (source instanceof HotSpotResolvedJavaMethod) {
+                    throw new UnsupportedFeatureException(source.toString());
+                } else if (source instanceof HotSpotResolvedJavaField) {
+                    throw new UnsupportedFeatureException(source.toString());
+                } else if (source instanceof HotSpotResolvedJavaType) {
+                    throw new UnsupportedFeatureException(source.toString());
+                } else if (source instanceof HotSpotSignature) {
+                    throw new UnsupportedFeatureException(source.toString());
+                } else if (source instanceof ResolvedJavaMethod) {
                     dest = createMethod((ResolvedJavaMethod) source);
                 } else if (source instanceof ResolvedJavaField) {
                     dest = createField((ResolvedJavaField) source);
@@ -160,9 +180,10 @@ public class GraalObjectReplacer implements Function<Object, Object> {
 
         assert dest != null;
         String className = dest.getClass().getName();
-        assert !className.contains(".hotspot.") || className.contains(".svm.jtt.hotspot.") : "HotSpot object in image " + className;
+        assert SubstrateUtil.isBuildingLibgraal() || !className.contains(".hotspot.") || className.contains(".svm.jtt.hotspot.") : "HotSpot object in image " + className;
         assert !className.contains(".analysis.meta.") : "Analysis meta object in image " + className;
         assert !className.contains(".hosted.meta.") : "Hosted meta object in image " + className;
+        assert !SubstrateUtil.isBuildingLibgraal() || !className.contains(".svm.hosted.snippets.") : "Hosted snippet object in image " + className;
 
         return dest;
     }
@@ -261,17 +282,16 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         return fields.remove(field) != null;
     }
 
+    public boolean typeCreated(JavaType original) {
+        return types.containsKey(toAnalysisType(original));
+    }
+
     public SubstrateType createType(JavaType original) {
         if (original == null) {
             return null;
         }
 
-        AnalysisType aType;
-        if (original instanceof AnalysisType) {
-            aType = (AnalysisType) original;
-        } else {
-            aType = ((HostedType) original).getWrapped();
-        }
+        AnalysisType aType = toAnalysisType(original);
         SubstrateType sType = types.get(aType);
 
         if (sType == null) {
@@ -281,7 +301,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
             types.put(aType, sType);
             hub.setMetaType(sType);
 
-            sType.setInstanceFields(createFields(aType));
+            sType.setRawAllInstanceFields(createAllInstanceFields(aType));
             createType(aType.getSuperclass());
             createType(aType.getComponentType());
             for (AnalysisType aInterface : aType.getInterfaces()) {
@@ -291,8 +311,18 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         return sType;
     }
 
-    private SubstrateField[] createFields(ResolvedJavaType originalType) {
-        ResolvedJavaField[] originalFields = originalType.getInstanceFields(false);
+    private static AnalysisType toAnalysisType(JavaType original) {
+        if (original instanceof HostedType) {
+            return ((HostedType) original).getWrapped();
+        } else if (original instanceof AnalysisType) {
+            return (AnalysisType) original;
+        } else {
+            throw new InternalError("unexpected type " + original);
+        }
+    }
+
+    private SubstrateField[] createAllInstanceFields(ResolvedJavaType originalType) {
+        ResolvedJavaField[] originalFields = originalType.getInstanceFields(true);
         SubstrateField[] sFields = new SubstrateField[originalFields.length];
         for (int idx = 0; idx < originalFields.length; idx++) {
             sFields[idx] = createField(originalFields[idx]);
@@ -384,8 +414,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
                 uniqueImplementation = hType.getUniqueConcreteImplementation().getHub();
             }
             sType.setTypeCheckData(hType.getInstanceOfFromTypeID(), hType.getInstanceOfNumTypeIDs(), uniqueImplementation);
-            SubstrateField[] originalFields = sType.getInstanceFields(false);
-            if (originalFields != null) {
+            if (sType.getInstanceFieldCount() > 1) {
                 /*
                  * What we do here is just a reordering of the instance fields array. The fields
                  * array already contains all the fields, but in the order of the AnalysisType. As
@@ -393,9 +422,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
                  * order of the HostedType. The correct order is essential for materialization
                  * during deoptimization.
                  */
-                SubstrateField[] newFields = createFields(hType);
-
-                sType.setInstanceFields(newFields);
+                sType.setRawAllInstanceFields(createAllInstanceFields(hType));
             }
         }
 
@@ -437,7 +464,7 @@ public class GraalObjectReplacer implements Function<Object, Object> {
         }
         for (SubstrateType type : types.values()) {
             access.registerAsImmutable(type);
-            access.registerAsImmutable(type.getRawInstanceFields());
+            access.registerAsImmutable(type.getRawAllInstanceFields());
         }
         for (SubstrateSignature signature : signatures.values()) {
             access.registerAsImmutable(signature);

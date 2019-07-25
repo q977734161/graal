@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,8 @@
  */
 package com.oracle.svm.graal.meta;
 
+import org.graalvm.compiler.core.common.CompressEncoding;
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.compiler.word.BarrieredAccess;
 import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
@@ -44,47 +48,57 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import sun.misc.Unsafe;
 
 public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryAccessProvider {
 
+    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
     public static final SubstrateMemoryAccessProviderImpl SINGLETON = new SubstrateMemoryAccessProviderImpl();
 
     @Platforms(Platform.HOSTED_ONLY.class)
     private SubstrateMemoryAccessProviderImpl() {
     }
 
-    public JavaConstant readUnsafeConstant(JavaKind kind, JavaConstant base, long displacement) {
+    static JavaConstant readUnsafeConstant(JavaKind kind, JavaConstant base, long displacement, boolean isVolatile) {
         if (kind == JavaKind.Object) {
-            return readObjectConstant(base, displacement);
+            return readObjectConstant(base, displacement, null, isVolatile);
         }
-        return readPrimitiveConstant(kind, base, displacement, kind.getByteCount() * Byte.SIZE);
+        return readPrimitiveConstant(kind, base, displacement, kind.getByteCount() * Byte.SIZE, isVolatile);
     }
 
     @Override
     public JavaConstant readObjectConstant(Constant baseConstant, long displacement) {
-        return readObjectConstant(baseConstant, displacement, false);
+        return readObjectConstant(baseConstant, displacement, null, false);
     }
 
     @Override
-    public JavaConstant readNarrowObjectConstant(Constant baseConstant, long displacement) {
-        return readObjectConstant(baseConstant, displacement, true);
+    public JavaConstant readNarrowObjectConstant(Constant baseConstant, long displacement, CompressEncoding encoding) {
+        return readObjectConstant(baseConstant, displacement, encoding, false);
     }
 
-    private static JavaConstant readObjectConstant(Constant baseConstant, long displacement, boolean requireCompressed) {
+    private static JavaConstant readObjectConstant(Constant baseConstant, long displacement, CompressEncoding compressedEncoding, boolean isVolatile) {
         SignedWord offset = WordFactory.signed(displacement);
 
         if (baseConstant instanceof SubstrateObjectConstant) { // always compressed (if enabled)
-            assert !requireCompressed || ReferenceAccess.singleton().haveCompressedReferences();
+            if (compressedEncoding != null) {
+                assert ReferenceAccess.singleton().haveCompressedReferences();
+                if (!compressedEncoding.equals(ReferenceAccess.singleton().getCompressEncoding())) {
+                    return null; // read with non-default compression not implemented
+                }
+            }
             Object baseObject = SubstrateObjectConstant.asObject(baseConstant);
             assert baseObject != null : "SubstrateObjectConstant does not wrap null value";
             SubstrateMetaAccess metaAccess = SubstrateMetaAccess.singleton();
             ResolvedJavaType baseObjectType = metaAccess.lookupJavaType(baseObject.getClass());
             checkRead(JavaKind.Object, displacement, baseObjectType, baseObject);
             Object rawValue = BarrieredAccess.readObject(baseObject, offset);
-            return SubstrateObjectConstant.forObject(rawValue, requireCompressed);
+            if (isVolatile) {
+                UNSAFE.loadFence();
+            }
+            return SubstrateObjectConstant.forObject(rawValue, (compressedEncoding != null));
         }
         if (baseConstant instanceof PrimitiveConstant) { // never compressed
-            assert !requireCompressed;
+            assert compressedEncoding == null;
 
             PrimitiveConstant prim = (PrimitiveConstant) baseConstant;
             if (!prim.getJavaKind().isNumericInteger()) {
@@ -96,6 +110,9 @@ public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryA
             }
             Word address = baseAddress.add(offset);
             Object rawValue = ReferenceAccess.singleton().readObjectAt(address, false);
+            if (isVolatile) {
+                UNSAFE.loadFence();
+            }
             return SubstrateObjectConstant.forObject(rawValue, false);
         }
         return null;
@@ -138,6 +155,10 @@ public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryA
 
     @Override
     public JavaConstant readPrimitiveConstant(JavaKind kind, Constant baseConstant, long displacement, int bits) {
+        return readPrimitiveConstant(kind, baseConstant, displacement, bits, false);
+    }
+
+    private static JavaConstant readPrimitiveConstant(JavaKind kind, Constant baseConstant, long displacement, int bits, boolean isVolatile) {
         SignedWord offset = WordFactory.signed(displacement);
         long rawValue;
 
@@ -191,6 +212,9 @@ public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryA
 
         } else {
             return null;
+        }
+        if (isVolatile) {
+            UNSAFE.loadFence();
         }
         return toConstant(kind, rawValue);
     }

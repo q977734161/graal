@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,7 +29,6 @@ import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.WordFactory;
@@ -35,7 +36,7 @@ import org.graalvm.word.WordFactory;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.posix.headers.Errno;
+import com.oracle.svm.core.headers.Errno;
 import com.oracle.svm.core.posix.headers.LibC;
 import com.oracle.svm.core.posix.headers.Pwd;
 import com.oracle.svm.core.posix.headers.Pwd.passwd;
@@ -74,8 +75,8 @@ final class Target_com_sun_security_auth_module_UnixSystem {
         }
         CCharPointer pwbuf = LibC.malloc(pwsize);
         try {
-            passwd pwent = StackValue.get(SizeOf.get(passwd.class));
-            passwdPointer p = StackValue.get(SizeOf.get(passwdPointer.class));
+            passwd pwent = StackValue.get(passwd.class);
+            passwdPointer p = StackValue.get(passwdPointer.class);
             int result;
             do {
                 if (pwbuf.isNull()) {

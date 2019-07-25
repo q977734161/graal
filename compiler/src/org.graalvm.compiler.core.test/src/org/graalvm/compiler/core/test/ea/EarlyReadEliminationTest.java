@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,8 +26,6 @@ package org.graalvm.compiler.core.test.ea;
 
 import java.util.List;
 
-import org.junit.Test;
-
 import org.graalvm.compiler.core.test.GraalCompilerTest;
 import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.ReturnNode;
@@ -39,9 +39,9 @@ import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
-import org.graalvm.compiler.phases.common.inlining.InliningPhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.virtual.phases.ea.EarlyReadEliminationPhase;
+import org.junit.Test;
 
 public class EarlyReadEliminationTest extends GraalCompilerTest {
 
@@ -262,7 +262,7 @@ public class EarlyReadEliminationTest extends GraalCompilerTest {
     protected StructuredGraph processMethod(String snippet, boolean doLowering) {
         StructuredGraph graph = parseEager(getResolvedJavaMethod(snippet), AllowAssumptions.NO);
         HighTierContext context = getDefaultHighTierContext();
-        new InliningPhase(new CanonicalizerPhase()).apply(graph, context);
+        createInliningPhase().apply(graph, context);
         if (doLowering) {
             new LoweringPhase(new CanonicalizerPhase(), LoweringTool.StandardLoweringStage.HIGH_TIER).apply(graph, context);
         }

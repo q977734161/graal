@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,14 +32,16 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
-import java.net.URLClassLoader;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
@@ -48,6 +52,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Properties;
@@ -65,12 +70,15 @@ import java.util.logging.LogManager;
 import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicSet;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ImageBuildTask;
+import com.oracle.svm.hosted.NativeImageClassLoader;
 import com.oracle.svm.hosted.NativeImageGeneratorRunner;
 import com.oracle.svm.hosted.server.SubstrateServerMessage.ServerCommand;
+import com.oracle.svm.util.ReflectionUtil;
 
 /**
  * A server for SVM image building that keeps the classpath and JIT compiler code caches warm over
@@ -78,13 +86,12 @@ import com.oracle.svm.hosted.server.SubstrateServerMessage.ServerCommand;
  */
 public final class NativeImageBuildServer {
 
-    public static final String IMAGE_CLASSPATH_PREFIX = "-imagecp";
     public static final String PORT_LOG_MESSAGE_PREFIX = "Started image build server on port: ";
-    private static final String TASK_PREFIX = "-task=";
-    static final String PORT_PREFIX = "-port=";
-    private static final String LOG_PREFIX = "-logFile=";
+    public static final String TASK_PREFIX = "-task=";
+    public static final String PORT_PREFIX = "-port=";
+    public static final String LOG_PREFIX = "-logFile=";
     private static final int TIMEOUT_MINUTES = 240;
-    private static final String SUBSTRATEVM_VERSION_PROPERTY = "substratevm.version";
+    private static final String GRAALVM_VERSION_PROPERTY = "org.graalvm.version";
     private static final int SERVER_THREAD_POOL_SIZE = 4;
     private static final int FAILED_EXIT_STATUS = -1;
 
@@ -114,7 +121,9 @@ public final class NativeImageBuildServer {
         /*
          * Set the right classloader in the process reaper
          */
-        withGlobalStaticField("java.lang.UNIXProcess", "processReaperExecutor", f -> {
+        String executorClassHolder = JavaVersionUtil.JAVA_SPEC <= 8 ? "java.lang.UNIXProcess" : "java.lang.ProcessHandleImpl";
+
+        withGlobalStaticField(executorClassHolder, "processReaperExecutor", f -> {
             ThreadPoolExecutor executor = (ThreadPoolExecutor) f.get(null);
             final ThreadFactory factory = executor.getThreadFactory();
             executor.setThreadFactory(r -> {
@@ -299,8 +308,8 @@ public final class NativeImageBuildServer {
                 sendExitStatus(output, 0);
                 return false;
             case GET_VERSION:
-                log("Received 'version' request. Responding with " + System.getProperty(SUBSTRATEVM_VERSION_PROPERTY) + ".\n");
-                SubstrateServerMessage.send(new SubstrateServerMessage(serverCommand.command, System.getProperty(SUBSTRATEVM_VERSION_PROPERTY).getBytes()), output);
+                log("Received 'version' request. Responding with " + System.getProperty(GRAALVM_VERSION_PROPERTY) + ".\n");
+                SubstrateServerMessage.send(new SubstrateServerMessage(serverCommand.command, System.getProperty(GRAALVM_VERSION_PROPERTY).getBytes()), output);
                 return Instant.now().isBefore(lastKeepAliveAction.plus(Duration.ofMinutes(TIMEOUT_MINUTES)));
             case BUILD_IMAGE:
                 try {
@@ -312,7 +321,7 @@ public final class NativeImageBuildServer {
                         sendExitStatus(output, -1);
                     } else {
                         log("Starting compilation for request:\n%s\n", serverCommand.payloadString());
-                        final ArrayList<String> arguments = new ArrayList<>(Arrays.asList(serverCommand.payloadString().split("\\s+?")));
+                        final ArrayList<String> arguments = new ArrayList<>(Arrays.asList(serverCommand.payloadString().split("\n")));
 
                         errorJSONStream.writingInterrupted(false);
                         errorJSONStream.setOriginal(socket.getOutputStream());
@@ -378,10 +387,10 @@ public final class NativeImageBuildServer {
 
     private static Integer executeCompilation(ArrayList<String> arguments) {
         final String[] classpath = NativeImageGeneratorRunner.extractImageClassPath(arguments);
-        URLClassLoader imageClassLoader;
+        NativeImageClassLoader imageClassLoader;
         ClassLoader applicationClassLoader = Thread.currentThread().getContextClassLoader();
         try {
-            imageClassLoader = NativeImageGeneratorRunner.installURLClassLoader(classpath);
+            imageClassLoader = NativeImageGeneratorRunner.installNativeImageClassLoader(classpath);
             final ImageBuildTask task = loadCompilationTask(arguments, imageClassLoader);
             try {
                 tasks.add(task);
@@ -412,6 +421,7 @@ public final class NativeImageBuildServer {
             System.setOut(previousOut);
             System.setErr(previousErr);
             resetGlobalStateInLoggers();
+            resetGlobalStateMXBeanLookup();
             resetResourceBundle();
             resetGlobalStateInGraal();
             withGlobalStaticField("java.lang.ApplicationShutdownHooks", "hooks", f -> {
@@ -423,6 +433,27 @@ public final class NativeImageBuildServer {
                 });
             });
         }
+    }
+
+    private static void resetGlobalStateMXBeanLookup() {
+        withGlobalStaticField("com.sun.jmx.mbeanserver.MXBeanLookup", "currentLookup", f -> {
+            ThreadLocal<?> currentLookup = (ThreadLocal<?>) f.get(null);
+            currentLookup.remove();
+        });
+        withGlobalStaticField("com.sun.jmx.mbeanserver.MXBeanLookup", "mbscToLookup", f -> {
+            try {
+                Object mbscToLookup = f.get(null);
+                Map<?, ?> map = ReflectionUtil.readField(Class.forName("com.sun.jmx.mbeanserver.WeakIdentityHashMap"), "map", mbscToLookup);
+                map.clear();
+                ReferenceQueue<?> refQueue = ReflectionUtil.readField(Class.forName("com.sun.jmx.mbeanserver.WeakIdentityHashMap"), "refQueue", mbscToLookup);
+                Reference<?> ref;
+                do {
+                    ref = refQueue.poll();
+                } while (ref != null);
+            } catch (ClassNotFoundException e) {
+                throw VMError.shouldNotReachHere(e);
+            }
+        });
     }
 
     private static void resetGlobalStateInLoggers() {
@@ -441,20 +472,22 @@ public final class NativeImageBuildServer {
     }
 
     private static boolean isSystemLoaderLogLevelEntry(Entry<?, ?> e) {
-        return ((List<?>) e.getValue()).stream()
-                        .map(x -> getFieldValueOfObject("java.util.logging.Level$KnownLevel", "levelObject", x))
-                        .allMatch(NativeImageBuildServer::isSystemClassLoader);
+        if (JavaVersionUtil.JAVA_SPEC <= 8) {
+            return ((List<?>) e.getValue()).stream()
+                            .map(x -> getFieldValueOfObject("java.util.logging.Level$KnownLevel", "levelObject", x))
+                            .allMatch(NativeImageBuildServer::isSystemClassLoader);
+        } else {
+            return ((List<?>) e.getValue()).stream()
+                            .map(x -> getFieldValueOfObject("java.util.logging.Level$KnownLevel", "mirroredLevel", x))
+                            .allMatch(NativeImageBuildServer::isSystemClassLoader);
+        }
     }
 
     private static Object getFieldValueOfObject(String className, String fieldName, Object o) {
         try {
-            Field field = Class.forName(className).getDeclaredField(fieldName);
-            field.setAccessible(true);
-            Object res = field.get(o);
-            field.setAccessible(false);
-            return res;
-        } catch (NoSuchFieldException | ClassNotFoundException | IllegalAccessException e) {
-            throw VMError.shouldNotReachHere("Static field " + fieldName + " of class " + className + " can't be reset. Underlying exception: " + e.getMessage());
+            return ReflectionUtil.readField(Class.forName(className), fieldName, o);
+        } catch (ClassNotFoundException ex) {
+            throw VMError.shouldNotReachHere(ex);
         }
     }
 
@@ -470,12 +503,10 @@ public final class NativeImageBuildServer {
 
     private static void withGlobalStaticField(String className, String fieldName, FieldAction action) {
         try {
-            Field field = Class.forName(className).getDeclaredField(fieldName);
-            field.setAccessible(true);
+            Field field = ReflectionUtil.lookupField(Class.forName(className), fieldName);
             action.perform(field);
-            field.setAccessible(false);
-        } catch (NoSuchFieldException | ClassNotFoundException | IllegalAccessException e) {
-            throw VMError.shouldNotReachHere("Static field " + fieldName + " of class " + className + " can't be reset. Underlying exception: " + e.getMessage());
+        } catch (ClassNotFoundException | IllegalAccessException ex) {
+            throw VMError.shouldNotReachHere(ex);
         }
     }
 
@@ -502,10 +533,10 @@ public final class NativeImageBuildServer {
         final String task = taskParameter.get().substring(TASK_PREFIX.length());
         try {
             Class<?> imageTaskClass = Class.forName(task, true, classLoader);
-            return (ImageBuildTask) imageTaskClass.newInstance();
+            return (ImageBuildTask) imageTaskClass.getDeclaredConstructor().newInstance();
         } catch (ClassNotFoundException e) {
             throw UserError.abort("image building task " + task + " can not be found. Make sure that " + task + " is present on the classpath.");
-        } catch (InstantiationException | IllegalAccessException e) {
+        } catch (IllegalArgumentException | InstantiationException | InvocationTargetException | NoSuchMethodException | IllegalAccessException e) {
             throw UserError.abort("image building task " + task + " must have a public constructor without parameters.");
         }
     }

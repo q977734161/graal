@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,7 @@
  */
 package org.graalvm.compiler.java;
 
-import static org.graalvm.compiler.nodes.cfg.ControlFlowGraph.multiplyProbabilities;
+import static org.graalvm.compiler.nodes.cfg.ControlFlowGraph.multiplyRelativeFrequencies;
 
 import java.util.List;
 
@@ -73,17 +75,17 @@ public final class ComputeLoopFrequenciesClosure extends ReentrantNodeIterator.N
     protected EconomicMap<LoopExitNode, Double> processLoop(LoopBeginNode loop, Double initialState) {
         EconomicMap<LoopExitNode, Double> exitStates = ReentrantNodeIterator.processLoop(this, loop, 1D).exitStates;
 
-        double exitProbability = 0.0;
+        double exitRelativeFrequency = 0.0;
         for (double d : exitStates.getValues()) {
-            exitProbability += d;
+            exitRelativeFrequency += d;
         }
-        exitProbability = Math.min(1.0, exitProbability);
-        exitProbability = Math.max(ControlFlowGraph.MIN_PROBABILITY, exitProbability);
-        double loopFrequency = 1.0 / exitProbability;
+        exitRelativeFrequency = Math.min(1.0, exitRelativeFrequency);
+        exitRelativeFrequency = Math.max(ControlFlowGraph.MIN_RELATIVE_FREQUENCY, exitRelativeFrequency);
+        double loopFrequency = 1.0 / exitRelativeFrequency;
         loop.setLoopFrequency(loopFrequency);
 
         double adjustmentFactor = initialState * loopFrequency;
-        exitStates.replaceAll((exitNode, probability) -> multiplyProbabilities(probability, adjustmentFactor));
+        exitStates.replaceAll((exitNode, frequency) -> multiplyRelativeFrequencies(frequency, adjustmentFactor));
 
         return exitStates;
     }

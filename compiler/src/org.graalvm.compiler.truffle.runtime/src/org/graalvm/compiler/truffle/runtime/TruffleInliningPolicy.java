@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,11 +25,39 @@
 package org.graalvm.compiler.truffle.runtime;
 
 import com.oracle.truffle.api.CompilerOptions;
+import org.graalvm.options.OptionKey;
 
 public interface TruffleInliningPolicy {
+
+    enum FailedReason {
+        REASON_RECURSION("number of recursions > ", PolyglotCompilerOptions.InliningRecursionDepth),
+        REASON_MAXIMUM_NODE_COUNT("deepNodeCount * callSites > ", PolyglotCompilerOptions.InliningNodeBudget),
+        REASON_MAXIMUM_TOTAL_NODE_COUNT("totalNodeCount > ", PolyglotCompilerOptions.InliningNodeBudget);
+
+        private final String start;
+        private final OptionKey<Integer> option;
+
+        FailedReason(String start, OptionKey<Integer> option) {
+            this.start = start;
+            this.option = option;
+        }
+
+        String format(OptimizedCallTarget target) {
+            return start + target.getOptionValue(option);
+        }
+    }
 
     boolean isAllowed(TruffleInliningProfile profile, int currentNodeCount, CompilerOptions options);
 
     double calculateScore(TruffleInliningProfile profile);
 
+    @SuppressWarnings("unused")
+    static TruffleInliningPolicy getInliningPolicy() {
+        return new DefaultInliningPolicy();
+    }
+
+    @SuppressWarnings("unused")
+    static TruffleInliningPolicy getNoInliningPolicy() {
+        return new NoInliningPolicy();
+    }
 }

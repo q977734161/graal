@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,19 +32,19 @@ import org.graalvm.compiler.graph.NodeSourcePosition;
 
 public final class SubstrateCompilationResult extends CompilationResult {
 
-    private List<NodeSourcePosition> deoptimzationSourcePositions;
+    private List<NodeSourcePosition> deoptimizationSourcePositions;
 
     public SubstrateCompilationResult(CompilationIdentifier compilationId, String name) {
         super(compilationId, name);
     }
 
-    public List<NodeSourcePosition> getDeoptimzationSourcePositions() {
-        return deoptimzationSourcePositions;
+    public List<NodeSourcePosition> getDeoptimizationSourcePositions() {
+        return deoptimizationSourcePositions;
     }
 
-    public void setDeoptimzationSourcePositions(List<NodeSourcePosition> deoptimzationSourcePositions) {
-        assert this.deoptimzationSourcePositions == null;
-        assert deoptimzationSourcePositions.get(0) == null : "First index is reserved for unknown source positions";
-        this.deoptimzationSourcePositions = deoptimzationSourcePositions;
+    public void setDeoptimizationSourcePositions(List<NodeSourcePosition> deoptimizationSourcePositions) {
+        assert this.deoptimizationSourcePositions == null;
+        assert deoptimizationSourcePositions.get(0) == null : "First index is reserved for unknown source positions";
+        this.deoptimizationSourcePositions = deoptimizationSourcePositions;
     }
 }

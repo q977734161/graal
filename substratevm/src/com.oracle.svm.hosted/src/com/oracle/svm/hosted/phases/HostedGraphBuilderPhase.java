@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,7 +27,6 @@ package com.oracle.svm.hosted.phases;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.core.common.type.StampPair;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.java.BytecodeParser;
@@ -47,8 +48,8 @@ import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
-import org.graalvm.compiler.nodes.spi.StampProvider;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
+import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.word.WordTypes;
 
 import com.oracle.svm.core.code.FrameInfoEncoder;
@@ -59,16 +60,14 @@ import com.oracle.svm.hosted.nodes.DeoptProxyNode;
 import com.oracle.svm.hosted.nodes.SubstrateMethodCallTargetNode;
 import com.oracle.svm.hosted.phases.SubstrateGraphBuilderPhase.SubstrateBytecodeParser;
 
-import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaTypeProfile;
-import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class HostedGraphBuilderPhase extends SubstrateGraphBuilderPhase {
 
-    public HostedGraphBuilderPhase(MetaAccessProvider metaAccess, StampProvider stampProvider, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider,
-                    GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts, IntrinsicContext initialIntrinsicContext, WordTypes wordTypes) {
-        super(metaAccess, stampProvider, constantReflection, constantFieldProvider, graphBuilderConfig, optimisticOpts, initialIntrinsicContext, wordTypes, null);
+    public HostedGraphBuilderPhase(Providers providers, GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts, IntrinsicContext initialIntrinsicContext,
+                    WordTypes wordTypes) {
+        super(providers, graphBuilderConfig, optimisticOpts, initialIntrinsicContext, wordTypes);
     }
 
     @Override
@@ -85,7 +84,7 @@ class HostedBytecodeParser extends SubstrateBytecodeParser {
     private Map<Long, DeoptProxyAnchorNode> deoptEntries = new HashMap<>();
 
     HostedBytecodeParser(GraphBuilderPhase.Instance graphBuilderInstance, StructuredGraph graph, BytecodeParser parent, ResolvedJavaMethod method, int entryBCI, IntrinsicContext intrinsicContext) {
-        super(graphBuilderInstance, graph, parent, method, entryBCI, intrinsicContext);
+        super(graphBuilderInstance, graph, parent, method, entryBCI, intrinsicContext, true);
     }
 
     @Override
@@ -156,13 +155,14 @@ class HostedBytecodeParser extends SubstrateBytecodeParser {
      * Insert a deopt entry for the graph's start node.
      */
     @Override
-    protected void finishPrepare(FixedWithNextNode startInstr, int bci) {
-        super.finishPrepare(startInstr, bci);
+    protected void finishPrepare(FixedWithNextNode startInstr, int bci, FrameStateBuilder state) {
+        super.finishPrepare(startInstr, bci, state);
 
         if (getMethod().compilationInfo.isDeoptEntry(bci, false, false)) {
             DeoptEntryNode deoptEntry = append(new DeoptEntryNode());
             deoptEntry.setStateAfter(frameState.create(bci, deoptEntry));
             deoptEntries.put(Long.valueOf(bci), deoptEntry);
+            insertProxies(deoptEntry, state);
         }
     }
 

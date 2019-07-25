@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,27 +28,32 @@ import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointe
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readReturnAddress;
 
 import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.management.MalformedObjectNameException;
+import javax.management.MBeanNotificationInfo;
+import javax.management.NotificationEmitter;
+import javax.management.NotificationFilter;
+import javax.management.NotificationListener;
 import javax.management.ObjectName;
 
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Feature.FeatureAccess;
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.nativeimage.c.function.CodePointer;
+import org.graalvm.nativeimage.hosted.Feature.FeatureAccess;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AlwaysInline;
+import com.oracle.svm.core.annotate.NeverInline;
 import com.oracle.svm.core.annotate.RestrictHeapAccess;
 import com.oracle.svm.core.heap.AllocationFreeList;
 import com.oracle.svm.core.heap.AllocationFreeList.PreviouslyRegisteredElementException;
@@ -59,16 +66,24 @@ import com.oracle.svm.core.heap.NoAllocationVerifier;
 import com.oracle.svm.core.heap.ObjectReferenceWalker;
 import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jdk.SunMiscSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.os.CommittedMemoryProvider;
+import com.oracle.svm.core.snippets.ImplicitExceptions;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
+import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.VMError;
+import com.sun.management.GcInfo;
+
+//Checkstyle: stop
+import sun.management.Util;
+//Checkstyle: resume
 
 public class GCImpl implements GC {
 
@@ -178,6 +193,8 @@ public class GCImpl implements GC {
         this.watchersAfterTimer = new Timer("watchersAfter");
         this.mutatorTimer = new Timer("Mutator");
         this.walkRegisteredMemoryTimer = new Timer("walkRegisteredMemory");
+
+        RuntimeSupport.getRuntimeSupport().addShutdownHook(this::printGCSummary);
     }
 
     /*
@@ -238,12 +255,7 @@ public class GCImpl implements GC {
         visitWatchersBefore();
 
         /* Collect. */
-        try {
-            collectImpl(cause);
-        } catch (Throwable t) {
-            /* Exceptions during collections are fatal. */
-            throw VMError.shouldNotReachHere(t);
-        }
+        collectImpl(cause);
 
         /* Check if out of memory. */
         final OutOfMemoryError result = checkIfOutOfMemory();
@@ -340,7 +352,7 @@ public class GCImpl implements GC {
             verboseGCLog.string("     AlignedChunkSize: ").unsigned(HeapPolicy.getAlignedHeapChunkSize()).newline();
             verboseGCLog.string("  LargeArrayThreshold: ").unsigned(HeapPolicy.getLargeArrayThreshold()).string("]").newline();
             if (HeapOptions.PrintHeapShape.getValue()) {
-                HeapImpl.getHeapImpl().bootImageHeapBoundariesToLog(verboseGCLog);
+                HeapImpl.getHeapImpl().bootImageHeapBoundariesToLog(verboseGCLog).newline();
             }
         }
 
@@ -414,7 +426,6 @@ public class GCImpl implements GC {
         final HeapImpl heap = HeapImpl.getHeapImpl();
         final OldGeneration oldGen = heap.getOldGeneration();
         assert oldGen.getToSpace().isEmpty() : "oldGen.getToSpace() should be empty before a collection.";
-        assert oldGen.getPinnedToSpace().isEmpty() : "oldGen.getPinnedToSpace() should be empty before a collection.";
     }
 
     private void postcondition() {
@@ -425,7 +436,6 @@ public class GCImpl implements GC {
         verbosePostCondition();
         assert youngGen.getSpace().isEmpty() : "youngGen.getSpace() should be empty after a collection.";
         assert oldGen.getToSpace().isEmpty() : "oldGen.getToSpace() should be empty after a collection.";
-        assert oldGen.getPinnedToSpace().isEmpty() : "oldGen.getPinnedToSpace() should be empty after a collection.";
     }
 
     private void verbosePostCondition() {
@@ -466,20 +476,6 @@ public class GCImpl implements GC {
                 heap.verifyAfterGC("because oldGen toSpace is not empty", getCollectionEpoch());
                 witness.string("]").newline();
             }
-            if ((!oldGen.getPinnedToSpace().isEmpty()) || forceForTesting) {
-                witness.string("[GCImpl.postcondition: oldGen pinnedToSpace should be empty after a collection.").newline();
-                /* Print raw fields before trying to walk the chunk lists. */
-                witness.string("  These should all be 0:").newline();
-                witness.string("    oldGen pinnedToSpace first AlignedChunk:   ").hex(oldGen.getPinnedToSpace().getFirstAlignedHeapChunk()).newline();
-                witness.string("    oldGen pinnedToSpace last  AlignedChunk:   ").hex(oldGen.getPinnedToSpace().getLastAlignedHeapChunk()).newline();
-                witness.string("    oldGen pinnedToSpace first UnalignedChunk: ").hex(oldGen.getPinnedToSpace().getFirstUnalignedHeapChunk()).newline();
-                witness.string("    oldGen pinnedToSpace last  UnalignedChunk: ").hex(oldGen.getPinnedToSpace().getLastUnalignedHeapChunk()).newline();
-                oldGen.getPinnedToSpace().report(witness, true).newline();
-                oldGen.getPinnedFromSpace().report(witness, true).newline();
-                witness.string("  verifying the heap:");
-                heap.verifyAfterGC("because oldGen pinnedToSpace is not empty", getCollectionEpoch());
-                witness.string("]").newline();
-            }
         }
     }
 
@@ -496,7 +492,7 @@ public class GCImpl implements GC {
 
     @Fold
     static boolean runtimeAssertions() {
-        return SubstrateOptions.RuntimeAssertions.getValue() && SubstrateOptions.getRuntimeAssertionsFilter().test(GCImpl.class.getName());
+        return SubstrateOptions.getRuntimeAssertionsForClass(GCImpl.class.getName());
     }
 
     @Override
@@ -555,12 +551,6 @@ public class GCImpl implements GC {
         final Log trace = Log.noopLog().string("[GCImpl.cheneyScanFromRoots:").newline();
 
         try (Timer csfrt = cheneyScanFromRootsTimer.open()) {
-            /* Prepare to use the GreyToBlack visitors. */
-            final boolean objectVisitorPrologue = greyToBlackObjectVisitor.prologue();
-            assert objectVisitorPrologue : "greyToBlackObjectVisitor prologue fails";
-            final boolean objRefVisitorPrologue = greyToBlackObjRefVisitor.prologue();
-            assert objRefVisitorPrologue : "greyToBlackObjRefVisitor prologue fails";
-
             /* Take a snapshot of the heap so that I can visit all the promoted Objects. */
             /*
              * Debugging tip: I could move the taking of the snapshot and the scanning of grey
@@ -573,7 +563,7 @@ public class GCImpl implements GC {
              * Make sure all chunks with pinned objects are in toSpace, and any formerly pinned
              * objects are in fromSpace.
              */
-            promoteAllPinnedObjects();
+            promoteIndividualPinnedObjects();
 
             /*
              * Stack references are grey at the beginning of a collection, so I need to blacken
@@ -593,11 +583,8 @@ public class GCImpl implements GC {
             /* Visit all the Objects promoted since the snapshot. */
             scanGreyObjects();
 
-            /* Reset the GreyToBlackVisitors. */
-            final boolean objRefVisitorEpilogue = greyToBlackObjRefVisitor.epilogue();
-            assert objRefVisitorEpilogue : "greyToBlackObjRefVisitor epilogue fails";
-            final boolean objectVisitorEpilogue = greyToBlackObjectVisitor.epilogue();
-            assert objectVisitorEpilogue : "greyToBlackObjectVisitor epilogue fails";
+            /* Reset the GreyToBlackVisitor. */
+            greyToBlackObjectVisitor.reset();
         }
 
         trace.string("]").newline();
@@ -618,12 +605,6 @@ public class GCImpl implements GC {
 
             oldGen.emptyFromSpaceIntoToSpace();
 
-            /* Prepare to use the GreyToBlack visitors. */
-            final boolean objectVisitorPrologue = greyToBlackObjectVisitor.prologue();
-            assert objectVisitorPrologue : "greyToBlackObjectVisitor prologue fails";
-            final boolean objRefVisitorPrologue = greyToBlackObjRefVisitor.prologue();
-            assert objRefVisitorPrologue : "greyToBlackObjRefVisitor prologue fails";
-
             /* Take a snapshot of the heap so that I can visit all the promoted Objects. */
             /*
              * Debugging tip: I could move the taking of the snapshot and the scanning of grey
@@ -633,18 +614,17 @@ public class GCImpl implements GC {
             prepareForPromotion();
 
             /*
-             * Make sure all chunks with pinned Objects are in pinned toSpace, and any released
-             * objects are in toSpace (because this is an incremental collection). I do this before
-             * blackening any roots to make sure the Objects in pinned chunks are moved as chunks,
-             * not promoted by roots as individual objects. This makes the objects in those chunks
-             * grey.
+             * Make sure any released objects are in toSpace (because this is an incremental
+             * collection). I do this before blackening any roots to make sure the chunks with
+             * pinned objects are moved entirely, as opposed to promoting the objects individually
+             * by roots. This makes the objects in those chunks grey.
              */
-            promoteAllPinnedObjects();
+            promoteIndividualPinnedObjects();
 
             /*
-             * Blacken Objects that are dirty roots. There are dirty cards in ToSpace and
-             * PinnedToSpace. Do this early so I don't have to walk the cards of individually
-             * promoted objects, which will be visited by the grey object scanner.
+             * Blacken Objects that are dirty roots. There are dirty cards in ToSpace. Do this early
+             * so I don't have to walk the cards of individually promoted objects, which will be
+             * visited by the grey object scanner.
              */
             blackenDirtyCardRoots();
 
@@ -666,54 +646,41 @@ public class GCImpl implements GC {
             /* Visit all the Objects promoted since the snapshot, transitively. */
             scanGreyObjects();
 
-            /* Reset the GreyToBlackVisitors. */
-            final boolean objRefVisitorEpilogue = greyToBlackObjRefVisitor.epilogue();
-            assert objRefVisitorEpilogue : "greyToBlackObjRefVisitor epilogue fails";
-            final boolean objectVisitorEpilogue = greyToBlackObjectVisitor.epilogue();
-            assert objectVisitorEpilogue : "greyToBlackObjectVisitor epilogue fails";
+            /* Reset the GreyToBlackVisitor. */
+            greyToBlackObjectVisitor.reset();
         }
 
         trace.string("]").newline();
     }
 
     @SuppressWarnings("try")
-    private void promoteAllPinnedObjects() {
-        final Log trace = Log.noopLog().string("[GCImpl.promoteAllPinnedObjects:").newline();
-        try (Timer ppot = promotePinnedObjectsTimer.open()) {
-            promoteIndividualPinnedObjects();
-            promotePinnedAllocatorObjects(completeCollection);
-        }
-        trace.string("]").newline();
-    }
-
-    private static void promoteIndividualPinnedObjects() {
+    private void promoteIndividualPinnedObjects() {
         final Log trace = Log.noopLog().string("[GCImpl.promoteIndividualPinnedObjects:").newline();
-        /* Capture the PinnedObject list and start a new one. */
-        final PinnedObjectImpl oldList = PinnedObjectImpl.claimPinnedObjectList();
-        /* Walk the list, dealing with the open PinnedObjects. */
-        PinnedObjectImpl rest = oldList;
-        while (rest != null) {
-            final PinnedObjectImpl first = rest;
-            final PinnedObjectImpl next = first.getNext();
-            if (first.isOpen()) {
-                /* Promote the chunk with the object, and put this PinnedObject on the new list. */
-                promotePinnedObject(first);
-                /* Pushing onto the new list reverses the order of the list. */
-                PinnedObjectImpl.pushPinnedObject(first);
+        try (Timer ppot = promotePinnedObjectsTimer.open()) {
+            /* Capture the PinnedObject list and start a new one. */
+            final PinnedObjectImpl oldList = PinnedObjectImpl.claimPinnedObjectList();
+            /* Walk the list, dealing with the open PinnedObjects. */
+            PinnedObjectImpl rest = oldList;
+            while (rest != null) {
+                final PinnedObjectImpl first = rest;
+                final PinnedObjectImpl next = first.getNext();
+                if (first.isOpen()) {
+                    /*
+                     * Promote the chunk with the object, and put this PinnedObject on the new list.
+                     */
+                    promotePinnedObject(first);
+                    /* Pushing onto the new list reverses the order of the list. */
+                    PinnedObjectImpl.pushPinnedObject(first);
+                }
+                rest = next;
             }
-            rest = next;
         }
         trace.string("]").newline();
     }
 
-    private static void promotePinnedAllocatorObjects(final boolean completeCollection) {
-        final Log trace = Log.noopLog().string("[GCImpl.promotePinnedAllocatorObjects:").newline();
-        final HeapImpl heap = HeapImpl.getHeapImpl();
-        final OldGeneration oldGeneration = heap.getOldGeneration();
-        oldGeneration.promotePinnedAllocatorChunks(completeCollection);
-        trace.string("]").newline();
-    }
-
+    @NeverInline("Starting a stack walk in the caller frame. " +
+                    "Note that we could start the stack frame also further down the stack, because GC stack frames must not access any objects that are processed by the GC. " +
+                    "But we don't store stack frame information for the first frame we would need to process.")
     @SuppressWarnings("try")
     private void blackenStackRoots() {
         final Log trace = Log.noopLog().string("[GCImpl.blackenStackRoots:").newline();
@@ -722,14 +689,14 @@ public class GCImpl implements GC {
             trace.string("[blackenStackRoots:").string("  sp: ").hex(sp);
             CodePointer ip = readReturnAddress();
             trace.string("  ip: ").hex(ip).newline();
-            JavaStackWalker.walkCurrentThread(sp, ip, frameWalker);
+            JavaStackWalker.walkCurrentThread(sp, frameWalker);
             if (SubstrateOptions.MultiThreaded.getValue()) {
                 /*
                  * Scan the stacks of all the threads. Other threads will be blocked at a safepoint
                  * (or in native code) so they will each have a JavaFrameAnchor in their VMThread.
                  */
                 for (IsolateThread vmThread = VMThreads.firstThread(); VMThreads.isNonNullThread(vmThread); vmThread = VMThreads.nextThread(vmThread)) {
-                    if (vmThread == CEntryPointContext.getCurrentIsolateThread()) {
+                    if (vmThread == CurrentIsolate.getCurrentThread()) {
                         /*
                          * The current thread is already scanned by code above, so we do not have to
                          * do anything for it here. It might have a JavaFrameAnchor from earlier
@@ -892,10 +859,32 @@ public class GCImpl implements GC {
      * on, and only put out one report per collection.
      */
     void possibleCollectionEpilogue(UnsignedWord requestingEpoch) {
-        if (requestingEpoch.belowThan(getCollectionEpoch())) {
-            SunMiscSupport.drainCleanerQueue();
-            visitWatchersReport();
+        if (requestingEpoch.aboveOrEqual(getCollectionEpoch())) {
+            /* No GC happened, so do not run any epilogue. */
+            return;
+
+        } else if (VMOperation.isInProgress()) {
+            /*
+             * We are inside a VMOperation where we are not allowed to do certain things, e.g.,
+             * perform a synchronization (because it can deadlock when a lock is held outside the
+             * VMOperation).
+             *
+             * Note that the GC operation we are running the epilogue for is no longer in progress,
+             * otherwise this check would always return.
+             */
+            return;
+
+        } else if (!JavaThreads.currentJavaThreadInitialized()) {
+            /*
+             * Too early in the attach sequence of a thread to do anything useful, e.g., perform a
+             * synchronization. Probably the allocation slow path for the first allocation of that
+             * thread caused this epilogue.
+             */
+            return;
         }
+
+        SunMiscSupport.drainCleanerQueue();
+        visitWatchersReport();
     }
 
     /* Collection counting. */
@@ -1140,7 +1129,6 @@ public class GCImpl implements GC {
         private long completeCollectionCount;
         private long completeCollectionTotalNanos;
         private UnsignedWord collectedTotalChunkBytes;
-        private UnsignedWord pinnedChunkBytes;
         private UnsignedWord normalChunkBytes;
         private UnsignedWord promotedTotalChunkBytes;
         private UnsignedWord copiedTotalChunkBytes;
@@ -1148,14 +1136,10 @@ public class GCImpl implements GC {
         private UnsignedWord youngChunkBytesBefore;
         private UnsignedWord oldChunkBytesBefore;
         private UnsignedWord oldChunkBytesAfter;
-        private UnsignedWord pinnedChunkBytesBefore;
-        private UnsignedWord pinnedChunkBytesAfter;
         /* History of promotions and copies. */
         private int history;
         private UnsignedWord[] promotedUnpinnedChunkBytes;
-        private UnsignedWord[] promotedPinnedChunkBytes;
         private UnsignedWord[] copiedUnpinnedChunkBytes;
-        private UnsignedWord[] copiedPinnedChunkBytes;
         /*
          * Bytes allocated in Objects, as opposed to bytes of chunks. These are only maintained if
          * -R:+PrintGCSummary because they are expensive.
@@ -1164,9 +1148,6 @@ public class GCImpl implements GC {
         private UnsignedWord youngObjectBytesBefore;
         private UnsignedWord oldObjectBytesBefore;
         private UnsignedWord oldObjectBytesAfter;
-        private UnsignedWord pinnedObjectBytesBefore;
-        private UnsignedWord pinnedObjectBytesAfter;
-        private UnsignedWord pinnedObjectBytes;
         private UnsignedWord normalObjectBytes;
 
         @Platforms(Platform.HOSTED_ONLY.class)
@@ -1175,7 +1156,6 @@ public class GCImpl implements GC {
             this.incrementalCollectionTotalNanos = 0L;
             this.completeCollectionCount = 0L;
             this.completeCollectionTotalNanos = 0L;
-            this.pinnedChunkBytes = WordFactory.zero();
             this.normalChunkBytes = WordFactory.zero();
             this.promotedTotalChunkBytes = WordFactory.zero();
             this.collectedTotalChunkBytes = WordFactory.zero();
@@ -1184,21 +1164,14 @@ public class GCImpl implements GC {
             this.youngChunkBytesBefore = WordFactory.zero();
             this.oldChunkBytesBefore = WordFactory.zero();
             this.oldChunkBytesAfter = WordFactory.zero();
-            this.pinnedChunkBytesBefore = WordFactory.zero();
-            this.pinnedChunkBytesAfter = WordFactory.zero();
             /* Initialize histories. */
             this.promotedUnpinnedChunkBytes = historyFactory(WordFactory.zero());
-            this.promotedPinnedChunkBytes = historyFactory(WordFactory.zero());
             this.copiedUnpinnedChunkBytes = historyFactory(WordFactory.zero());
-            this.copiedPinnedChunkBytes = historyFactory(WordFactory.zero());
             /* Object bytes, if requested. */
             this.collectedTotalObjectBytes = WordFactory.zero();
             this.youngObjectBytesBefore = WordFactory.zero();
             this.oldObjectBytesBefore = WordFactory.zero();
             this.oldObjectBytesAfter = WordFactory.zero();
-            this.pinnedObjectBytesBefore = WordFactory.zero();
-            this.pinnedObjectBytesAfter = WordFactory.zero();
-            this.pinnedObjectBytes = WordFactory.zero();
             this.normalObjectBytes = WordFactory.zero();
         }
 
@@ -1217,10 +1190,6 @@ public class GCImpl implements GC {
 
         long getIncrementalCollectionTotalNanos() {
             return incrementalCollectionTotalNanos;
-        }
-
-        UnsignedWord getPinnedChunkBytes() {
-            return pinnedChunkBytes;
         }
 
         UnsignedWord getNormalChunkBytes() {
@@ -1251,35 +1220,18 @@ public class GCImpl implements GC {
             return collectedTotalObjectBytes;
         }
 
-        UnsignedWord getPinnedObjectBytes() {
-            return pinnedObjectBytes;
-        }
-
         UnsignedWord getNormalObjectBytes() {
             return normalObjectBytes;
         }
 
-        UnsignedWord getPinnedChunkBytesAfter() {
-            return pinnedChunkBytesAfter;
-        }
-
-        UnsignedWord getPinnedObjectBytesAfter() {
-            return pinnedObjectBytesAfter;
-        }
-
         /** Bytes held in the old generation. */
         UnsignedWord getOldGenerationAfterChunkBytes() {
-            return oldChunkBytesAfter.add(pinnedChunkBytesAfter);
+            return oldChunkBytesAfter;
         }
 
         /** Average promoted unpinned chunk bytes. */
         UnsignedWord averagePromotedUnpinnedChunkBytes() {
             return averageOfHistory(promotedUnpinnedChunkBytes);
-        }
-
-        /** Average promoted pinned chunk bytes. */
-        UnsignedWord averagePromotedPinnedChunkBytes() {
-            return averageOfHistory(promotedPinnedChunkBytes);
         }
 
         /* History methods. */
@@ -1358,29 +1310,16 @@ public class GCImpl implements GC {
             /* This is called before the collection, so OldSpace is FromSpace. */
             final Space oldSpace = heap.getOldGeneration().getFromSpace();
             oldChunkBytesBefore = oldSpace.getChunkBytes();
-            final Space pinnedSpace = heap.getOldGeneration().getPinnedFromSpace();
             /* Objects are allocated in the young generation. */
             normalChunkBytes = normalChunkBytes.add(youngChunkBytesBefore);
-            /*
-             * Pinned objects are *already* flushed from the thread-local allocation buffers to
-             * pinned space, so the `before` size is the previous `after` size.
-             */
-            pinnedChunkBytesBefore = pinnedChunkBytesAfter;
-            final UnsignedWord allocatedPinnedChunkBytes = pinnedSpace.getChunkBytes().subtract(pinnedChunkBytesBefore);
-            setHistoryOf(promotedPinnedChunkBytes, allocatedPinnedChunkBytes);
-            pinnedChunkBytes = pinnedChunkBytes.add(allocatedPinnedChunkBytes);
             /* Keep some aggregate metrics. */
             if (SubstrateOptions.PrintGCSummary.getValue()) {
                 youngObjectBytesBefore = youngSpace.getObjectBytes();
                 oldObjectBytesBefore = oldSpace.getObjectBytes();
-                pinnedObjectBytesBefore = pinnedObjectBytesAfter;
-                final UnsignedWord allocatedPinnedObjectBytes = pinnedSpace.getObjectBytes().subtract(pinnedObjectBytesBefore);
-                pinnedObjectBytes = pinnedObjectBytes.add(allocatedPinnedObjectBytes);
                 normalObjectBytes = normalObjectBytes.add(youngObjectBytesBefore);
             }
             trace.string("  youngChunkBytesBefore: ").unsigned(youngChunkBytesBefore)
-                            .string("  oldChunkBytesBefore: ").unsigned(oldChunkBytesBefore)
-                            .string("  pinnedChunkBytesBefore: ").unsigned(pinnedChunkBytesBefore);
+                            .string("  oldChunkBytesBefore: ").unsigned(oldChunkBytesBefore);
             trace.string("]").newline();
         }
 
@@ -1403,13 +1342,12 @@ public class GCImpl implements GC {
             afterCollectionCommon();
             /* Incremental collections only promote. */
             setHistoryOf(promotedUnpinnedChunkBytes, oldChunkBytesAfter.subtract(oldChunkBytesBefore));
-            promotedTotalChunkBytes = promotedTotalChunkBytes.add(getHistoryOf(promotedUnpinnedChunkBytes)).add(getHistoryOf(promotedPinnedChunkBytes));
+            promotedTotalChunkBytes = promotedTotalChunkBytes.add(getHistoryOf(promotedUnpinnedChunkBytes));
             incrementalCollectionTotalNanos += collectionTimer.getCollectedNanos();
             trace.string("  incrementalCollectionCount: ").signed(incrementalCollectionCount)
                             .string("  oldChunkBytesAfter: ").unsigned(oldChunkBytesAfter)
                             .string("  oldChunkBytesBefore: ").unsigned(oldChunkBytesBefore)
-                            .string("  promotedUnpinnedChunkBytes: ").unsigned(getHistoryOf(promotedUnpinnedChunkBytes))
-                            .string("  promotedPinnedChunkBytes: ").unsigned(getHistoryOf(promotedPinnedChunkBytes));
+                            .string("  promotedUnpinnedChunkBytes: ").unsigned(getHistoryOf(promotedUnpinnedChunkBytes));
             trace.string("]").newline();
         }
 
@@ -1419,12 +1357,10 @@ public class GCImpl implements GC {
             afterCollectionCommon();
             /* Complete collections only copy, and they copy everything. */
             setHistoryOf(copiedUnpinnedChunkBytes, oldChunkBytesAfter);
-            setHistoryOf(copiedPinnedChunkBytes, pinnedChunkBytesAfter);
-            copiedTotalChunkBytes = copiedTotalChunkBytes.add(oldChunkBytesAfter).add(pinnedChunkBytesAfter);
+            copiedTotalChunkBytes = copiedTotalChunkBytes.add(oldChunkBytesAfter);
             completeCollectionTotalNanos += collectionTimer.getCollectedNanos();
             trace.string("  completeCollectionCount: ").signed(completeCollectionCount)
-                            .string("  oldChunkBytesAfter: ").unsigned(oldChunkBytesAfter)
-                            .string("  pinnedChunkBytesAfter: ").unsigned(pinnedChunkBytesAfter);
+                            .string("  oldChunkBytesAfter: ").unsigned(oldChunkBytesAfter);
             trace.string("]").newline();
         }
 
@@ -1436,19 +1372,15 @@ public class GCImpl implements GC {
              */
             final Space oldSpace = heap.getOldGeneration().getFromSpace();
             oldChunkBytesAfter = oldSpace.getChunkBytes();
-            final Space pinnedSpace = heap.getOldGeneration().getPinnedFromSpace();
-            pinnedChunkBytesAfter = pinnedSpace.getChunkBytes();
-            final UnsignedWord beforeChunkBytes = youngChunkBytesBefore.add(oldChunkBytesBefore).add(pinnedChunkBytesBefore);
-            final UnsignedWord afterChunkBytes = oldChunkBytesAfter.add(pinnedChunkBytesAfter);
+            final UnsignedWord beforeChunkBytes = youngChunkBytesBefore.add(oldChunkBytesBefore);
+            final UnsignedWord afterChunkBytes = oldChunkBytesAfter;
             final UnsignedWord collectedChunkBytes = beforeChunkBytes.subtract(afterChunkBytes);
             collectedTotalChunkBytes = collectedTotalChunkBytes.add(collectedChunkBytes);
             if (SubstrateOptions.PrintGCSummary.getValue()) {
                 /* The young generation is empty after the collection. */
-                pinnedObjectBytesAfter = pinnedSpace.getObjectBytes();
                 oldObjectBytesAfter = oldSpace.getObjectBytes();
-                final UnsignedWord beforeObjectBytes = youngObjectBytesBefore.add(oldObjectBytesBefore).add(pinnedObjectBytesBefore);
-                final UnsignedWord afterObjectBytes = oldObjectBytesAfter.add(pinnedObjectBytesAfter);
-                final UnsignedWord collectedObjectBytes = beforeObjectBytes.subtract(afterObjectBytes);
+                final UnsignedWord beforeObjectBytes = youngObjectBytesBefore.add(oldObjectBytesBefore);
+                final UnsignedWord collectedObjectBytes = beforeObjectBytes.subtract(oldObjectBytesAfter);
                 collectedTotalObjectBytes = collectedTotalObjectBytes.add(collectedObjectBytes);
             }
         }
@@ -1617,7 +1549,22 @@ public class GCImpl implements GC {
         @Override
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate while collecting")
         public void operate() {
-            result = HeapImpl.getHeapImpl().getGCImpl().collectOperation(cause, requestingEpoch);
+            /*
+             * Exceptions during collections are fatal. The heap is likely in an inconsistent state.
+             * The GC must also be allocation free, i.e., we cannot allocate exception stack traces
+             * while in the GC. This is bad for diagnosing errors in the GC. To improve the
+             * situation a bit, we switch on the flag to make implicit exceptions such as
+             * NullPointerExceptions fatal errors. This ensures that we fail early at the place
+             * where the fatal error reporting can still dump the full stack trace.
+             */
+            ImplicitExceptions.activateImplicitExceptionsAreFatal();
+            try {
+                result = HeapImpl.getHeapImpl().getGCImpl().collectOperation(cause, requestingEpoch);
+            } catch (Throwable t) {
+                throw VMError.shouldNotReachHere(t);
+            } finally {
+                ImplicitExceptions.deactivateImplicitExceptionsAreFatal();
+            }
         }
 
         OutOfMemoryError getResult() {
@@ -1625,8 +1572,12 @@ public class GCImpl implements GC {
         }
     }
 
-    @Override
-    public void printGCSummary() {
+    /* Invoked by a shutdown hook registered in the GCImpl constructor. */
+    private void printGCSummary() {
+        if (!SubstrateOptions.PrintGCSummary.getValue()) {
+            return;
+        }
+
         final Log log = Log.log();
         final String prefix = "PrintGCSummary: ";
 
@@ -1636,33 +1587,22 @@ public class GCImpl implements GC {
         log.string(prefix).string("MaximumHeapSize: ").unsigned(HeapPolicy.getMaximumHeapSize()).newline();
         log.string(prefix).string("AlignedChunkSize: ").unsigned(HeapPolicy.getAlignedHeapChunkSize()).newline();
 
-        /* Add in any young and pinned objects allocated since the last collection. */
+        /* Add in any young objects allocated since the last collection. */
         VMOperation.enqueueBlockingSafepoint("PrintGCSummaryShutdownHook", ThreadLocalAllocation::disableThreadLocalAllocation);
         final HeapImpl heap = HeapImpl.getHeapImpl();
         final Space youngSpace = heap.getYoungGeneration().getSpace();
         final UnsignedWord youngChunkBytes = youngSpace.getChunkBytes();
         final UnsignedWord youngObjectBytes = youngSpace.getObjectBytes();
-        final Space pinnedSpace = heap.getOldGeneration().getPinnedFromSpace();
-        final UnsignedWord pinnedChunkBytes = pinnedSpace.getChunkBytes().subtract(accounting.getPinnedChunkBytesAfter());
-        final UnsignedWord pinnedObjectBytes = pinnedSpace.getObjectBytes().subtract(accounting.getPinnedObjectBytesAfter());
 
         /* Compute updated values. */
         final UnsignedWord allocatedNormalChunkBytes = accounting.getNormalChunkBytes().add(youngChunkBytes);
         final UnsignedWord allocatedNormalObjectBytes = accounting.getNormalObjectBytes().add(youngObjectBytes);
-        final UnsignedWord allocatedPinnedChunkBytes = accounting.getPinnedChunkBytes().add(pinnedChunkBytes);
-        final UnsignedWord allocatedPinnedObjectBytes = accounting.getPinnedObjectBytes().add(pinnedObjectBytes);
-        final UnsignedWord allocatedTotalChunkBytes = allocatedNormalChunkBytes.add(allocatedPinnedChunkBytes);
-        final UnsignedWord allocatedTotalObjectBytes = allocatedNormalObjectBytes.add(allocatedPinnedObjectBytes);
 
         /* Print the total bytes allocated and collected by chunks. */
         log.string(prefix).string("CollectedTotalChunkBytes: ").signed(accounting.getCollectedTotalChunkBytes()).newline();
         log.string(prefix).string("CollectedTotalObjectBytes: ").signed(accounting.getCollectedTotalObjectBytes()).newline();
         log.string(prefix).string("AllocatedNormalChunkBytes: ").signed(allocatedNormalChunkBytes).newline();
         log.string(prefix).string("AllocatedNormalObjectBytes: ").signed(allocatedNormalObjectBytes).newline();
-        log.string(prefix).string("AllocatedPinnedChunkBytes: ").signed(allocatedPinnedChunkBytes).newline();
-        log.string(prefix).string("AllocatedPinnedObjectBytes: ").signed(allocatedPinnedObjectBytes).newline();
-        log.string(prefix).string("AllocatedTotalChunkBytes: ").signed(allocatedTotalChunkBytes).newline();
-        log.string(prefix).string("AllocatedTotalObjectBytes: ").signed(allocatedTotalObjectBytes).newline();
 
         /* Print the collection counts and times. */
         final long incrementalNanos = accounting.getIncrementalCollectionTotalNanos();
@@ -1703,6 +1643,7 @@ final class GarbageCollectorManagementFactory {
 
     GarbageCollectorManagementFactory() {
         final List<GarbageCollectorMXBean> newList = new ArrayList<>();
+        /* Changing the order of this list will break assumptions we take in the object replacer. */
         newList.add(new IncrementalGarbageCollectorMXBean());
         newList.add(new CompleteGarbageCollectorMXBean());
         gcBeanList = newList;
@@ -1713,7 +1654,7 @@ final class GarbageCollectorManagementFactory {
     }
 
     /** A GarbageCollectorMXBean for the incremental collector. */
-    private static final class IncrementalGarbageCollectorMXBean implements GarbageCollectorMXBean {
+    private static final class IncrementalGarbageCollectorMXBean implements com.sun.management.GarbageCollectorMXBean, NotificationEmitter {
 
         private IncrementalGarbageCollectorMXBean() {
             /* Nothing to do. */
@@ -1738,6 +1679,7 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public String getName() {
+            /* Changing this name will break assumptions we take in the object replacer. */
             return "young generation scavenger";
         }
 
@@ -1748,16 +1690,34 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public ObjectName getObjectName() {
-            try {
-                return new ObjectName("java.lang:type=GarbageCollector,name=young generation scavenger");
-            } catch (MalformedObjectNameException mone) {
-                return null;
-            }
+            return Util.newObjectName(ManagementFactory.GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE, getName());
+        }
+
+        @Override
+        public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
+        }
+
+        @Override
+        public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
+        }
+
+        @Override
+        public void removeNotificationListener(NotificationListener listener) {
+        }
+
+        @Override
+        public MBeanNotificationInfo[] getNotificationInfo() {
+            return new MBeanNotificationInfo[0];
+        }
+
+        @Override
+        public GcInfo getLastGcInfo() {
+            return null;
         }
     }
 
     /** A GarbageCollectorMXBean for the complete collector. */
-    private static final class CompleteGarbageCollectorMXBean implements GarbageCollectorMXBean {
+    private static final class CompleteGarbageCollectorMXBean implements com.sun.management.GarbageCollectorMXBean, NotificationEmitter {
 
         private CompleteGarbageCollectorMXBean() {
             /* Nothing to do. */
@@ -1782,6 +1742,7 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public String getName() {
+            /* Changing this name will break assumptions we take in the object replacer. */
             return "complete scavenger";
         }
 
@@ -1792,11 +1753,29 @@ final class GarbageCollectorManagementFactory {
 
         @Override
         public ObjectName getObjectName() {
-            try {
-                return new ObjectName("java.lang:type=GarbageCollector,name=complete scavenger");
-            } catch (MalformedObjectNameException mone) {
-                return null;
-            }
+            return Util.newObjectName(ManagementFactory.GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE, getName());
+        }
+
+        @Override
+        public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
+        }
+
+        @Override
+        public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
+        }
+
+        @Override
+        public void removeNotificationListener(NotificationListener listener) {
+        }
+
+        @Override
+        public MBeanNotificationInfo[] getNotificationInfo() {
+            return new MBeanNotificationInfo[0];
+        }
+
+        @Override
+        public GcInfo getLastGcInfo() {
+            return null;
         }
     }
 }

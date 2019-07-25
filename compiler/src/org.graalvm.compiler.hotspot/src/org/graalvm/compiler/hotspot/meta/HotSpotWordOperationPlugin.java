@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -45,6 +47,7 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.calc.PointerEqualsNode;
+import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.memory.HeapAccess.BarrierType;
@@ -63,19 +66,19 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * Extends {@link WordOperationPlugin} to handle {@linkplain HotSpotOperation HotSpot word
  * operations}.
  */
-class HotSpotWordOperationPlugin extends WordOperationPlugin {
+public class HotSpotWordOperationPlugin extends WordOperationPlugin {
     HotSpotWordOperationPlugin(SnippetReflectionProvider snippetReflection, WordTypes wordTypes) {
         super(snippetReflection, wordTypes);
     }
 
     @Override
-    protected LoadIndexedNode createLoadIndexedNode(ValueNode array, ValueNode index) {
+    protected LoadIndexedNode createLoadIndexedNode(ValueNode array, ValueNode index, GuardingNode boundsCheck) {
         ResolvedJavaType arrayType = StampTool.typeOrNull(array);
         Stamp componentStamp = wordTypes.getWordStamp(arrayType.getComponentType());
         if (componentStamp instanceof MetaspacePointerStamp) {
-            return new LoadIndexedPointerNode(componentStamp, array, index);
+            return new LoadIndexedPointerNode(componentStamp, array, index, boundsCheck);
         } else {
-            return super.createLoadIndexedNode(array, index);
+            return super.createLoadIndexedNode(array, index, boundsCheck);
         }
     }
 
@@ -118,7 +121,7 @@ class HotSpotWordOperationPlugin extends WordOperationPlugin {
                 ValueNode pointer = args[0];
                 assert pointer.stamp(NodeView.DEFAULT) instanceof MetaspacePointerStamp;
 
-                LogicNode isNull = b.addWithInputs(IsNullNode.create(pointer));
+                LogicNode isNull = b.add(IsNullNode.create(pointer));
                 b.addPush(returnKind, ConditionalNode.create(isNull, b.add(forBoolean(true)), b.add(forBoolean(false)), NodeView.DEFAULT));
                 break;
 

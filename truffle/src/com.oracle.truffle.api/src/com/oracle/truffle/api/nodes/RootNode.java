@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.nodes;
 
@@ -29,19 +45,17 @@ import java.util.concurrent.locks.ReentrantLock;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerOptions;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.TruffleLanguage.ParsingRequest;
 import com.oracle.truffle.api.TruffleRuntime;
 import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.impl.Accessor.EngineSupport;
 import com.oracle.truffle.api.impl.DefaultCompilerOptions;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
@@ -60,9 +74,8 @@ import com.oracle.truffle.api.source.SourceSection;
  * available. The language implementation instance is obtainable while
  * {@link TruffleLanguage#createContext(Env)} or {@link TruffleLanguage#parse(ParsingRequest)} is
  * executed. If no language environment is available, then <code>null</code> can be passed. Please
- * note that root nodes with <code>null</code> language are considered not instrumentable and have
- * no access to the {@link #getLanguage(Class) language} or its public {@link #getLanguageInfo()
- * information}.
+ * note that root nodes with <code>null</code> language are considered not instrumentable and don't
+ * have access to its public {@link #getLanguageInfo() language information}.
  *
  * <h4>Execution</h4>
  *
@@ -109,13 +122,7 @@ import com.oracle.truffle.api.source.SourceSection;
  */
 public abstract class RootNode extends ExecutableNode {
 
-    /*
-     * Since languages were singletons in the past, we cannot use the Env instance stored in
-     * TruffleLanguage for languages that are not yet migrated. We use this sourceVM reference
-     * instead for compatibility.
-     */
-    final Object sourceVM;
-    private RootCallTarget callTarget;
+    private volatile RootCallTarget callTarget;
     @CompilationFinal private FrameDescriptor frameDescriptor;
     final ReentrantLock lock = new ReentrantLock();
 
@@ -126,8 +133,8 @@ public abstract class RootNode extends ExecutableNode {
      * while {@link TruffleLanguage#createContext(Env)} or
      * {@link TruffleLanguage#parse(ParsingRequest)} is executed. If no language environment is
      * available, then <code>null</code> can be passed. Please note that root nodes with
-     * <code>null</code> language are considered not instrumentable and have no access to the
-     * {@link #getLanguage(Class) language} or its public {@link #getLanguageInfo() information}.
+     * <code>null</code> language are considered not instrumentable and don't have access to its
+     * public {@link #getLanguageInfo() language information}.
      *
      * @param language the language this root node is associated with
      * @since 0.25
@@ -141,8 +148,8 @@ public abstract class RootNode extends ExecutableNode {
      * instance is obtainable while {@link TruffleLanguage#createContext(Env)} or
      * {@link TruffleLanguage#parse(ParsingRequest)} is executed. If no language environment is
      * available, then <code>null</code> can be passed. Please note that root nodes with
-     * <code>null</code> language are considered not instrumentable and have no access to the
-     * {@link #getLanguage(Class) language} or its public {@link #getLanguageInfo() information}.
+     * <code>null</code> language are considered not instrumentable and don't have access to its
+     * public {@link #getLanguageInfo() language information}.
      *
      * @param language the language this root node is associated with
      * @since 0.25
@@ -150,38 +157,18 @@ public abstract class RootNode extends ExecutableNode {
     protected RootNode(TruffleLanguage<?> language, FrameDescriptor frameDescriptor) {
         super(language);
         CompilerAsserts.neverPartOfCompilation();
-        if (this.languageInfo != null) {
-            this.sourceVM = Node.ACCESSOR.engineSupport().getVMFromLanguageObject(this.languageInfo.getEngineObject());
-        } else {
-            this.sourceVM = getCurrentVM();
-        }
         this.frameDescriptor = frameDescriptor == null ? new FrameDescriptor() : frameDescriptor;
     }
 
-    private static Object getCurrentVM() {
-        EngineSupport engine = Node.ACCESSOR.engineSupport();
-        if (engine != null) {
-            return engine.getCurrentVM();
-        } else {
-            return null;
-        }
-    }
-
     /**
-     * Returns the current context associated with the root node {@link #getLanguage(Class)
-     * language} and {@link Thread thread}. The current context is <code>null</code> if the root
-     * node is associated with a <code>null</code> language. This is a short-cut for
-     * <code>this</code>. {@link #getLanguage(Class) getLanguage(languageClass)}.
-     * {@link TruffleLanguage#getContextReference() getContextReference()}.
-     * {@link ContextReference#get() get()}. If invoked on the fast-path then
-     * <code>languageClass</code> must be a compilation final value.
-     *
-     * @see #getLanguage(Class)
      * @see TruffleLanguage#getContextReference()
      * @since 0.27
+     * @deprecated use {@link #getContextSupplier(Class)} instead.
      */
+    @SuppressWarnings("deprecation")
+    @Deprecated
     public final <C, T extends TruffleLanguage<C>> C getCurrentContext(Class<T> languageClass) {
-        if (languageInfo == null) {
+        if (language == null) {
             return null;
         }
         return getLanguage(languageClass).getContextReference().get();
@@ -196,10 +183,24 @@ public abstract class RootNode extends ExecutableNode {
     }
 
     /**
-     * A description of the AST (expected to be a method or procedure name in most languages) that
-     * identifies the AST for the benefit of guest language programmers using tools; it might
-     * appear, for example in the context of a stack dump or trace and is not expected to be called
-     * often. Can be called on any thread and without a language context.
+     * Returns a qualified name of the AST that in the best case uniquely identifiers the method. If
+     * the qualified name is not specified by the root, then the {@link #getName() name} is used by
+     * default. A root node that represents a Java method could consist of the package name, the
+     * class name and the method name. E.g. <code>mypackage.MyClass.myMethod</code>
+     *
+     * @since 20.0.0 beta 1
+     */
+    public String getQualifiedName() {
+        return getName();
+    }
+
+    /**
+     * Returns a simple name of the AST (expected to be a method or procedure name in most
+     * languages) that identifies the AST for the benefit of guest language programmers using tools;
+     * it might appear, for example in the context of a stack dump or trace and is not expected to
+     * be called often. Can be called on any thread and without a language context. The name of a
+     * root node that represents a Java method could consist of the method name. E.g.
+     * <code>myMethod</code>
      * <p>
      * In some languages AST "compilation units" may have no intrinsic names. When no information is
      * available, language implementations might simply use the first few characters of the code,
@@ -228,6 +229,9 @@ public abstract class RootNode extends ExecutableNode {
      * This method is intended to be overwritten by guest languages, when the node's source is
      * internal, the implementation should respect that. Can be called on any thread and without a
      * language context.
+     * <p>
+     * This method may be invoked on compiled code paths. It is recommended to implement this method
+     * such that it returns a compilation final constant.
      *
      * @since 0.27
      */
@@ -235,11 +239,16 @@ public abstract class RootNode extends ExecutableNode {
         if (getLanguageInfo() == null) {
             return true;
         }
-        SourceSection sc = getSourceSection();
+        SourceSection sc = materializeSourceSection();
         if (sc != null) {
             return sc.getSource().isInternal();
         }
         return false;
+    }
+
+    @TruffleBoundary
+    private SourceSection materializeSourceSection() {
+        return getSourceSection();
     }
 
     /**
@@ -317,15 +326,6 @@ public abstract class RootNode extends ExecutableNode {
     }
 
     /**
-     * @since 0.8 or earlier
-     * @deprecated use {@link LoopNode#reportLoopCount(Node,int)} instead
-     */
-    @Deprecated
-    public final void reportLoopCount(int iterations) {
-        LoopNode.reportLoopCount(this, iterations);
-    }
-
-    /**
      * Executes this function using the specified frame and returns the result value.
      *
      * @param frame the frame of the currently executing guest language method
@@ -345,34 +345,9 @@ public abstract class RootNode extends ExecutableNode {
         return frameDescriptor;
     }
 
-    /**
-     * @since 0.8 or earlier
-     * @deprecated No replacement. Changing {@link CallTarget} of an existing {@link RootNode} isn't
-     *             a supported operation
-     */
-    @Deprecated
-    public final void setCallTarget(RootCallTarget callTarget) {
+    /** @since 19.0 */
+    protected final void setCallTarget(RootCallTarget callTarget) {
         this.callTarget = callTarget;
-    }
-
-    /**
-     * Returns the {@link com.oracle.truffle.api.ExecutionContext} associated with this
-     * <code>RootNode</code>. This allows the correct <code>ExecutionContext</code> to be determined
-     * for a <code>RootNode</code> (and so also for a {@link RootCallTarget} and a
-     * {@link FrameInstance} obtained from the call stack) without prior knowledge of the language
-     * it has come from.
-     *
-     * Returns <code>null</code> by default.
-     *
-     * @since 0.8 or earlier
-     * @deprecated in 0.25 use {@link #getLanguage(Class) getLanguage(Language.class)}.
-     *             {@link TruffleLanguage#getCurrentContext(Class) getCurrentContext()} instead, and
-     *             {@link RootNode#getCompilerOptions()}.
-     */
-    @SuppressWarnings("deprecation")
-    @Deprecated
-    public com.oracle.truffle.api.ExecutionContext getExecutionContext() {
-        return null;
     }
 
     /**
@@ -380,15 +355,8 @@ public abstract class RootNode extends ExecutableNode {
      *
      * @since 0.8 or earlier
      */
-    @SuppressWarnings("deprecation")
     public CompilerOptions getCompilerOptions() {
-        final com.oracle.truffle.api.ExecutionContext context = getExecutionContext();
-
-        if (context == null) {
-            return DefaultCompilerOptions.INSTANCE;
-        } else {
-            return context.getCompilerOptions();
-        }
+        return DefaultCompilerOptions.INSTANCE;
     }
 
     /**

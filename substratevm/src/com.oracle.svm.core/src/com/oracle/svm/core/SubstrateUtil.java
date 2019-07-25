@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,25 +24,37 @@
  */
 package com.oracle.svm.core;
 
+// Checkstyle: allow reflection
+
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
+import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Field;
+import java.lang.reflect.Member;
+import java.lang.reflect.Method;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
 
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
 import org.graalvm.compiler.nodes.BreakpointNode;
+import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.amd64.FrameAccess;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.NeverInline;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -48,22 +62,27 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.RestrictHeapAccess;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoTable;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaFrameAnchor;
 import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
+import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfos;
 import com.oracle.svm.core.util.Counter;
+import com.oracle.svm.core.util.VMError;
+
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.services.Services;
 
 public class SubstrateUtil {
 
@@ -94,6 +113,20 @@ public class SubstrateUtil {
         return arch;
     }
 
+    /**
+     * @return true if the standalone libgraal is being built instead of a normal SVM image.
+     */
+    public static boolean isBuildingLibgraal() {
+        return Services.IS_BUILDING_NATIVE_IMAGE;
+    }
+
+    /**
+     * @return true if running in the standalone libgraal image.
+     */
+    public static boolean isInLibgraal() {
+        return Services.IS_IN_NATIVE_IMAGE;
+    }
+
     @TargetClass(com.oracle.svm.core.SubstrateUtil.class)
     static final class Target_com_oracle_svm_core_SubstrateUtil {
         @Alias @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true)//
@@ -108,7 +141,7 @@ public class SubstrateUtil {
 
     @Uninterruptible(reason = "Called from uninterruptible code.")
     public static FileDescriptor getFileDescriptor(FileOutputStream out) {
-        return KnownIntrinsics.unsafeCast(out, Target_java_io_FileOutputStream.class).fd;
+        return SubstrateUtil.cast(out, Target_java_io_FileOutputStream.class).fd;
     }
 
     /**
@@ -128,7 +161,6 @@ public class SubstrateUtil {
         return args;
     }
 
-    // TODO: Should this call the libc strlen function?
     /**
      * Returns the length of a C {@code char*} string.
      */
@@ -141,30 +173,37 @@ public class SubstrateUtil {
         return n;
     }
 
-    @TargetClass(className = "java.nio.DirectByteBuffer")
-    @SuppressWarnings("unused")
-    static final class Target_java_nio_DirectByteBuffer {
-        @Alias
-        Target_java_nio_DirectByteBuffer(long addr, int cap) {
+    /**
+     * Returns a pointer to the matched character or NULL if the character is not found.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.")
+    public static CCharPointer strchr(CCharPointer str, int c) {
+        int index = 0;
+        while (true) {
+            byte b = str.read(index);
+            if (b == c) {
+                return str.addressOf(index);
+            }
+            if (b == 0) {
+                return WordFactory.zero();
+            }
+            index += 1;
         }
-
-        @Alias
-        public native long address();
     }
 
     /**
-     * Wraps a pointer to C memory into a {@link ByteBuffer}.
+     * The same as {@link Class#cast}. This method is available for use in places where either the
+     * Java compiler or static analysis tools would complain about a cast because the cast appears
+     * to violate the Java type system rules.
      *
-     * @param pointer The pointer to C memory.
-     * @param size The size of the C memory.
-     * @return A new {@link ByteBuffer} wrapping the pointer.
+     * The most prominent example are casts between a {@link TargetClass} and the original class,
+     * i.e., two classes that appear to be unrelated from the Java type system point of view, but
+     * are actually the same class.
      */
-    public static ByteBuffer wrapAsByteBuffer(PointerBase pointer, int size) {
-        return KnownIntrinsics.unsafeCast(new Target_java_nio_DirectByteBuffer(pointer.rawValue(), size), ByteBuffer.class).order(ConfigurationValues.getTarget().arch.getByteOrder());
-    }
-
-    public static <T extends PointerBase> T getBaseAddress(MappedByteBuffer buffer) {
-        return WordFactory.pointer(KnownIntrinsics.unsafeCast(buffer, Target_java_nio_DirectByteBuffer.class).address());
+    @SuppressWarnings({"unused", "unchecked"})
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static <T> T cast(Object obj, Class<T> toType) {
+        return (T) obj;
     }
 
     /**
@@ -173,6 +212,7 @@ public class SubstrateUtil {
      * @return true if assertions are enabled.
      */
     @SuppressWarnings("all")
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean assertionsEnabled() {
         boolean assertionsEnabled = false;
         assert assertionsEnabled = true;
@@ -182,9 +222,7 @@ public class SubstrateUtil {
     @NodeIntrinsic(BreakpointNode.class)
     public static native void breakpoint(Object arg0);
 
-    /**
-     * Fast power of 2 test.
-     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isPowerOf2(long value) {
         return (value & (value - 1)) == 0;
     }
@@ -240,7 +278,7 @@ public class SubstrateUtil {
             dumpException(log, "dumpVMThreads", e);
         }
 
-        IsolateThread currentThread = CEntryPointContext.getCurrentIsolateThread();
+        IsolateThread currentThread = CurrentIsolate.getCurrentThread();
         try {
             dumpVMThreadState(log, currentThread);
         } catch (Exception e) {
@@ -287,7 +325,7 @@ public class SubstrateUtil {
 
         if (VMOperationControl.isFrozen()) {
             for (IsolateThread vmThread = VMThreads.firstThread(); vmThread != VMThreads.nullThread(); vmThread = VMThreads.nextThread(vmThread)) {
-                if (vmThread == CEntryPointContext.getCurrentIsolateThread()) {
+                if (vmThread == CurrentIsolate.getCurrentThread()) {
                     continue;
                 }
                 try {
@@ -296,6 +334,12 @@ public class SubstrateUtil {
                     dumpException(log, "dumpStacktrace", e);
                 }
             }
+        }
+
+        try {
+            DiagnosticThunkRegister.getSingleton().callDiagnosticThunks();
+        } catch (Exception e) {
+            dumpException(log, "callThunks", e);
         }
 
         diagnosticsInProgress = false;
@@ -314,7 +358,7 @@ public class SubstrateUtil {
             log.string("No anchors").newline();
         }
         while (anchor.isNonNull()) {
-            log.string("Anchor ").zhex(anchor.rawValue()).string(" LastJavaSP ").zhex(anchor.getLastJavaSP().rawValue()).newline();
+            log.string("Anchor ").zhex(anchor.rawValue()).string(" LastJavaSP ").zhex(anchor.getLastJavaSP().rawValue()).string(" LastJavaIP ").zhex(anchor.getLastJavaIP().rawValue()).newline();
             anchor = anchor.getPreviousAnchor();
         }
         log.indent(false);
@@ -322,7 +366,9 @@ public class SubstrateUtil {
 
     @NeverInline("catch implicit exceptions")
     private static void dumpDeoptStubPointer(Log log) {
-        log.string("DeoptStubPointer address: ").zhex(DeoptimizationSupport.getDeoptStubPointer().rawValue()).newline().newline();
+        if (DeoptimizationSupport.enabled()) {
+            log.string("DeoptStubPointer address: ").zhex(DeoptimizationSupport.getDeoptStubPointer().rawValue()).newline().newline();
+        }
     }
 
     @NeverInline("catch implicit exceptions")
@@ -330,17 +376,15 @@ public class SubstrateUtil {
         log.string("TopFrame info:").newline();
         log.indent(true);
         if (sp.isNonNull() && ip.isNonNull()) {
-            long totalFrameSize;
+            long totalFrameSize = getTotalFrameSize(sp, ip);
             DeoptimizedFrame deoptFrame = Deoptimizer.checkDeoptimized(sp);
             if (deoptFrame != null) {
                 log.string("RSP ").zhex(sp.rawValue()).string(" frame was deoptimized:").newline();
                 log.string("SourcePC ").zhex(deoptFrame.getSourcePC().rawValue()).newline();
-                totalFrameSize = deoptFrame.getSourceTotalFrameSize();
-            } else {
-                log.string("Lookup TotalFrameSize in CodeInfoTable:").newline();
-                totalFrameSize = CodeInfoTable.lookupTotalFrameSize(ip);
+                log.string("SourceTotalFrameSize ").signed(totalFrameSize).newline();
+            } else if (totalFrameSize != -1) {
+                log.string("TotalFrameSize in CodeInfoTable ").signed(totalFrameSize).newline();
             }
-            log.string("SourceTotalFrameSize ").signed(totalFrameSize).newline();
 
             if (totalFrameSize == -1) {
                 log.string("Does not look like a Java Frame. Use JavaFrameAnchors to find LastJavaSP:").newline();
@@ -353,7 +397,7 @@ public class SubstrateUtil {
                     log.string("Found matching Anchor:").zhex(anchor.rawValue()).newline();
                     Pointer lastSp = anchor.getLastJavaSP();
                     log.string("LastJavaSP ").zhex(lastSp.rawValue()).newline();
-                    CodePointer lastIp = FrameAccess.readReturnAddress(lastSp);
+                    CodePointer lastIp = anchor.getLastJavaIP();
                     log.string("LastJavaIP ").zhex(lastIp.rawValue()).newline();
                 }
             }
@@ -361,12 +405,36 @@ public class SubstrateUtil {
         log.indent(false);
     }
 
+    @Uninterruptible(reason = "Prevent deoptimization of stack frames while in this method.")
+    private static long getTotalFrameSize(Pointer sp, CodePointer ip) {
+        DeoptimizedFrame deoptFrame = Deoptimizer.checkDeoptimized(sp);
+        if (deoptFrame != null) {
+            return deoptFrame.getSourceTotalFrameSize();
+        }
+        CodeInfo codeInfo = CodeInfoTable.lookupCodeInfo(ip);
+        if (codeInfo.isNonNull()) {
+            Object tether = CodeInfoAccess.acquireTether(codeInfo);
+            try {
+                return getTotalFrameSize0(ip, codeInfo);
+            } finally {
+                CodeInfoAccess.releaseTether(codeInfo, tether);
+            }
+        }
+        return -1;
+    }
+
+    @Uninterruptible(reason = "Wrap the now safe call to interruptibly look up the frame size.", calleeMustBe = false)
+    private static long getTotalFrameSize0(CodePointer ip, CodeInfo codeInfo) {
+        return CodeInfoAccess.lookupTotalFrameSize(codeInfo, CodeInfoAccess.relativeIP(codeInfo, ip));
+    }
+
     @NeverInline("catch implicit exceptions")
     private static void dumpVMThreads(Log log) {
         log.string("VMThreads info:").newline();
         log.indent(true);
         for (IsolateThread vmThread = VMThreads.firstThread(); vmThread != VMThreads.nullThread(); vmThread = VMThreads.nextThread(vmThread)) {
-            log.string("VMThread ").zhex(vmThread.rawValue()).spaces(2).string(VMThreads.StatusSupport.getStatusString(vmThread)).newline();
+            log.string("VMThread ").zhex(vmThread.rawValue()).spaces(2).string(VMThreads.StatusSupport.getStatusString(vmThread))
+                            .spaces(2).object(JavaThreads.fromVMThread(vmThread)).newline();
         }
         log.indent(false);
     }
@@ -388,25 +456,27 @@ public class SubstrateUtil {
     }
 
     static void dumpRuntimeCompilation(Log log) {
-        log.newline().string("RuntimeCodeCache dump:").newline();
-        log.indent(true);
-        try {
-            dumpRecentRuntimeCodeCacheOperations(log);
-        } catch (Exception e) {
-            dumpException(log, "dumpRecentRuntimeCodeCacheOperations", e);
-        }
-        log.newline();
-        try {
-            dumpRuntimeCodeCacheTable(log);
-        } catch (Exception e) {
-            dumpException(log, "dumpRuntimeCodeCacheTable", e);
-        }
-        log.indent(false);
+        if (DeoptimizationSupport.enabled()) {
+            log.newline().string("RuntimeCodeCache dump:").newline();
+            log.indent(true);
+            try {
+                dumpRecentRuntimeCodeCacheOperations(log);
+            } catch (Exception e) {
+                dumpException(log, "dumpRecentRuntimeCodeCacheOperations", e);
+            }
+            log.newline();
+            try {
+                dumpRuntimeCodeCacheTable(log);
+            } catch (Exception e) {
+                dumpException(log, "dumpRuntimeCodeCacheTable", e);
+            }
+            log.indent(false);
 
-        try {
-            dumpRecentDeopts(log);
-        } catch (Exception e) {
-            dumpException(log, "dumpRecentDeopts", e);
+            try {
+                dumpRecentDeopts(log);
+            } catch (Exception e) {
+                dumpException(log, "dumpRecentDeopts", e);
+            }
         }
     }
 
@@ -448,7 +518,7 @@ public class SubstrateUtil {
     private static void dumpStacktraceStage0(Log log, Pointer sp, CodePointer ip) {
         log.string("Stacktrace Stage0:").newline();
         log.indent(true);
-        JavaStackWalker.walkCurrentThread(sp, ip, Stage0Visitor);
+        JavaStackWalker.walkCurrentThreadWithForcedIP(sp, ip, Stage0Visitor);
         log.indent(false);
     }
 
@@ -456,7 +526,7 @@ public class SubstrateUtil {
     private static void dumpStacktraceStage1(Log log, Pointer sp, CodePointer ip) {
         log.string("Stacktrace Stage1:").newline();
         log.indent(true);
-        JavaStackWalker.walkCurrentThread(sp, ip, Stage1Visitor);
+        JavaStackWalker.walkCurrentThreadWithForcedIP(sp, ip, Stage1Visitor);
         log.indent(false);
     }
 
@@ -474,5 +544,201 @@ public class SubstrateUtil {
         log.indent(true);
         JavaStackWalker.walkThread(vmThread, ThreadStackPrinter.AllocationFreeStackFrameVisitor);
         log.indent(false);
+    }
+
+    /** The functional interface for a "thunk" that does not allocate. */
+    @FunctionalInterface
+    public interface DiagnosticThunk {
+
+        /** The method to be supplied by the implementor. */
+        @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate during printing diagnostics.")
+        void invokeWithoutAllocation();
+    }
+
+    public static class DiagnosticThunkRegister {
+
+        DiagnosticThunk[] diagnosticThunkRegistry;
+
+        /**
+         * Get the register.
+         *
+         * This method is @Fold so anyone who uses it ensures there is a register.
+         */
+        @Fold
+        /* { Checkstyle: allow synchronization. */
+        public static synchronized DiagnosticThunkRegister getSingleton() {
+            if (!ImageSingletons.contains(SubstrateUtil.DiagnosticThunkRegister.class)) {
+                ImageSingletons.add(SubstrateUtil.DiagnosticThunkRegister.class, new DiagnosticThunkRegister());
+            }
+            return ImageSingletons.lookup(SubstrateUtil.DiagnosticThunkRegister.class);
+        }
+        /* } Checkstyle: disallow synchronization. */
+
+        @Platforms(Platform.HOSTED_ONLY.class)
+        DiagnosticThunkRegister() {
+            this.diagnosticThunkRegistry = new DiagnosticThunk[0];
+        }
+
+        /** Register a diagnostic thunk to be called after a segfault. */
+        @Platforms(Platform.HOSTED_ONLY.class)
+        /* { Checkstyle: allow synchronization. */
+        public synchronized void register(DiagnosticThunk diagnosticThunk) {
+            final DiagnosticThunk[] newArray = Arrays.copyOf(diagnosticThunkRegistry, diagnosticThunkRegistry.length + 1);
+            newArray[newArray.length - 1] = diagnosticThunk;
+            diagnosticThunkRegistry = newArray;
+        }
+        /* } Checkstyle: disallow synchronization. */
+
+        /** Call each registered diagnostic thunk. */
+        void callDiagnosticThunks() {
+            for (int i = 0; i < diagnosticThunkRegistry.length; i += 1) {
+                diagnosticThunkRegistry[i].invokeWithoutAllocation();
+            }
+        }
+    }
+
+    /**
+     * Similar to {@link String#split} but with a fixed separator string instead of a regular
+     * expression. This avoids making regular expression code reachable.
+     */
+    public static String[] split(String value, String separator) {
+        int offset = 0;
+        int next = 0;
+        ArrayList<String> list = null;
+        while ((next = value.indexOf(separator, offset)) != -1) {
+            if (list == null) {
+                list = new ArrayList<>();
+            }
+            list.add(value.substring(offset, next));
+            offset = next + separator.length();
+        }
+
+        if (offset == 0) {
+            /* No match found. */
+            return new String[]{value};
+        }
+
+        /* Add remaining segment. */
+        list.add(value.substring(offset, value.length()));
+
+        return list.toArray(new String[list.size()]);
+    }
+
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
+
+    public static String toHex(byte[] data) {
+        StringBuilder r = new StringBuilder(data.length * 2);
+        for (byte b : data) {
+            r.append(HEX[(b >> 4) & 0xf]);
+            r.append(HEX[b & 0xf]);
+        }
+        return r.toString();
+    }
+
+    public static String digest(String value) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            md.update(value.getBytes("UTF-8"));
+            return toHex(md.digest());
+        } catch (NoSuchAlgorithmException | UnsupportedEncodingException ex) {
+            throw VMError.shouldNotReachHere(ex);
+        }
+    }
+
+    /**
+     * Returns a short, reasonably descriptive, but still unique name for the provided method. The
+     * name includes a digest of the fully qualified method name, which ensures uniqueness.
+     */
+    public static String uniqueShortName(ResolvedJavaMethod m) {
+        StringBuilder fullName = new StringBuilder();
+        fullName.append(m.getDeclaringClass().toClassName()).append(".").append(m.getName()).append("(");
+        for (int i = 0; i < m.getSignature().getParameterCount(false); i++) {
+            fullName.append(m.getSignature().getParameterType(i, null).toClassName()).append(",");
+        }
+        fullName.append(')');
+        if (!m.isConstructor()) {
+            fullName.append(m.getSignature().getReturnType(null).toClassName());
+        }
+
+        return stripPackage(m.getDeclaringClass().toJavaName()) + "_" +
+                        (m.isConstructor() ? "constructor" : m.getName()) + "_" +
+                        SubstrateUtil.digest(fullName.toString());
+    }
+
+    /**
+     * Returns a short, reasonably descriptive, but still unique name for the provided
+     * {@link Method}, {@link Constructor}, or {@link Field}. The name includes a digest of the
+     * fully qualified method name, which ensures uniqueness.
+     */
+    public static String uniqueShortName(Member m) {
+        StringBuilder fullName = new StringBuilder();
+        fullName.append(m.getDeclaringClass().getName()).append(".");
+        if (m instanceof Constructor) {
+            fullName.append("<init>");
+        } else {
+            fullName.append(m.getName());
+        }
+        if (m instanceof Executable) {
+            fullName.append("(");
+            for (Class<?> c : ((Executable) m).getParameterTypes()) {
+                fullName.append(c.getName()).append(",");
+            }
+            fullName.append(')');
+            if (m instanceof Method) {
+                fullName.append(((Method) m).getReturnType().getName());
+            }
+        }
+
+        return stripPackage(m.getDeclaringClass().getTypeName()) + "_" +
+                        (m instanceof Constructor ? "constructor" : m.getName()) + "_" +
+                        SubstrateUtil.digest(fullName.toString());
+    }
+
+    private static String stripPackage(String qualifiedClassName) {
+        return qualifiedClassName.substring(qualifiedClassName.lastIndexOf(".") + 1);
+    }
+
+    /**
+     * Mangle the given method name according to our image's (default) mangling convention. A rough
+     * requirement is that symbol names are valid symbol name tokens for the assembler. (This is
+     * necessary to use them in linker command lines, which we currently do in
+     * NativeImageGenerator.) These are of the form '[a-zA-Z\._\$][a-zA-Z0-9\$_]*'. We use the
+     * underscore sign as an escape character. It is always followed by four hex digits representing
+     * the escaped character in natural (big-endian) order. We do not allow the dollar sign, even
+     * though it is legal, because it has special meaning in some shells and disturbs command lines.
+     *
+     * @param methodName a string to mangle
+     * @return a mangled version of methodName
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static String mangleName(String methodName) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < methodName.length(); ++i) {
+            char c = methodName.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (i == 0 && c == '.') || (i > 0 && c >= '0' && c <= '9')) {
+                // it's legal in this position
+                out.append(c);
+            } else if (c == '_') {
+                out.append("__");
+            } else {
+                out.append('_');
+                // Checkstyle: stop
+                out.append(String.format("%04x", (int) c));
+                // Checkstyle: resume
+            }
+        }
+        String mangled = out.toString();
+        assert mangled.matches("[a-zA-Z\\._][a-zA-Z0-9_]*");
+        //@formatter:off
+        /*
+         * To demangle, the following pipeline works for me (assuming no multi-byte characters):
+         *
+         * sed -r 's/\_([0-9a-f]{4})/\n\1\n/g' | sed -r 's#^[0-9a-f]{2}([0-9a-f]{2})#/usr/bin/printf "\\x\1"#e' | tr -d '\n'
+         *
+         * It's not strictly correct if the first characters after an escape sequence
+         * happen to match ^[0-9a-f]{2}, but hey....
+         */
+        //@formatter:on
+        return mangled;
     }
 }

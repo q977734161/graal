@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,7 +31,11 @@ import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 
+import com.oracle.svm.core.util.Utf8;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.PinnedObject;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
@@ -38,9 +44,10 @@ import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.headers.Errno;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.os.IsDefined;
-import com.oracle.svm.core.posix.headers.Errno;
 import com.oracle.svm.core.posix.headers.LibC;
 import com.oracle.svm.core.posix.headers.NetIf;
 import com.oracle.svm.core.posix.headers.NetinetIn;
@@ -73,6 +80,7 @@ import com.oracle.svm.core.util.PointerUtils;
 // So one can look at the quoted line numbers on the C code to see which platform
 // the code applies to.
 
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 public class JavaNetNetworkInterface {
 
     /*
@@ -639,8 +647,8 @@ public class JavaNetNetworkInterface {
         // 892     int ifnam_size = IFNAMSIZ;
         int ifnam_size = NetIf.IFNAMSIZ();
         // 893     char name[IFNAMSIZ], vname[IFNAMSIZ];
-        CCharPointer name = StackValue.get(NetIf.IFNAMSIZ(), SizeOf.get(CCharPointer.class));
-        CCharPointer vname = StackValue.get(NetIf.IFNAMSIZ(), SizeOf.get(CCharPointer.class));
+        CCharPointer name = StackValue.get(NetIf.IFNAMSIZ(), CCharPointer.class);
+        CCharPointer vname = StackValue.get(NetIf.IFNAMSIZ(), CCharPointer.class);
         // 894 #endif
         // 895
         // 896     char  *name_colonP;
@@ -652,7 +660,7 @@ public class JavaNetNetworkInterface {
         // 899     int addr_size;
         int addr_size;
         // 900     int flags = 0;
-        CIntPointer flags_Pointer = StackValue.get(SizeOf.get(CIntPointer.class));
+        CIntPointer flags_Pointer = StackValue.get(CIntPointer.class);
         flags_Pointer.write(0);
         // 901
         // 902     /*
@@ -731,7 +739,7 @@ public class JavaNetNetworkInterface {
         // 948      * Deal with virtual interface with colon notation e.g. eth0:1
         // 949      */
         // 950     name_colonP = strchr(name, ':');
-        name_colonP = LibC.strchr(name, ':');
+        name_colonP = SubstrateUtil.strchr(name, ':');
         // 951     if (name_colonP != NULL) {
         if (name_colonP.isNonNull()) {
             // 952       /**
@@ -899,6 +907,92 @@ public class JavaNetNetworkInterface {
         return ifs;
     }
 
+    //   577  static int getFlags0(JNIEnv *env, jstring name) {
+    @SuppressWarnings({"unused"})
+    static int getFlags0(String name) {
+        final PlatformSupport platformSupport = ImageSingletons.lookup(PlatformSupport.class);
+        //   578      jboolean isCopy;
+        //   579      int ret, sock;
+        int ret, sock;
+        //   580      const char* name_utf;
+        byte[] name_utf;
+        //   581      int flags = 0;
+        CIntPointer flags = StackValue.get(CIntPointer.class);
+
+        //   583      name_utf = (*env)->GetStringUTFChars(env, name, &isCopy);
+        name_utf = Utf8.stringToUtf8(name, true);
+        //   584
+        try (PinnedObject name_utf_Pin = PinnedObject.create(name_utf)) {
+            CCharPointer name_utf_Pointer = name_utf_Pin.addressOfArrayElement(0);
+            //   585      if ((sock = openSocketWithFallback(env, name_utf)) < 0) {
+            if ((sock = openSocketWithFallback(name_utf_Pointer)) < 0) {
+                //   586          (*env)->ReleaseStringUTFChars(env, name, name_utf);
+                //   587          return -1;
+                return -1;
+                //   588      }
+            }
+            //   590      ret = getFlags(sock, name_utf, &flags);
+            ret = platformSupport.getFlags(sock, name_utf_Pointer, flags);
+            //   592      close(sock);
+            Unistd.close(sock);
+            //   593      (*env)->ReleaseStringUTFChars(env, name, name_utf);
+            //   594
+            //   595      if (ret < 0) {
+            if (ret < 0) {
+                //   596          NET_ThrowByNameWithLastError(env, JNU_JAVANETPKG "SocketException", "IOCTL  SIOCGLIFFLAGS failed");
+                throw new SocketException(PosixUtils.lastErrorString("IOCTL SIOCGLIFFLAGS failed"));
+                //   597          return -1;
+                //   598      }
+                //   599
+            }
+            //   600      return flags;
+            //   601  }
+            return flags.read();
+        } catch (SocketException e) {
+            return -1;
+        }
+    }
+
+    @SuppressWarnings({"unused"})
+    public static int openSocketWithFallback(CCharPointer ifname) throws SocketException {
+        //  1050  #ifdef AF_INET6
+        if (IsDefined.socket_AF_INET6()) {
+            //  1051  static int openSocketWithFallback(JNIEnv *env, const char *ifname){
+            //  1052      int sock;
+            int sock;
+            //  1053      struct ifreq if2;
+            //  1054
+            //  1055       if ((sock = JVM_Socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+            if ((sock = VmPrimsJVM.JVM_Socket(Socket.AF_INET(), Socket.SOCK_DGRAM(), 0)) < 0) {
+                //  1056           if (errno == EPROTONOSUPPORT){
+                if (Errno.errno() == Errno.EPROTONOSUPPORT()) {
+                    //  1057                if ( (sock = JVM_Socket(AF_INET6, SOCK_DGRAM, 0)) < 0 ){
+                    if ((sock = VmPrimsJVM.JVM_Socket(Socket.AF_INET6(), Socket.SOCK_DGRAM(), 0)) < 0) {
+                        //  1058                   NET_ThrowByNameWithLastError(env , JNU_JAVANETPKG "SocketException", "IPV6 Socket creation failed");
+                        //  1059                   return -1;
+                        throw new SocketException(PosixUtils.lastErrorString("IPV6 Socket creation failed"));
+                    }
+                } else {
+                    //  1062           else{ // errno is not NOSUPPORT
+                    //  1063               NET_ThrowByNameWithLastError(env , JNU_JAVANETPKG "SocketException", "IPV4 Socket creation failed");
+                    throw new SocketException(PosixUtils.lastErrorString("IPV4 Socket creation failed"));
+                }
+            }
+            //  1068       /* Linux starting from 2.6.? kernel allows ioctl call with either IPv4 or IPv6 socket regardless of type
+            //  1069          of address of an interface */
+            //  1070
+            //  1071         return sock;
+            return sock;
+        } else {
+            //  1074  #else
+            //  1075  static int openSocketWithFallback(JNIEnv *env, const char *ifname){
+            //  1076      return openSocket(env,AF_INET);
+            return openSocket(Socket.AF_INET());
+            //  1077  }
+            //  1078  #endif
+        }
+    }
+
     /*
      * Translated from jdk/src/solaris/native/java/net/NetworkInterface.c?v=Java_1.8.0_40_b10
      */
@@ -906,7 +1000,7 @@ public class JavaNetNetworkInterface {
     // 1058  * proto is AF_INET/AF_INET6
     // 1059  */
     // 1060 static int  openSocket(JNIEnv *env, int proto){
-    static int openSocket(int proto) throws SocketException {
+    public static int openSocket(int proto) throws SocketException {
         // 1061     int sock;
         int sock;
         // 1062
@@ -919,7 +1013,7 @@ public class JavaNetNetworkInterface {
             // 1068         if (errno != EPROTONOSUPPORT) {
             if (Errno.errno() != Errno.EPROTONOSUPPORT()) {
                 // 1069             NET_ThrowByNameWithLastError(env , JNU_JAVANETPKG "SocketException", "Socket creation failed");
-                throw new SocketException("Socket creation failed");
+                throw new SocketException(PosixUtils.lastErrorString("Socket creation failed"));
             }
             // 1071         return -1;
         }
@@ -927,6 +1021,7 @@ public class JavaNetNetworkInterface {
         // 1074     return sock;
         return sock;
     }
+
 
     /**
      * Access to platform-dependent code.
@@ -939,6 +1034,7 @@ public class JavaNetNetworkInterface {
         short getSubnet(int sock, CCharPointer ifname) throws SocketException;
         int getFlags(int sock, CCharPointer ifname, CIntPointer flags);
         int getIndex(int sock, CCharPointer name);
+        int getMacAddress(CCharPointer ifname, NetinetIn.in_addr addr, CCharPointer buf) throws SocketException;
     }
 }
 

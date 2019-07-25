@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,27 +26,64 @@ package com.oracle.svm.reflect.target;
 
 // Checkstyle: allow reflection
 
-import com.oracle.svm.reflect.hosted.ReflectionFeature;
+import java.lang.reflect.AnnotatedType;
+import java.lang.reflect.Constructor;
+
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
+import com.oracle.svm.core.annotate.RecomputeFieldValue.CustomFieldValueComputer;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.reflect.hosted.AccessorComputer;
-import java.lang.reflect.Constructor;
-import sun.reflect.ConstructorAccessor;
 
-@TargetClass(value = Constructor.class, onlyWith = ReflectionFeature.IsEnabled.class)
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
+import sun.reflect.generics.repository.ConstructorRepository;
+
+@TargetClass(value = Constructor.class)
 public final class Target_java_lang_reflect_Constructor {
 
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) ConstructorAccessor constructorAccessor;
+    @Alias ConstructorRepository genericInfo;
+
+    @Alias //
+    @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) //
+    Target_jdk_internal_reflect_ConstructorAccessor constructorAccessor;
+
+    @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = ConstructorAnnotatedReceiverTypeComputer.class) //
+    AnnotatedType annotatedReceiverType;
+
+    @Alias
+    native Target_java_lang_reflect_Constructor copy();
 
     @Substitute
-    ConstructorAccessor acquireConstructorAccessor() {
+    Target_jdk_internal_reflect_ConstructorAccessor acquireConstructorAccessor() {
         if (constructorAccessor == null) {
             throw VMError.unsupportedFeature("Runtime reflection is not supported.");
         }
         return constructorAccessor;
     }
+
+    @Substitute
+    public AnnotatedType getAnnotatedReceiverType() {
+        Target_java_lang_reflect_Constructor holder = ReflectionHelper.getHolder(this);
+        return ReflectionHelper.requireNonNull(holder.annotatedReceiverType, "Annotated receiver type must be computed during native image generation");
+    }
+
+    /**
+     * The Constructor.annotatedReceiverType computation is needed, even though there is a similar
+     * computation for Executable.annotatedReceiverType, because the Constructor class overrides
+     * Executable.getAnnotatedReceiverType().
+     */
+    public static final class ConstructorAnnotatedReceiverTypeComputer implements CustomFieldValueComputer {
+
+        @Override
+        public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
+            Constructor<?> constructor = (Constructor<?>) receiver;
+            return constructor.getAnnotatedReceiverType();
+        }
+    }
+
 }

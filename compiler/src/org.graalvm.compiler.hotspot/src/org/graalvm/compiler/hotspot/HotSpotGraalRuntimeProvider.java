@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package org.graalvm.compiler.hotspot;
 
+import java.io.PrintStream;
 import java.util.Map;
 
 import org.graalvm.compiler.api.runtime.GraalRuntime;
@@ -67,8 +70,9 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
      * @param compilationOptions the options used to configure the compilation debug context
      * @param compilationId a system wide unique compilation id
      * @param compilable the input to the compilation
+     * @param logStream the log stream to use in this context
      */
-    DebugContext openDebugContext(OptionValues compilationOptions, CompilationIdentifier compilationId, Object compilable, Iterable<DebugHandlersFactory> factories);
+    DebugContext openDebugContext(OptionValues compilationOptions, CompilationIdentifier compilationId, Object compilable, Iterable<DebugHandlersFactory> factories, PrintStream logStream);
 
     /**
      * Gets the option values associated with this runtime.
@@ -91,7 +95,8 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
     DiagnosticsOutputDirectory getOutputDirectory();
 
     /**
-     * Gets the map used to count compilation problems at each {@link ExceptionAction} level.
+     * Gets the map used to count compilation problems at each {@link ExceptionAction} level. All
+     * updates and queries to the map should be synchronized.
      */
     Map<ExceptionAction, Integer> getCompilationProblemsPerAction();
 

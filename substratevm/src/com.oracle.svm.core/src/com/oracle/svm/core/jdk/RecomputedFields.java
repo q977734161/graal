@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,32 +31,32 @@ import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.FromAlias;
 import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Reset;
 
 import java.io.FileDescriptor;
-import java.lang.Thread.UncaughtExceptionHandler;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.nio.MappedByteBuffer;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
 
-import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.UnsafeAccess;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Delete;
@@ -63,9 +65,10 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.config.ObjectLayout;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -82,9 +85,24 @@ final class Target_sun_util_calendar_ZoneInfoFile {
     private static Map<String, String> aliases = new java.util.HashMap<>();
 }
 
+/**
+ * We disallow direct byte buffers ({@link MappedByteBuffer} instances) in the image heap, with one
+ * exception: we allow 0-length non-file-based buffers. For example, Netty has a singleton empty
+ * buffer referenced from a static field, and a lot of Netty classes reference this buffer
+ * statically.
+ *
+ * Such buffers do actually have an address to memory that is allocated during image generation and
+ * therefore no longer available at run time. But since the capacity is 0, no memory can ever be
+ * accessed. We therefore allow this "dangling" address. However, we must never call free() for that
+ * address, so we remove the Cleaner registered for the buffer by resetting the field
+ * {@link #cleaner}.
+ */
 @TargetClass(className = "java.nio.DirectByteBuffer")
 @SuppressWarnings("unused")
 final class Target_java_nio_DirectByteBuffer {
+    @Alias @RecomputeFieldValue(kind = Kind.Reset) //
+    Target_jdk_internal_ref_Cleaner cleaner;
+
     @Alias
     protected Target_java_nio_DirectByteBuffer(int cap, long addr, FileDescriptor fd, Runnable unmapper) {
     }
@@ -104,7 +122,7 @@ final class Target_java_nio_charset_CharsetEncoder {
     private WeakReference<CharsetDecoder> cachedDecoder;
 }
 
-@TargetClass(className = "java.nio.charset.CoderResult$Cache")
+@TargetClass(className = "java.nio.charset.CoderResult$Cache", onlyWith = JDK8OrEarlier.class)
 final class Target_java_nio_charset_CoderResult_Cache {
     @Alias @RecomputeFieldValue(kind = Reset) //
     private Map<Integer, WeakReference<CoderResult>> cache;
@@ -115,16 +133,14 @@ final class Target_java_util_concurrent_atomic_AtomicReferenceFieldUpdater_Atomi
     @Alias @RecomputeFieldValue(kind = AtomicFieldUpdaterOffset) //
     private long offset;
 
-    @Alias private static sun.misc.Unsafe U;
-
     /** the same as tclass, used for checks */
-    @Alias private final Class<?> cclass;
+    @Alias private Class<?> cclass;
 
     /** class holding the field */
-    @Alias private final Class<?> tclass;
+    @Alias private Class<?> tclass;
 
     /** field value type */
-    @Alias private final Class<?> vclass;
+    @Alias private Class<?> vclass;
 
     // simplified version of the original constructor
     @SuppressWarnings("unused")
@@ -156,7 +172,7 @@ final class Target_java_util_concurrent_atomic_AtomicReferenceFieldUpdater_Atomi
         this.cclass = tclass;
         this.tclass = tclass;
         this.vclass = vclass;
-        this.offset = U.objectFieldOffset(field);
+        this.offset = GraalUnsafeAccess.getUnsafe().objectFieldOffset(field);
     }
 }
 
@@ -165,12 +181,10 @@ final class Target_java_util_concurrent_atomic_AtomicIntegerFieldUpdater_AtomicI
     @Alias @RecomputeFieldValue(kind = AtomicFieldUpdaterOffset) //
     private long offset;
 
-    @Alias private static sun.misc.Unsafe U;
-
     /** the same as tclass, used for checks */
-    @Alias private final Class<?> cclass;
+    @Alias private Class<?> cclass;
     /** class holding the field */
-    @Alias private final Class<?> tclass;
+    @Alias private Class<?> tclass;
 
     // simplified version of the original constructor
     @SuppressWarnings("unused")
@@ -195,7 +209,7 @@ final class Target_java_util_concurrent_atomic_AtomicIntegerFieldUpdater_AtomicI
         // access checks are disabled
         this.cclass = tclass;
         this.tclass = tclass;
-        this.offset = U.objectFieldOffset(field);
+        this.offset = GraalUnsafeAccess.getUnsafe().objectFieldOffset(field);
     }
 }
 
@@ -204,12 +218,10 @@ final class Target_java_util_concurrent_atomic_AtomicLongFieldUpdater_CASUpdater
     @Alias @RecomputeFieldValue(kind = AtomicFieldUpdaterOffset) //
     private long offset;
 
-    @Alias private static sun.misc.Unsafe U;
-
     /** the same as tclass, used for checks */
-    @Alias private final Class<?> cclass;
+    @Alias private Class<?> cclass;
     /** class holding the field */
-    @Alias private final Class<?> tclass;
+    @Alias private Class<?> tclass;
 
     // simplified version of the original constructor
     @SuppressWarnings("unused")
@@ -234,7 +246,7 @@ final class Target_java_util_concurrent_atomic_AtomicLongFieldUpdater_CASUpdater
         // access checks are disabled
         this.cclass = tclass;
         this.tclass = tclass;
-        this.offset = U.objectFieldOffset(field);
+        this.offset = GraalUnsafeAccess.getUnsafe().objectFieldOffset(field);
     }
 
 }
@@ -244,12 +256,10 @@ final class Target_java_util_concurrent_atomic_AtomicLongFieldUpdater_LockedUpda
     @Alias @RecomputeFieldValue(kind = AtomicFieldUpdaterOffset) //
     private long offset;
 
-    @Alias private static sun.misc.Unsafe U;
-
     /** the same as tclass, used for checks */
-    @Alias private final Class<?> cclass;
+    @Alias private Class<?> cclass;
     /** class holding the field */
-    @Alias private final Class<?> tclass;
+    @Alias private Class<?> tclass;
 
     // simplified version of the original constructor
     @SuppressWarnings("unused")
@@ -274,7 +284,7 @@ final class Target_java_util_concurrent_atomic_AtomicLongFieldUpdater_LockedUpda
         // access checks are disabled
         this.cclass = tclass;
         this.tclass = tclass;
-        this.offset = U.objectFieldOffset(field);
+        this.offset = GraalUnsafeAccess.getUnsafe().objectFieldOffset(field);
     }
 }
 
@@ -321,129 +331,120 @@ class AtomicFieldUpdaterFeature implements Feature {
     private void processFieldUpdater(Object updater) {
         VMError.guarantee(markAsUnsafeAccessed != null, "New atomic field updater found after static analysis");
 
-        try {
-            Class<?> updaterClass = updater.getClass();
-
-            Field tclassField = updaterClass.getDeclaredField("tclass");
-            Field offsetField = updaterClass.getDeclaredField("offset");
-            tclassField.setAccessible(true);
-            offsetField.setAccessible(true);
-
-            Class<?> tclass = (Class<?>) tclassField.get(updater);
-            long searchOffset = offsetField.getLong(updater);
-            // search the declared fields for a field with a matching offset
-            for (Field f : tclass.getDeclaredFields()) {
-                if (!Modifier.isStatic(f.getModifiers())) {
-                    long fieldOffset = UnsafeAccess.UNSAFE.objectFieldOffset(f);
-                    if (fieldOffset == searchOffset) {
-                        markAsUnsafeAccessed.accept(f);
-                        return;
-                    }
+        Class<?> updaterClass = updater.getClass();
+        Class<?> tclass = ReflectionUtil.readField(updaterClass, "tclass", updater);
+        long searchOffset = ReflectionUtil.readField(updaterClass, "offset", updater);
+        // search the declared fields for a field with a matching offset
+        for (Field f : tclass.getDeclaredFields()) {
+            if (!Modifier.isStatic(f.getModifiers())) {
+                long fieldOffset = GraalUnsafeAccess.getUnsafe().objectFieldOffset(f);
+                if (fieldOffset == searchOffset) {
+                    markAsUnsafeAccessed.accept(f);
+                    return;
                 }
             }
-            throw VMError.shouldNotReachHere("unknown field offset class: " + tclass + ", offset = " + searchOffset);
-        } catch (NoSuchFieldException | IllegalAccessException ex) {
-            throw VMError.shouldNotReachHere(ex);
         }
+        throw VMError.shouldNotReachHere("unknown field offset class: " + tclass + ", offset = " + searchOffset);
     }
 }
 
 @TargetClass(java.util.concurrent.ForkJoinPool.class)
+@SuppressWarnings("unused") //
 final class Target_java_util_concurrent_ForkJoinPool {
 
-    @Alias static /* final */ int MAX_CAP;
-    @Alias static /* final */ int LIFO_QUEUE;
-    @Alias static /* final */ ForkJoinWorkerThreadFactory defaultForkJoinWorkerThreadFactory;
-
-    @Alias
-    @SuppressWarnings("unused")
-    protected Target_java_util_concurrent_ForkJoinPool(int parallelism, ForkJoinWorkerThreadFactory factory, UncaughtExceptionHandler handler, int mode, String workerNamePrefix) {
-    }
-
-    /**
-     * "commonParallelism" is only accessed via this method, so a substitution provides a convenient
-     * place to ensure that it is initialized.
-     */
-    @Substitute
-    public static int getCommonPoolParallelism() {
-        CommonInjector.ensureCommonPoolIsInitialized();
-        return commonParallelism;
-    }
-
     /*
-     * Recomputation of the common pool: we cannot create it during image generation, because it
+     * Recomputation of the common pool: we cannot create it during image generation, because at
      * this time we do not know the number of cores that will be available at run time. Therefore,
      * we create the common pool when it is accessed the first time.
-     */
-    @Alias @InjectAccessors(CommonInjector.class) //
-    static /* final */ ForkJoinPool common;
-    @Alias //
-    static /* final */ int commonParallelism;
-
-    /**
-     * An injected field to replace ForkJoinPool.common.
      *
-     * This class is also a convenient place to handle the initialization of "common" and
-     * "commonParallelism", which can unfortunately be accessed independently.
+     * Note that re-running the class initializer of ForkJoinPool does not work because the class
+     * initializer does several other things that we do not support at run time.
      */
-    protected static class CommonInjector {
+    @Alias @InjectAccessors(ForkJoinPoolCommonAccessor.class) //
+    static ForkJoinPool common;
 
-        /**
-         * The static field that is used in place of the static field ForkJoinPool.common. This
-         * field set the first time it is accessed, when it transitions from null to something, but
-         * does not change thereafter. There is no set method for the field.
+    @Substitute
+    public static int getCommonPoolParallelism() {
+        /*
+         * The field for common parallelism is only accessed via this method, so a substitution
+         * provides a convenient place to ensure that the common pool is initialized.
          */
-        protected static AtomicReference<Target_java_util_concurrent_ForkJoinPool> injectedCommon = new AtomicReference<>(null);
-
-        /** The get access method for ForkJoinPool.common. */
-        public static ForkJoinPool getCommon() {
-            ensureCommonPoolIsInitialized();
-            return Util_java_util_concurrent_ForkJoinPool.as_ForkJoinPool(injectedCommon.get());
-        }
-
-        /** Ensure that the common pool variables are initialized. */
-        protected static void ensureCommonPoolIsInitialized() {
-            if (injectedCommon.get() == null) {
-                /* "common" and "commonParallelism" have to be set together. */
-                /*
-                 * This is a simplified version of ForkJoinPool.makeCommonPool(), without the
-                 * dynamic class loading for factory and handler based on system properties.
-                 */
-                int parallelism = Runtime.getRuntime().availableProcessors() - 1;
-                if (!SubstrateOptions.MultiThreaded.getValue()) {
-                    /*
-                     * Using "parallelism = 0" gets me a ForkJoinPool that does not try to start any
-                     * threads, which is what I want if I am not multi-threaded.
-                     */
-                    parallelism = 0;
-                }
-                if (parallelism > MAX_CAP) {
-                    parallelism = MAX_CAP;
-                }
-                final Target_java_util_concurrent_ForkJoinPool proposedPool = //
-                                new Target_java_util_concurrent_ForkJoinPool(parallelism, defaultForkJoinWorkerThreadFactory, null, LIFO_QUEUE, "ForkJoinPool.commonPool-worker-");
-                /* The assignment to "injectedCommon" is atomic to prevent races. */
-                injectedCommon.compareAndSet(null, proposedPool);
-                final ForkJoinPool actualPool = Util_java_util_concurrent_ForkJoinPool.as_ForkJoinPool(injectedCommon.get());
-                /*
-                 * The assignment to "commonParallelism" can race because multiple assignments are
-                 * idempotent once "injectedCommon" is set. This code is a copy of the relevant part
-                 * of the static initialization block in ForkJoinPool.
-                 */
-                commonParallelism = actualPool.getParallelism();
-            }
-        }
+        return ForkJoinPoolCommonAccessor.get().getParallelism();
     }
 
-    protected static class Util_java_util_concurrent_ForkJoinPool {
+    /* Delete the original static field for common parallelism. */
+    @Delete //
+    @TargetElement(onlyWith = JDK8OrEarlier.class) //
+    static int commonParallelism;
+    @Delete //
+    @TargetElement(onlyWith = JDK11OrLater.class) //
+    static int COMMON_PARALLELISM;
 
-        static ForkJoinPool as_ForkJoinPool(Target_java_util_concurrent_ForkJoinPool tjucfjp) {
-            return KnownIntrinsics.unsafeCast(tjucfjp, ForkJoinPool.class);
-        }
+    @Alias
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
+    static native ForkJoinPool makeCommonPool();
 
-        static Target_java_util_concurrent_ForkJoinPool as_Target_java_util_concurrent_ForkJoinPool(ForkJoinPool forkJoinPool) {
-            return KnownIntrinsics.unsafeCast(forkJoinPool, Target_java_util_concurrent_ForkJoinPool.class);
+    @Alias //
+    @TargetElement(onlyWith = JDK11OrLater.class) //
+    Target_java_util_concurrent_ForkJoinPool(byte forCommonPoolOnly) {
+    }
+}
+
+/**
+ * An injected field to replace ForkJoinPool.common.
+ *
+ * This class is also a convenient place to handle the initialization of "common" and
+ * "commonParallelism", which can unfortunately be accessed independently.
+ */
+class ForkJoinPoolCommonAccessor {
+
+    /**
+     * The static field that is used in place of the static field ForkJoinPool.common. This field
+     * set the first time it is accessed, when it transitions from null to something, but does not
+     * change thereafter.
+     */
+    private static volatile ForkJoinPool injectedCommon;
+
+    static volatile int commonParallelism;
+
+    /** The get access method for ForkJoinPool.common. */
+    static ForkJoinPool get() {
+        ForkJoinPool result = injectedCommon;
+        if (result == null) {
+            result = initializeCommonPool();
         }
+        return result;
+    }
+
+    private static synchronized ForkJoinPool initializeCommonPool() {
+        ForkJoinPool result = injectedCommon;
+        if (result == null) {
+            if (JavaVersionUtil.JAVA_SPEC <= 8) {
+                result = Target_java_util_concurrent_ForkJoinPool.makeCommonPool();
+            } else {
+                result = SubstrateUtil.cast(new Target_java_util_concurrent_ForkJoinPool((byte) 0), ForkJoinPool.class);
+            }
+            injectedCommon = result;
+        }
+        return result;
+    }
+}
+
+@TargetClass(java.util.concurrent.CompletableFuture.class)
+final class Target_java_util_concurrent_CompletableFuture {
+
+    @Alias @InjectAccessors(CompletableFutureAsyncPoolAccessor.class) //
+    @TargetElement(onlyWith = JDK8OrEarlier.class) //
+    private static Executor asyncPool;
+
+    @Alias @InjectAccessors(CompletableFutureAsyncPoolAccessor.class) //
+    @TargetElement(onlyWith = JDK11OrLater.class) //
+    private static Executor ASYNC_POOL;
+}
+
+class CompletableFutureAsyncPoolAccessor {
+    static Executor get() {
+        return ForkJoinPoolCommonAccessor.get();
     }
 }
 
@@ -451,11 +452,11 @@ final class Target_java_util_concurrent_ForkJoinPool {
 @SuppressWarnings("static-method")
 final class Target_java_util_concurrent_ForkJoinTask {
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
-    private static final Target_java_util_concurrent_ForkJoinTask_ExceptionNode[] exceptionTable;
+    private static Target_java_util_concurrent_ForkJoinTask_ExceptionNode[] exceptionTable;
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
-    private static final ReentrantLock exceptionTableLock;
+    private static ReentrantLock exceptionTableLock;
     @Alias @RecomputeFieldValue(kind = Kind.FromAlias) //
-    private static final ReferenceQueue<Object> exceptionTableRefQueue;
+    private static ReferenceQueue<Object> exceptionTableRefQueue;
 
     static {
         exceptionTableLock = new ReentrantLock();
@@ -479,7 +480,10 @@ final class Target_java_util_concurrent_ForkJoinTask_ExceptionNode {
 
 @TargetClass(java.util.concurrent.Exchanger.class)
 final class Target_java_util_concurrent_Exchanger {
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ExchangerABASEComputer.class) //
+
+    @Alias //
+    @TargetElement(onlyWith = JDK8OrEarlier.class) //
+    @RecomputeFieldValue(kind = Kind.Custom, declClass = ExchangerABASEComputer.class) //
     private static /* final */ int ABASE;
 
 }
@@ -494,35 +498,29 @@ class ExchangerABASEComputer implements RecomputeFieldValue.CustomFieldValueComp
 
     @Override
     public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
-        try {
-            ObjectLayout layout = ImageSingletons.lookup(ObjectLayout.class);
+        ObjectLayout layout = ImageSingletons.lookup(ObjectLayout.class);
 
-            /*
-             * ASHIFT is a hard-coded constant in the original implementation, so there is no need
-             * to recompute it. It is a private field, so we need reflection to access it.
-             */
-            Field ashiftField = java.util.concurrent.Exchanger.class.getDeclaredField("ASHIFT");
-            ashiftField.setAccessible(true);
-            int ashift = ashiftField.getInt(null);
+        /*
+         * ASHIFT is a hard-coded constant in the original implementation, so there is no need to
+         * recompute it. It is a private field, so we need reflection to access it.
+         */
+        int ashift = ReflectionUtil.readStaticField(java.util.concurrent.Exchanger.class, "ASHIFT");
 
-            /*
-             * The original implementation uses Node[].class, but we know that all Object arrays
-             * have the same kind and layout. The kind denotes the element type of the array.
-             */
-            JavaKind ak = JavaKind.Object;
+        /*
+         * The original implementation uses Node[].class, but we know that all Object arrays have
+         * the same kind and layout. The kind denotes the element type of the array.
+         */
+        JavaKind ak = JavaKind.Object;
 
-            // ABASE absorbs padding in front of element 0
-            int abase = layout.getArrayBaseOffset(ak) + (1 << ashift);
-            /* Sanity check. */
-            final int s = layout.getArrayIndexScale(ak);
-            if ((s & (s - 1)) != 0 || s > (1 << ashift)) {
-                throw VMError.shouldNotReachHere("Unsupported array scale");
-            }
-
-            return abase;
-        } catch (IllegalArgumentException | IllegalAccessException | NoSuchFieldException ex) {
-            throw VMError.shouldNotReachHere(ex);
+        // ABASE absorbs padding in front of element 0
+        int abase = layout.getArrayBaseOffset(ak) + (1 << ashift);
+        /* Sanity check. */
+        final int s = layout.getArrayIndexScale(ak);
+        if ((s & (s - 1)) != 0 || s > (1 << ashift)) {
+            throw VMError.shouldNotReachHere("Unsupported array scale");
         }
+
+        return abase;
     }
 }
 

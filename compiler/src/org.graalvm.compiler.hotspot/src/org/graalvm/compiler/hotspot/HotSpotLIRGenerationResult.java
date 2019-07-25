@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -44,6 +46,7 @@ public class HotSpotLIRGenerationResult extends LIRGenerationResult {
      */
     private StackSlot deoptimizationRescueSlot;
     protected final Object stub;
+    private final boolean requiresReservedStackAccessCheck;
 
     private int maxInterpreterFrameSize;
 
@@ -53,9 +56,11 @@ public class HotSpotLIRGenerationResult extends LIRGenerationResult {
      */
     private EconomicMap<LIRFrameState, SaveRegistersOp> calleeSaveInfo = EconomicMap.create(Equivalence.IDENTITY_WITH_SYSTEM_HASHCODE);
 
-    public HotSpotLIRGenerationResult(CompilationIdentifier compilationId, LIR lir, FrameMapBuilder frameMapBuilder, CallingConvention callingConvention, Object stub) {
+    public HotSpotLIRGenerationResult(CompilationIdentifier compilationId, LIR lir, FrameMapBuilder frameMapBuilder, CallingConvention callingConvention, Object stub,
+                    boolean requiresReservedStackAccessCheck) {
         super(compilationId, lir, frameMapBuilder, callingConvention);
         this.stub = stub;
+        this.requiresReservedStackAccessCheck = requiresReservedStackAccessCheck;
     }
 
     public EconomicMap<LIRFrameState, SaveRegistersOp> getCalleeSaveInfo() {
@@ -80,5 +85,9 @@ public class HotSpotLIRGenerationResult extends LIRGenerationResult {
 
     public int getMaxInterpreterFrameSize() {
         return maxInterpreterFrameSize;
+    }
+
+    public boolean requiresReservedStackAccessCheck() {
+        return requiresReservedStackAccessCheck;
     }
 }

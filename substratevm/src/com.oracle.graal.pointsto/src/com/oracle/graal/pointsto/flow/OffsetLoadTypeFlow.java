@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,6 +28,7 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.extended.JavaReadNode;
 import org.graalvm.compiler.nodes.extended.RawLoadNode;
 import org.graalvm.compiler.nodes.java.AtomicReadAndWriteNode;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.api.UnsafePartitionKind;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
@@ -185,7 +188,7 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
                 } else {
                     for (AnalysisField field : objectType.unsafeAccessedFields()) {
                         assert field != null;
-                        TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, field, false);
+                        TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, this.method(), field, false);
                         if (fieldFlow.getState().isUnknown()) {
                             bb.getUnsupportedFeatures().addMessage(graphRef.getMethod().format("%H.%n(%p)"), graphRef.getMethod(),
                                             "Illegal: Unsafe loading UnknownTypeState from object. Load: " + this.getSource());
@@ -269,7 +272,7 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
                 assert !objectType.isArray();
 
                 for (AnalysisField field : objectType.unsafeAccessedFields(partitionKind)) {
-                    TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, field, false);
+                    TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, this.method(), field, false);
 
                     if (fieldFlow.getState().isUnknown()) {
                         bb.getUnsupportedFeatures().addMessage(graphRef.getMethod().format("%H.%n(%p)"), graphRef.getMethod(),

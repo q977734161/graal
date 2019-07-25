@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -259,7 +259,13 @@ public final class NFATraceFinderGenerator {
                 }
             }
         }
-        return new NFA(originalNFA.getAst(), dummyInitialState, null, null, newAnchoredEntry, newUnAnchoredEntry, states, stateID, transitionID, resultList.toArray(new PreCalculatedResultFactory[0]));
+        PreCalculatedResultFactory[] preCalculatedResults;
+        if (resultDeDuplicationMap.size() == 1) {
+            preCalculatedResults = new PreCalculatedResultFactory[]{resultList.get(0)};
+        } else {
+            preCalculatedResults = resultList.toArray(new PreCalculatedResultFactory[0]);
+        }
+        return new NFA(originalNFA.getAst(), dummyInitialState, null, null, newAnchoredEntry, newUnAnchoredEntry, states, stateID, transitionID, preCalculatedResults);
     }
 
     private void createTransition(NFAState source, NFAState target, NFAStateTransition originalTransition,

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,8 +25,12 @@
 package com.oracle.svm.hosted.annotation;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.type.StampFactory;
@@ -34,9 +40,13 @@ import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.java.FrameStateBuilder;
 import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.ConstantNode;
+import org.graalvm.compiler.nodes.FixedGuardNode;
+import org.graalvm.compiler.nodes.LogicConstantNode;
+import org.graalvm.compiler.nodes.LogicNode;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.UnwindNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
@@ -49,17 +59,20 @@ import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.replacements.GraphKit;
 import org.graalvm.compiler.replacements.nodes.BasicObjectCloneNode;
-import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.core.annotate.Substitute;
-import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.hub.AnnotationTypeSupport;
+import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.jdk.AnnotationSupportConfig;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.analysis.Inflation;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
 import com.oracle.svm.hosted.snippets.SubstrateGraphBuilderPlugins;
 
+import jdk.vm.ci.meta.DeoptimizationAction;
+import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -67,14 +80,52 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import sun.reflect.annotation.AnnotationType;
+import sun.reflect.annotation.TypeNotPresentExceptionProxy;
 
 public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitutionType> {
+
+    /**
+     * The constant-annotation-marker interface is used to mark the ahead-of-time allocated
+     * annotation proxy objects. We re-use the {@link Override java.lang.Override} interface for
+     * this purpose. Although this may seem like a strange choice at first it is necessary to avoid
+     * the restrictions around the creation of proxy objects. We need an interface that can be used
+     * to mark existing proxy objects by extending the list of interfaces they implement. We do this
+     * in AnnotationObjectReplacer#replacementComputer(Object). We call
+     * {@link Proxy#newProxyInstance(ClassLoader, Class[], InvocationHandler)} passing in the same
+     * class loader that loaded the class of the original proxy object, the extended interface list
+     * and the original proxy object invocation handler. If the original proxy object is a proxy to
+     * an annotation loaded by the boot class loader then the marker interface needs to be loaded by
+     * the boot class loader too. This is imposed by {@link Proxy} API. Therefore, the
+     * {@link Override} interface gives us access to an interface that is already loaded by the boot
+     * class loader. It also has the advantage that it declares SOURCE retention policy, so this
+     * interface should not be otherwise present in the bytecode and no other uses should interfere
+     * with our mechanism.
+     * 
+     * Note: Ideally we would use a custom marker interface. However, this is impossible as of JDK9
+     * since the set of boot modules is fixed at JDK build time and cannot be extended at runtime.
+     * 
+     * This allows us to create an optimized type for the ahead-of-time allocated annotation proxy
+     * objects which removes the overhead of storing the annotation values in a HashMap. See
+     * {@link AnnotationSupport#getSubstitution(ResolvedJavaType)} for the logic where this
+     * substitution is implemented. This is possible since the ahead-of-time allocated annotation
+     * proxy objects are effectively constant. The constant-annotation-marker interface is removed
+     * before runtime. See {@link AnnotationSubstitutionType#getInterfaces()}. Therefore the
+     * annotation proxy objects only implement the annotation interface, together with
+     * {@link java.lang.reflect.Proxy} and {@link java.lang.annotation.Annotation}, as expected.
+     * 
+     * The run-time allocated annotations use the default JDK implementation.
+     *
+     * The downside of having a separate (more efficient) implementation for ahead-of-time allocated
+     * annotations is that at run time there can be two proxy types for the same annotation type and
+     * an equality check between them would fail.
+     */
+    static final Class<?> constantAnnotationMarkerInterface = java.lang.Override.class;
 
     private final SnippetReflectionProvider snippetReflection;
 
     private final ResolvedJavaType javaLangAnnotationAnnotation;
     private final ResolvedJavaType javaLangReflectProxy;
+    private final ResolvedJavaType constantAnnotationMarker;
 
     public AnnotationSupport(MetaAccessProvider metaAccess, SnippetReflectionProvider snippetReflection) {
         super(metaAccess);
@@ -82,15 +133,28 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
 
         javaLangAnnotationAnnotation = metaAccess.lookupJavaType(java.lang.annotation.Annotation.class);
         javaLangReflectProxy = metaAccess.lookupJavaType(java.lang.reflect.Proxy.class);
+        constantAnnotationMarker = metaAccess.lookupJavaType(constantAnnotationMarkerInterface);
+
+        AnnotationSupportConfig.initialize();
     }
 
-    private boolean isAnnotation(ResolvedJavaType type) {
-        return javaLangAnnotationAnnotation.isAssignableFrom(type) && javaLangReflectProxy.isAssignableFrom(type);
+    private boolean isConstantAnnotationType(ResolvedJavaType type) {
+        /*
+         * Check if the type implements all of Annotation, Proxy and the constant-annotation-marker
+         * interface. If so, then it is the type of a annotation proxy object encountered during
+         * heap scanning. Only those types are substituted with a more efficient annotation proxy
+         * type implementation. If a type implements only Annotation and Proxy but not the
+         * constant-annotation-marker interface then it is a proxy type registered via the dynamic
+         * proxy API. Such type is used to allocate annotation instances at run time and must not be
+         * replaced.
+         */
+        return javaLangAnnotationAnnotation.isAssignableFrom(type) && javaLangReflectProxy.isAssignableFrom(type) &&
+                        constantAnnotationMarker.isAssignableFrom(type);
     }
 
     @Override
     public ResolvedJavaType lookup(ResolvedJavaType type) {
-        if (isAnnotation(type)) {
+        if (isConstantAnnotationType(type)) {
             return getSubstitution(type);
         }
         return type;
@@ -106,7 +170,7 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
 
     @Override
     public ResolvedJavaField lookup(ResolvedJavaField field) {
-        if (isAnnotation(field.getDeclaringClass())) {
+        if (isConstantAnnotationType(field.getDeclaringClass())) {
             throw new UnsupportedFeatureException("Field of annotation proxy is not accessible: " + field);
         }
         return field;
@@ -114,7 +178,7 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
 
     @Override
     public ResolvedJavaMethod lookup(ResolvedJavaMethod method) {
-        if (isAnnotation(method.getDeclaringClass())) {
+        if (isConstantAnnotationType(method.getDeclaringClass())) {
             AnnotationSubstitutionType declaringClass = getSubstitution(method.getDeclaringClass());
             AnnotationSubstitutionMethod result = declaringClass.getSubstitutionMethod(method);
             assert result != null && result.original.equals(method);
@@ -149,14 +213,40 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
                     substitutionMethod = new AnnotationAnnotationTypeMethod(originalMethod);
                 } else {
                     substitutionMethod = new AnnotationAccessorMethod(originalMethod);
-                    result.addSubstitutionField(new AnnotationSubstitutionField(result, originalMethod, snippetReflection));
+                    result.addSubstitutionField(new AnnotationSubstitutionField(result, originalMethod, snippetReflection, metaAccess));
                 }
+                result.addSubstitutionMethod(originalMethod, substitutionMethod);
+            }
+
+            for (ResolvedJavaMethod originalMethod : type.getDeclaredConstructors()) {
+                AnnotationSubstitutionMethod substitutionMethod = new AnnotationConstructorMethod(originalMethod);
                 result.addSubstitutionMethod(originalMethod, substitutionMethod);
             }
 
             typeSubstitutions.put(type, result);
         }
         return result;
+    }
+
+    static class AnnotationConstructorMethod extends AnnotationSubstitutionMethod {
+        AnnotationConstructorMethod(ResolvedJavaMethod original) {
+            super(original);
+        }
+
+        @Override
+        public StructuredGraph buildGraph(DebugContext debug, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
+            HostedGraphKit kit = new HostedGraphKit(debug, providers, method);
+            StructuredGraph graph = kit.getGraph();
+            graph.addAfterFixed(graph.start(), graph.add(new FixedGuardNode(LogicConstantNode.forBoolean(true, graph), DeoptimizationReason.UnreachedCode, DeoptimizationAction.None, true)));
+            assert graph.verify();
+            return graph;
+        }
+    }
+
+    /* Used to check the type of fields that need special guarding against missing types. */
+    static boolean isClassType(JavaType type, MetaAccessProvider metaAccess) {
+        return type.getJavaKind() == JavaKind.Object &&
+                        (type.equals(metaAccess.lookupJavaType(Class.class)) || type.equals(metaAccess.lookupJavaType(Class[].class)));
     }
 
     static class AnnotationAccessorMethod extends AnnotationSubstitutionMethod {
@@ -169,7 +259,7 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
             ResolvedJavaType annotationType = method.getDeclaringClass();
             assert !Modifier.isStatic(method.getModifiers()) && method.getSignature().getParameterCount(false) == 0;
 
-            GraphKit kit = new HostedGraphKit(debug, providers, method);
+            HostedGraphKit kit = new HostedGraphKit(debug, providers, method);
             StructuredGraph graph = kit.getGraph();
             FrameStateBuilder state = new FrameStateBuilder(null, method, graph);
             state.initializeForMethodStart(null, true, providers.getGraphBuilderPlugins());
@@ -183,9 +273,38 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
 
             ValueNode receiver = state.loadLocal(0, JavaKind.Object);
             ResolvedJavaField field = findField(annotationType, canonicalMethodName(method));
+
             ValueNode loadField = kit.append(LoadFieldNode.create(null, receiver, field));
 
             ResolvedJavaType resultType = method.getSignature().getReturnType(null).resolve(null);
+
+            if (isClassType(resultType, providers.getMetaAccess())) {
+                /* Accessor of an annotation element that has a Class type. */
+
+                /* Check if it stores a TypeNotPresentExceptionProxy. */
+                ResolvedJavaType exceptionProxyType = providers.getMetaAccess().lookupJavaType(TypeNotPresentExceptionProxy.class);
+                TypeReference exceptionProxyTypeRef = TypeReference.createTrusted(kit.getAssumptions(), exceptionProxyType);
+
+                LogicNode condition = kit.append(InstanceOfNode.create(exceptionProxyTypeRef, loadField));
+                kit.startIf(condition, BranchProbabilityNode.SLOW_PATH_PROBABILITY);
+                kit.thenPart();
+
+                /* Generate the TypeNotPresentException exception and throw it. */
+                PiNode casted = kit.createPiNode(loadField, StampFactory.object(exceptionProxyTypeRef, true));
+                ResolvedJavaMethod generateExceptionMethod = kit.findMethod(TypeNotPresentExceptionProxy.class, "generateException", false);
+                ValueNode exception = kit.createJavaCallWithExceptionAndUnwind(InvokeKind.Virtual, generateExceptionMethod, casted);
+                kit.append(new UnwindNode(exception));
+                kit.mergeUnwinds();
+
+                kit.elsePart();
+
+                /* Cast the value to the original type. */
+                TypeReference resultTypeRef = TypeReference.createTrusted(kit.getAssumptions(), resultType);
+                loadField = kit.createPiNode(loadField, StampFactory.object(resultTypeRef, true));
+
+                kit.endIf();
+            }
+
             if (resultType.isArray()) {
                 /* From the specification: Arrays with length > 0 need to be cloned. */
                 ValueNode arrayLength = kit.append(new ArrayLengthNode(loadField));
@@ -219,8 +338,8 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
 
         @Override
         public StructuredGraph buildGraph(DebugContext debug, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
-            assert method.getDeclaringClass().getInterfaces().length == 1;
-            ResolvedJavaType annotationInterfaceType = method.getDeclaringClass().getInterfaces()[0];
+            ResolvedJavaType annotationType = method.getDeclaringClass();
+            ResolvedJavaType annotationInterfaceType = findAnnotationInterfaceType(annotationType);
             JavaConstant returnValue = providers.getConstantReflection().asJavaClass(annotationInterfaceType);
 
             GraphKit kit = new HostedGraphKit(debug, providers, method);
@@ -273,7 +392,7 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
                 ResolvedJavaField ourField = findField(annotationType, attribute);
                 ResolvedJavaMethod otherMethod = findMethod(annotationInterfaceType, attribute);
                 ResolvedJavaType attributeType = ourField.getType().resolve(null);
-                assert attributeType.equals(otherMethod.getSignature().getReturnType(null));
+                // assert attributeType.equals(otherMethod.getSignature().getReturnType(null));
 
                 /*
                  * Access other value. The other object can be any implementation of the annotation
@@ -406,28 +525,98 @@ public class AnnotationSupport extends CustomSubstitution<AnnotationSubstitution
         }
     }
 
-    static ResolvedJavaType findAnnotationInterfaceType(ResolvedJavaType annotationType) {
-        assert annotationType.getInterfaces().length == 1;
-        return annotationType.getInterfaces()[0];
+    /*
+     * This method retrieves the annotation interface type from an annotation proxy type represented
+     * as an AnnotationSubstitutionType (or a type that wraps an AnnotationSubstitutionType). The
+     * constant-annotation-marker interface is already filtered out when
+     * AnnotationSubstitutionType.getInterfaces() is called.
+     */
+    private static ResolvedJavaType findAnnotationInterfaceType(ResolvedJavaType annotationType) {
+        VMError.guarantee(Inflation.toWrappedType(annotationType) instanceof AnnotationSubstitutionType);
+        ResolvedJavaType[] interfaces = annotationType.getInterfaces();
+        VMError.guarantee(interfaces.length == 1, "Unexpected number of interfaces for annotation proxy class.");
+        return interfaces[0];
+    }
+
+    /**
+     * This method retrieves the annotation interface type from a marked annotation proxy type.
+     * Annotation proxy types implement only the annotation interface by default. However, since we
+     * inject the constant-annotation-marker interface the Annotation proxy types for ahead-of-time
+     * allocated annotations implement two interfaces. We make sure we return the right one here.
+     */
+    static ResolvedJavaType findAnnotationInterfaceTypeForMarkedAnnotationType(ResolvedJavaType annotationType, MetaAccessProvider metaAccess) {
+        ResolvedJavaType[] interfaces = annotationType.getInterfaces();
+        VMError.guarantee(interfaces.length == 2, "Unexpected number of interfaces for annotation proxy class.");
+        VMError.guarantee(interfaces[1].equals(metaAccess.lookupJavaType(constantAnnotationMarkerInterface)));
+        return interfaces[0];
+    }
+
+    /*
+     * This method is similar to the above one, with the difference that it takes a Class<?> instead
+     * of an ResolvedJavaType as an argument.
+     */
+    static Class<?> findAnnotationInterfaceTypeForMarkedAnnotationType(Class<? extends Proxy> clazz) {
+        Class<?>[] interfaces = clazz.getInterfaces();
+        VMError.guarantee(interfaces.length == 2, "Unexpected number of interfaces for annotation proxy class.");
+        VMError.guarantee(interfaces[1].equals(constantAnnotationMarkerInterface));
+        return interfaces[0];
+    }
+
+    static boolean isAnnotationMarkerInterface(ResolvedJavaType type, MetaAccessProvider metaAccess) {
+        return type.equals(metaAccess.lookupJavaType(constantAnnotationMarkerInterface));
     }
 
 }
 
-@TargetClass(className = "sun.reflect.annotation.AnnotationType")
-final class Target_sun_reflect_annotation_AnnotationType {
+@AutomaticFeature
+class AnnotationSupportFeature implements Feature {
+
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        access.registerObjectReplacer(new AnnotationObjectReplacer());
+    }
+}
+
+/**
+ * This replacer replaces the annotation proxy instances with a clone that additionally implements
+ * the constant-annotation-marker interface.
+ */
+class AnnotationObjectReplacer implements Function<Object, Object> {
 
     /**
-     * In JDK this class lazily initializes AnnotationTypes as they are requested.
+     * Cache the replaced objects to ensure that they are only replaced once. We are using a
+     * concurrent hash map because replace() may be called from BigBang.finish(), which is
+     * multi-threaded.
      *
-     * In SVM we analyze only the types that are used as {@link java.lang.annotation.Repeatable}
-     * annotations and pre-initialize those.
+     * A side effect of this caching is de-duplication of annotation instances. When running as a
+     * native image two equal annotation instances are also identical. On HotSpot that is not true,
+     * the two annotation instances, although equal, are actually two distinct objects. Although
+     * this is a small deviation from HotSpot semantics it can improve the native image size.
      *
-     * If this method fails, introduce missing pre-initialization rules in
-     * {@link AnnotationTypeFeature}.
+     * If de-duplication is not desired that can be achieved by replacing the ConcurrentHashMap with
+     * an IdentityHashMap (and additional access synchronisation).
      */
-    @Substitute
-    public static AnnotationType getInstance(Class<? extends Annotation> annotationClass) {
-        return ImageSingletons.lookup(AnnotationTypeSupport.class).getInstance(annotationClass);
+    private ConcurrentHashMap<Object, Object> objectCache = new ConcurrentHashMap<>();
+
+    @Override
+    public Object apply(Object original) {
+        Class<?> clazz = original.getClass();
+        if (Annotation.class.isAssignableFrom(clazz) && Proxy.class.isAssignableFrom(clazz)) {
+            return objectCache.computeIfAbsent(original, AnnotationObjectReplacer::replacementComputer);
+        }
+
+        return original;
+    }
+
+    /**
+     * Effectively clones the original proxy object and it adds the constant-annotation-marker
+     * interface.
+     */
+    private static Object replacementComputer(Object original) {
+        Class<?>[] interfaces = original.getClass().getInterfaces();
+        Class<?>[] extendedInterfaces = Arrays.copyOf(interfaces, interfaces.length + 1);
+        extendedInterfaces[extendedInterfaces.length - 1] = AnnotationSupport.constantAnnotationMarkerInterface;
+        return Proxy.newProxyInstance(original.getClass().getClassLoader(), extendedInterfaces, Proxy.getInvocationHandler(original));
     }
 
 }

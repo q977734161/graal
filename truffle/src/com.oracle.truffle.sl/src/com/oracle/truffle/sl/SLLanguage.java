@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,16 +48,20 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Scope;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
 import com.oracle.truffle.api.debug.DebuggerTags;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.object.DynamicObject;
@@ -71,12 +75,6 @@ import com.oracle.truffle.sl.builtins.SLReadlnBuiltin;
 import com.oracle.truffle.sl.builtins.SLStackTraceBuiltin;
 import com.oracle.truffle.sl.nodes.SLEvalRootNode;
 import com.oracle.truffle.sl.nodes.SLTypes;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyCacheNode;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyNode;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyCacheNode;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyNode;
-import com.oracle.truffle.sl.nodes.call.SLDispatchNode;
-import com.oracle.truffle.sl.nodes.call.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBlockNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBreakNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLContinueNode;
@@ -89,13 +87,16 @@ import com.oracle.truffle.sl.nodes.expression.SLBigIntegerLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLDivNode;
 import com.oracle.truffle.sl.nodes.expression.SLEqualNode;
 import com.oracle.truffle.sl.nodes.expression.SLFunctionLiteralNode;
+import com.oracle.truffle.sl.nodes.expression.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.expression.SLLessOrEqualNode;
 import com.oracle.truffle.sl.nodes.expression.SLLessThanNode;
 import com.oracle.truffle.sl.nodes.expression.SLLogicalAndNode;
 import com.oracle.truffle.sl.nodes.expression.SLLogicalOrNode;
 import com.oracle.truffle.sl.nodes.expression.SLMulNode;
+import com.oracle.truffle.sl.nodes.expression.SLReadPropertyNode;
 import com.oracle.truffle.sl.nodes.expression.SLStringLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLSubNode;
+import com.oracle.truffle.sl.nodes.expression.SLWritePropertyNode;
 import com.oracle.truffle.sl.nodes.local.SLLexicalScope;
 import com.oracle.truffle.sl.nodes.local.SLReadLocalVariableNode;
 import com.oracle.truffle.sl.nodes.local.SLWriteLocalVariableNode;
@@ -189,8 +190,9 @@ import com.oracle.truffle.sl.runtime.SLNull;
  * variables.
  * </ul>
  */
-@TruffleLanguage.Registration(id = SLLanguage.ID, name = "SL", mimeType = SLLanguage.MIME_TYPE)
-@ProvidedTags({StandardTags.CallTag.class, StandardTags.StatementTag.class, StandardTags.RootTag.class, StandardTags.ExpressionTag.class, DebuggerTags.AlwaysHalt.class})
+@TruffleLanguage.Registration(id = SLLanguage.ID, name = "SL", defaultMimeType = SLLanguage.MIME_TYPE, characterMimeTypes = SLLanguage.MIME_TYPE, contextPolicy = ContextPolicy.SHARED, fileTypeDetectors = SLFileDetector.class)
+@ProvidedTags({StandardTags.CallTag.class, StandardTags.StatementTag.class, StandardTags.RootTag.class, StandardTags.RootBodyTag.class, StandardTags.ExpressionTag.class,
+                DebuggerTags.AlwaysHalt.class})
 public final class SLLanguage extends TruffleLanguage<SLContext> {
     public static volatile int counter;
 
@@ -230,10 +232,7 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
             sb.append(request.getSource().getCharacters());
             sb.append(";}");
             String language = requestedSource.getLanguage() == null ? ID : requestedSource.getLanguage();
-            String mimeType = requestedSource.getMimeType() == null ? MIME_TYPE : requestedSource.getMimeType();
-
-            Source decoratedSource = Source.newBuilder(sb.toString()).language(language).mimeType(mimeType).name(
-                            request.getSource().getName()).build();
+            Source decoratedSource = Source.newBuilder(language, sb.toString(), request.getSource().getName()).build();
             functions = SimpleLanguageParser.parseSL(this, decoratedSource);
         }
 
@@ -269,57 +268,91 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
 
     @Override
     protected boolean isVisible(SLContext context, Object value) {
-        return value != SLNull.SINGLETON;
+        return !InteropLibrary.getFactory().getUncached(value).isNull(value);
     }
 
     @Override
     protected boolean isObjectOfLanguage(Object object) {
         if (!(object instanceof TruffleObject)) {
             return false;
+        } else if (object instanceof SLBigNumber || object instanceof SLFunction || object instanceof SLNull) {
+            return true;
+        } else if (SLContext.isSLObject(object)) {
+            return true;
+        } else {
+            return false;
         }
-        TruffleObject truffleObject = (TruffleObject) object;
-        return truffleObject instanceof SLFunction || truffleObject instanceof SLBigNumber || SLContext.isSLObject(truffleObject);
     }
 
     @Override
     protected String toString(SLContext context, Object value) {
-        if (value == SLNull.SINGLETON) {
-            return "NULL";
+        return toString(value);
+    }
+
+    public static String toString(Object value) {
+        try {
+            if (value == null) {
+                return "ANY";
+            }
+            InteropLibrary interop = InteropLibrary.getFactory().getUncached(value);
+            if (interop.fitsInLong(value)) {
+                return Long.toString(interop.asLong(value));
+            } else if (interop.isBoolean(value)) {
+                return Boolean.toString(interop.asBoolean(value));
+            } else if (interop.isString(value)) {
+                return interop.asString(value);
+            } else if (interop.isNull(value)) {
+                return "NULL";
+            } else if (interop.isExecutable(value)) {
+                if (value instanceof SLFunction) {
+                    return ((SLFunction) value).getName();
+                } else {
+                    return "Function";
+                }
+            } else if (interop.hasMembers(value)) {
+                return "Object";
+            } else if (value instanceof SLBigNumber) {
+                return value.toString();
+            } else {
+                return "Unsupported";
+            }
+        } catch (UnsupportedMessageException e) {
+            CompilerDirectives.transferToInterpreter();
+            throw new AssertionError();
         }
-        if (value instanceof SLBigNumber) {
-            return super.toString(context, ((SLBigNumber) value).getValue());
-        }
-        if (value instanceof Long) {
-            return Long.toString((Long) value);
-        }
-        return super.toString(context, value);
     }
 
     @Override
     protected Object findMetaObject(SLContext context, Object value) {
-        if (value instanceof Number || value instanceof SLBigNumber) {
+        return getMetaObject(value);
+    }
+
+    public static String getMetaObject(Object value) {
+        if (value == null) {
+            return "ANY";
+        }
+        InteropLibrary interop = InteropLibrary.getFactory().getUncached(value);
+        if (interop.isNumber(value) || value instanceof SLBigNumber) {
             return "Number";
-        }
-        if (value instanceof Boolean) {
+        } else if (interop.isBoolean(value)) {
             return "Boolean";
-        }
-        if (value instanceof String) {
+        } else if (interop.isString(value)) {
             return "String";
-        }
-        if (value == SLNull.SINGLETON) {
-            return "Null";
-        }
-        if (value instanceof SLFunction) {
+        } else if (interop.isNull(value)) {
+            return "NULL";
+        } else if (interop.isExecutable(value)) {
             return "Function";
+        } else if (interop.hasMembers(value)) {
+            return "Object";
+        } else {
+            return "Unsupported";
         }
-        return "Object";
     }
 
     @Override
     protected SourceSection findSourceLocation(SLContext context, Object value) {
         if (value instanceof SLFunction) {
-            SLFunction f = (SLFunction) value;
-            return f.getCallTarget().getRootNode().getSourceSection();
+            return ((SLFunction) value).getDeclaredLocation();
         }
         return null;
     }

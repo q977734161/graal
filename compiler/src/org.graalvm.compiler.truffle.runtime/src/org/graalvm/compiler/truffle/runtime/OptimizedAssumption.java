@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,15 +24,12 @@
  */
 package org.graalvm.compiler.truffle.runtime;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TraceTruffleAssumptions;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TraceTruffleStackTraceLimit;
+import static org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions.TraceTruffleAssumptions;
 
 import java.lang.ref.WeakReference;
 import java.util.function.Consumer;
 
-import org.graalvm.compiler.debug.TTY;
 import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -64,7 +63,7 @@ public final class OptimizedAssumption extends AbstractAssumption implements For
 
         @Override
         public synchronized void accept(OptimizedAssumptionDependency dep) {
-            if (dep == null || dep.reachabilityDeterminesValidity()) {
+            if (dep == null || dep.soleExecutionEntryPoint()) {
                 this.weakDependency = new WeakReference<>(dep);
             } else {
                 this.dependency = dep;
@@ -170,7 +169,7 @@ public final class OptimizedAssumption extends AbstractAssumption implements For
             if (dependency != null) {
                 OptimizedCallTarget callTarget = invalidateWithReason(dependency, "assumption invalidated");
                 invalidatedADependency = true;
-                if (TruffleCompilerOptions.getValue(TraceTruffleAssumptions)) {
+                if (TruffleRuntimeOptions.getValue(TraceTruffleAssumptions)) {
                     logInvalidatedDependency(dependency, message);
                 }
                 if (callTarget != null) {
@@ -184,7 +183,7 @@ public final class OptimizedAssumption extends AbstractAssumption implements For
         sizeAfterLastRemove = 0;
         isValid = false;
 
-        if (TruffleCompilerOptions.getValue(TraceTruffleAssumptions)) {
+        if (TruffleRuntimeOptions.getValue(TraceTruffleAssumptions)) {
             if (invalidatedADependency) {
                 logStackTrace();
             }
@@ -271,16 +270,16 @@ public final class OptimizedAssumption extends AbstractAssumption implements For
     }
 
     private void logInvalidatedDependency(OptimizedAssumptionDependency dependency, String message) {
-        if (message != null && message.length() > 0) {
-            TTY.out().out().printf("assumption '%s' invalidated installed code '%s' with message '%s'\n", name, dependency, message);
-        } else {
-            TTY.out().out().printf("assumption '%s' invalidated installed code '%s'\n", name, dependency);
+        final StringBuilder sb = new StringBuilder("assumption '").append(name).append("' invalidated installed code '").append(dependency);
+        if (message != null && !message.isEmpty()) {
+            sb.append("' with message '").append(message);
         }
+        GraalTruffleRuntime.getRuntime().log(sb.toString());
     }
 
     private static void logStackTrace() {
         final int skip = 1;
-        final int limit = TruffleCompilerOptions.getValue(TraceTruffleStackTraceLimit);
+        final int limit = TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TraceTruffleStackTraceLimit);
         StackTraceElement[] stackTrace = new Throwable().getStackTrace();
         StringBuilder strb = new StringBuilder();
         String sep = "";
@@ -292,6 +291,6 @@ public final class OptimizedAssumption extends AbstractAssumption implements For
             strb.append("\n    ...");
         }
 
-        TTY.out().out().println(strb);
+        GraalTruffleRuntime.getRuntime().log(strb.toString());
     }
 }

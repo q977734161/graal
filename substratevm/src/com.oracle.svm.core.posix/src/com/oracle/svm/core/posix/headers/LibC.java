@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,9 +24,11 @@
  */
 package com.oracle.svm.core.posix.headers;
 
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
@@ -34,8 +38,9 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 //Checkstyle: stop
 
 /**
- * Basic functions from the standard C library that we require to be present on all platforms.
+ * Basic functions from the standard C library that we require to be present on all Posix platforms.
  */
+@Platforms({InternalPlatform.LINUX_AND_JNI.class, InternalPlatform.DARWIN_AND_JNI.class})
 public class LibC {
 
     /**
@@ -177,14 +182,6 @@ public class LibC {
     @CFunction(transition = CFunction.Transition.NO_TRANSITION)
     public static native CCharPointer strdup(CCharPointer src);
 
-    /** Returns a pointer to the first occurrence of the character c in the string s. */
-    @CFunction(transition = CFunction.Transition.NO_TRANSITION)
-    public static native CCharPointer strchr(CCharPointer s, int c);
-
-    /** Calculate the length of a string. */
-    @CFunction(transition = CFunction.Transition.NO_TRANSITION)
-    public static native UnsignedWord strlen(CCharPointer s);
-
     /* Split a string into substrings at locations of delimiters, modifying the string in place. */
     @CFunction(transition = CFunction.Transition.NO_TRANSITION)
     public static native CCharPointer strtok_r(CCharPointer str, CCharPointer delim, CCharPointerPointer saveptr);
@@ -192,4 +189,8 @@ public class LibC {
     /** Convert the of the string to an integer, according to the specified radix. */
     @CFunction(transition = CFunction.Transition.NO_TRANSITION)
     public static native long strtol(CCharPointer nptr, CCharPointerPointer endptr, int base);
+
+    /** Finds the first matching substring in a string. */
+    @CFunction(transition = CFunction.Transition.NO_TRANSITION)
+    public static native CCharPointer strstr(CCharPointer str, CCharPointer substr);
 }

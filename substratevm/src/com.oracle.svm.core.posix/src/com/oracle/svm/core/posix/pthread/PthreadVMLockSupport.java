@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,13 +26,14 @@ package com.oracle.svm.core.posix.pthread;
 
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
@@ -44,7 +47,7 @@ import com.oracle.svm.core.locks.ClassInstanceReplacer;
 import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.posix.headers.Errno;
+import com.oracle.svm.core.headers.Errno;
 import com.oracle.svm.core.posix.headers.Pthread;
 import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.thread.VMThreads;
@@ -56,7 +59,7 @@ import jdk.vm.ci.meta.JavaKind;
  * implemented via pthreads.
  */
 @AutomaticFeature
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
+@Platforms({InternalPlatform.LINUX_AND_JNI.class, InternalPlatform.DARWIN_AND_JNI.class})
 final class PthreadVMLockFeature implements Feature {
 
     private final ClassInstanceReplacer<VMMutex, VMMutex> mutexReplacer = new ClassInstanceReplacer<VMMutex, VMMutex>(VMMutex.class) {
@@ -133,13 +136,18 @@ public final class PthreadVMLockSupport {
      * Must be called once early during startup, before any mutex or condition is used.
      */
     @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
-    public static void initialize() {
+    public static boolean initialize() {
         for (PthreadVMMutex mutex : ImageSingletons.lookup(PthreadVMLockSupport.class).mutexes) {
-            checkResult(Pthread.pthread_mutex_init(mutex.getStructPointer(), WordFactory.nullPointer()), "pthread_mutex_init");
+            if (Pthread.pthread_mutex_init(mutex.getStructPointer(), WordFactory.nullPointer()) != 0) {
+                return false;
+            }
         }
         for (PthreadVMCondition condition : ImageSingletons.lookup(PthreadVMLockSupport.class).conditions) {
-            checkResult(PthreadConditionUtils.initCondition(condition.getStructPointer()), "pthread_cond_init");
+            if (PthreadConditionUtils.initCondition(condition.getStructPointer()) != 0) {
+                return false;
+            }
         }
+        return true;
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", calleeMustBe = false)
@@ -225,7 +233,7 @@ final class PthreadVMCondition extends VMCondition {
 
     @Override
     public long block(long waitNanos) {
-        Time.timespec deadlineTimespec = StackValue.get(SizeOf.get(Time.timespec.class));
+        Time.timespec deadlineTimespec = StackValue.get(Time.timespec.class);
         PthreadConditionUtils.delayNanosToDeadlineTimespec(waitNanos, deadlineTimespec);
 
         final int timedwaitResult = Pthread.pthread_cond_timedwait(getStructPointer(), ((PthreadVMMutex) getMutex()).getStructPointer(), deadlineTimespec);
@@ -241,7 +249,7 @@ final class PthreadVMCondition extends VMCondition {
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.")
     public long blockNoTransition(long waitNanos) {
-        Time.timespec deadlineTimespec = StackValue.get(SizeOf.get(Time.timespec.class));
+        Time.timespec deadlineTimespec = StackValue.get(Time.timespec.class);
         PthreadConditionUtils.delayNanosToDeadlineTimespec(waitNanos, deadlineTimespec);
 
         final int timedwaitResult = Pthread.pthread_cond_timedwait_no_transition(getStructPointer(), ((PthreadVMMutex) getMutex()).getStructPointer(), deadlineTimespec);

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,7 +35,7 @@ import org.graalvm.compiler.core.gen.NodeMatchRules;
 import org.graalvm.compiler.core.match.MatchRuleRegistry;
 import org.graalvm.compiler.core.match.MatchStatement;
 import org.graalvm.compiler.core.phases.CommunityCompilerConfiguration;
-import org.graalvm.compiler.core.target.Backend;
+import org.graalvm.compiler.core.phases.EconomyCompilerConfiguration;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.hotspot.CommunityCompilerConfigurationFactory;
 import org.graalvm.compiler.nodes.StructuredGraph;
@@ -44,12 +46,13 @@ import org.graalvm.compiler.phases.PhaseSuite;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.phases.util.Providers;
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.graal.code.amd64.SubstrateAMD64Backend;
-import com.oracle.svm.core.graal.meta.SubstrateBasicLoweringProvider;
+import com.oracle.svm.core.graal.code.SubstrateBackend;
+import com.oracle.svm.core.graal.code.SubstrateBackendFactory;
+import com.oracle.svm.core.graal.code.SubstrateLoweringProviderFactory;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 
@@ -68,11 +71,15 @@ public class GraalConfiguration {
     }
 
     public LoweringProvider createLoweringProvider(MetaAccessProvider metaAccess, ForeignCallsProvider foreignCalls) {
-        return new SubstrateBasicLoweringProvider(metaAccess, foreignCalls, ConfigurationValues.getTarget());
+        return ImageSingletons.lookup(SubstrateLoweringProviderFactory.class).newLoweringProvider(metaAccess, foreignCalls, ConfigurationValues.getTarget());
     }
 
     public Suites createSuites(OptionValues options, @SuppressWarnings("unused") boolean hosted) {
         return Suites.createSuites(new CommunityCompilerConfiguration(), options);
+    }
+
+    public Suites createFirstTierSuites(OptionValues options, @SuppressWarnings("unused") boolean hosted) {
+        return Suites.createSuites(new EconomyCompilerConfiguration(), options);
     }
 
     public String getCompilerConfigurationName() {
@@ -83,8 +90,8 @@ public class GraalConfiguration {
         matchRuleRegistry.put(AMD64NodeMatchRules.class, MatchRuleRegistry.createRules(AMD64NodeMatchRules.class));
     }
 
-    public Backend createBackend(Providers newProviders) {
-        return new SubstrateAMD64Backend(newProviders);
+    public SubstrateBackend createBackend(Providers newProviders) {
+        return SubstrateBackendFactory.get().newBackend(newProviders);
     }
 
     public void runAdditionalCompilerPhases(@SuppressWarnings("unused") StructuredGraph graph, @SuppressWarnings("unused") Feature graalFeature) {
@@ -99,7 +106,8 @@ public class GraalConfiguration {
      * Returns a {@link ListIterator} at the position of the last inlining phase or null if no
      * inlining phases were created.
      */
-    public ListIterator<BasePhase<? super HighTierContext>> createHostedInliners(@SuppressWarnings("unused") PhaseSuite<HighTierContext> highTier) {
+    public ListIterator<BasePhase<? super HighTierContext>> createHostedInliners(@SuppressWarnings("unused") PhaseSuite<HighTierContext> highTier,
+                    @SuppressWarnings("unused") boolean requiresPostParseCanonicalization) {
         return null;
     }
 }

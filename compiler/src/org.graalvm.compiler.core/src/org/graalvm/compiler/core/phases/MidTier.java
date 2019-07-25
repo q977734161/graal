@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,6 +32,9 @@ import static org.graalvm.compiler.core.common.GraalOptions.OptLoopTransform;
 import static org.graalvm.compiler.core.common.GraalOptions.PartialUnroll;
 import static org.graalvm.compiler.core.common.GraalOptions.ReassociateInvariants;
 import static org.graalvm.compiler.core.common.GraalOptions.VerifyHeapAtReturn;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.GuardTargets;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.NonDeoptGuardTargets;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.Options.MitigateSpeculativeExecutionAttacks;
 
 import org.graalvm.compiler.loop.DefaultLoopPolicies;
 import org.graalvm.compiler.loop.LoopPolicies;
@@ -45,11 +50,13 @@ import org.graalvm.compiler.phases.common.FloatingReadPhase;
 import org.graalvm.compiler.phases.common.FrameStateAssignmentPhase;
 import org.graalvm.compiler.phases.common.GuardLoweringPhase;
 import org.graalvm.compiler.phases.common.IncrementalCanonicalizerPhase;
+import org.graalvm.compiler.phases.common.InsertGuardFencesPhase;
 import org.graalvm.compiler.phases.common.IterativeConditionalEliminationPhase;
 import org.graalvm.compiler.phases.common.LockEliminationPhase;
 import org.graalvm.compiler.phases.common.LoopSafepointInsertionPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
 import org.graalvm.compiler.phases.common.VerifyHeapAtReturnPhase;
+import org.graalvm.compiler.phases.common.WriteBarrierAdditionPhase;
 import org.graalvm.compiler.phases.tiers.MidTierContext;
 
 public class MidTier extends PhaseSuite<MidTierContext> {
@@ -76,6 +83,10 @@ public class MidTier extends PhaseSuite<MidTierContext> {
 
         appendPhase(new GuardLoweringPhase());
 
+        if (MitigateSpeculativeExecutionAttacks.getValue(options) == GuardTargets || MitigateSpeculativeExecutionAttacks.getValue(options) == NonDeoptGuardTargets) {
+            appendPhase(new InsertGuardFencesPhase());
+        }
+
         if (VerifyHeapAtReturn.getValue(options)) {
             appendPhase(new VerifyHeapAtReturnPhase());
         }
@@ -99,6 +110,8 @@ public class MidTier extends PhaseSuite<MidTierContext> {
         }
 
         appendPhase(canonicalizer);
+
+        appendPhase(new WriteBarrierAdditionPhase());
     }
 
     public LoopPolicies createLoopPolicies() {

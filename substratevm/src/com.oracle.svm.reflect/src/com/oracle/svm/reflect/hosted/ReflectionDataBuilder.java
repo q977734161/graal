@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,38 +26,85 @@ package com.oracle.svm.reflect.hosted;
 
 //Checkstyle: allow reflection
 
-import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
-import org.graalvm.nativeimage.Feature.DuringAnalysisAccess;
+import org.graalvm.nativeimage.hosted.Feature.DuringAnalysisAccess;
 import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
 
+import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
+import com.oracle.svm.hosted.substitute.DeletedElementException;
+import com.oracle.svm.hosted.substitute.SubstitutionReflectivityFilter;
+import com.oracle.svm.util.ReflectionUtil;
 
 public class ReflectionDataBuilder implements RuntimeReflectionSupport {
+    private enum FieldFlag {
+        FINAL_BUT_WRITABLE,
+        UNSAFE_ACCESSIBLE,
+    }
+
+    private static final EnumSet<FieldFlag> NO_FIELD_FLAGS = EnumSet.noneOf(FieldFlag.class);
 
     private boolean modified;
     private boolean sealed;
 
+    private final DynamicHub.ReflectionData arrayReflectionData;
     private Set<Class<?>> reflectionClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private Set<Executable> reflectionMethods = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private Set<Field> reflectionFields = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private Map<Field, EnumSet<FieldFlag>> reflectionFields = new ConcurrentHashMap<>();
+    private Set<Field> analyzedFinalFields = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    public ReflectionDataBuilder() {
+        arrayReflectionData = getArrayReflectionData();
+    }
+
+    private static DynamicHub.ReflectionData getArrayReflectionData() {
+        Method[] publicArrayMethods;
+        try {
+            Class<?>[] parameterTypes = {};
+            Method getPublicMethodsMethod = ReflectionUtil.lookupMethod(Class.class, "privateGetPublicMethods", parameterTypes);
+            publicArrayMethods = (Method[]) getPublicMethodsMethod.invoke(Object[].class);
+        } catch (ReflectiveOperationException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+
+        // array classes only have methods inherited from Object
+        return new DynamicHub.ReflectionData(
+                        new Field[0],
+                        new Field[0],
+                        new Field[0],
+                        new Method[0],
+                        publicArrayMethods,
+                        new Constructor<?>[0],
+                        new Constructor<?>[0],
+                        null,
+                        new Field[0],
+                        new Method[0],
+                        new Class<?>[0],
+                        new Class<?>[0],
+                        null);
+    }
 
     @Override
     public void register(Class<?>... classes) {
@@ -74,10 +123,19 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
     }
 
     @Override
-    public void register(Field... fields) {
+    public void register(boolean finalIsWritable, boolean allowUnsafeAccess, Field... fields) {
         checkNotSealed();
-        if (reflectionFields.addAll(Arrays.asList(fields))) {
-            modified = true;
+        for (Field field : fields) {
+            boolean writable = finalIsWritable || !Modifier.isFinal(field.getModifiers());
+            EnumSet<FieldFlag> flags = (writable && allowUnsafeAccess) ? EnumSet.of(FieldFlag.FINAL_BUT_WRITABLE, FieldFlag.UNSAFE_ACCESSIBLE) : //
+                            (writable ? EnumSet.of(FieldFlag.FINAL_BUT_WRITABLE) : (allowUnsafeAccess ? EnumSet.of(FieldFlag.UNSAFE_ACCESSIBLE) : NO_FIELD_FLAGS));
+            reflectionFields.compute(field, (key, existingFlags) -> {
+                if (writable && (existingFlags == null || !existingFlags.contains(FieldFlag.FINAL_BUT_WRITABLE))) {
+                    UserError.guarantee(!analyzedFinalFields.contains(field),
+                                    "A field that was already processed by the analysis cannot be re-registered as writable: " + field.toString());
+                }
+                return flags;
+            });
         }
     }
 
@@ -95,25 +153,27 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
         }
         modified = false;
         access.requireAnalysisIteration();
+        Class<?>[] parameterTypes = {};
 
-        Method reflectionDataMethod = findMethod(Class.class, "reflectionData");
+        Method reflectionDataMethod = ReflectionUtil.lookupMethod(Class.class, "reflectionData", parameterTypes);
         Class<?> originalReflectionDataClass = access.getImageClassLoader().findClassByName("java.lang.Class$ReflectionData");
-        Field declaredFieldsField = findField(originalReflectionDataClass, "declaredFields");
-        Field publicFieldsField = findField(originalReflectionDataClass, "publicFields");
-        Field declaredMethodsField = findField(originalReflectionDataClass, "declaredMethods");
-        Field publicMethodsField = findField(originalReflectionDataClass, "publicMethods");
-        Field declaredConstructorsField = findField(originalReflectionDataClass, "declaredConstructors");
-        Field publicConstructorsField = findField(originalReflectionDataClass, "publicConstructors");
-        Field declaredPublicFieldsField = findField(originalReflectionDataClass, "declaredPublicFields");
-        Field declaredPublicMethodsField = findField(originalReflectionDataClass, "declaredPublicMethods");
-
-        Field[] emptyFields = new Field[0];
-        Method[] emptyMethods = new Method[0];
-        Constructor<?>[] emptyConstructors = new Constructor<?>[0];
+        Field declaredFieldsField = ReflectionUtil.lookupField(originalReflectionDataClass, "declaredFields");
+        Field publicFieldsField = ReflectionUtil.lookupField(originalReflectionDataClass, "publicFields");
+        Field declaredMethodsField = ReflectionUtil.lookupField(originalReflectionDataClass, "declaredMethods");
+        Field publicMethodsField = ReflectionUtil.lookupField(originalReflectionDataClass, "publicMethods");
+        Field declaredConstructorsField = ReflectionUtil.lookupField(originalReflectionDataClass, "declaredConstructors");
+        Field publicConstructorsField = ReflectionUtil.lookupField(originalReflectionDataClass, "publicConstructors");
+        Field declaredPublicFieldsField = ReflectionUtil.lookupField(originalReflectionDataClass, "declaredPublicFields");
+        Field declaredPublicMethodsField = ReflectionUtil.lookupField(originalReflectionDataClass, "declaredPublicMethods");
 
         Set<Class<?>> allClasses = new HashSet<>(reflectionClasses);
-        reflectionMethods.stream().map(method -> method.getDeclaringClass()).forEach(clazz -> allClasses.add(clazz));
-        reflectionFields.stream().map(field -> field.getDeclaringClass()).forEach(clazz -> allClasses.add(clazz));
+        reflectionMethods.stream().map(Executable::getDeclaringClass).forEach(allClasses::add);
+        reflectionFields.forEach((field, flags) -> {
+            if (flags.contains(FieldFlag.UNSAFE_ACCESSIBLE)) {
+                access.registerAsUnsafeAccessed(field);
+            }
+            allClasses.add(field.getDeclaringClass());
+        });
 
         /*
          * We need to find all classes that have an enclosingMethod or enclosingConstructor.
@@ -131,6 +191,9 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
                  * We haven an enclosing method or constructor for this class, so we add the class
                  * to the set of processed classes so that the ReflectionData is initialized below.
                  */
+                allClasses.add(originalClass);
+            } else if (originalClass != null && originalClass.isArray()) {
+                // Always register reflection data for array classes
                 allClasses.add(originalClass);
             }
         }
@@ -156,26 +219,53 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
              * Ensure all internal fields of the original Class.ReflectionData object are
              * initialized. Calling the public methods triggers lazy initialization of the fields.
              */
-            clazz.getDeclaredFields();
-            clazz.getFields();
-            clazz.getDeclaredMethods();
-            clazz.getMethods();
-            clazz.getDeclaredConstructors();
-            clazz.getConstructors();
+            try {
+                clazz.getDeclaredFields();
+                clazz.getFields();
+                clazz.getDeclaredMethods();
+                clazz.getMethods();
+                clazz.getDeclaredConstructors();
+                clazz.getConstructors();
+                clazz.getDeclaredClasses();
+                clazz.getClasses();
+            } catch (NoClassDefFoundError e) {
+                /*
+                 * If any of the methods or fields reference missing types in their signatures a
+                 * NoClassDefFoundError is thrown. Skip registering reflection metadata for this
+                 * class.
+                 */
+                // Checkstyle: stop
+                System.out.println("WARNING: Could not register reflection metadata for " + clazz.getTypeName() +
+                                ". Reason: " + e.getClass().getTypeName() + ": " + e.getMessage() + ".");
+                // Checkstyle: resume
+                continue;
+            }
 
             try {
                 Object originalReflectionData = reflectionDataMethod.invoke(clazz);
-                hub.setReflectionData(new DynamicHub.ReflectionData(
-                                filter(declaredFieldsField.get(originalReflectionData), reflectionFields, emptyFields),
-                                filter(publicFieldsField.get(originalReflectionData), reflectionFields, emptyFields),
-                                filter(declaredMethodsField.get(originalReflectionData), reflectionMethods, emptyMethods),
-                                filter(publicMethodsField.get(originalReflectionData), reflectionMethods, emptyMethods),
-                                filter(declaredConstructorsField.get(originalReflectionData), reflectionMethods, emptyConstructors),
-                                filter(publicConstructorsField.get(originalReflectionData), reflectionMethods, emptyConstructors),
-                                nullaryConstructor(declaredConstructorsField.get(originalReflectionData), reflectionMethods),
-                                filter(declaredPublicFieldsField.get(originalReflectionData), reflectionFields, emptyFields),
-                                filter(declaredPublicMethodsField.get(originalReflectionData), reflectionMethods, emptyMethods),
-                                enclosingMethodOrConstructor(clazz)));
+                DynamicHub.ReflectionData reflectionData;
+
+                if (type.isArray()) {
+                    // Always register reflection data for array classes
+                    reflectionData = arrayReflectionData;
+                } else {
+                    reflectionData = new DynamicHub.ReflectionData(
+                                    filterFields(declaredFieldsField.get(originalReflectionData), reflectionFields.keySet(), access.getMetaAccess()),
+                                    filterFields(publicFieldsField.get(originalReflectionData), reflectionFields.keySet(), access.getMetaAccess()),
+                                    filterFields(publicFieldsField.get(originalReflectionData), f -> reflectionFields.containsKey(f) && !isHiddenIn(f, clazz), access.getMetaAccess()),
+                                    filterMethods(declaredMethodsField.get(originalReflectionData), reflectionMethods, access.getMetaAccess()),
+                                    filterMethods(publicMethodsField.get(originalReflectionData), reflectionMethods, access.getMetaAccess()),
+                                    filterConstructors(declaredConstructorsField.get(originalReflectionData), reflectionMethods, access.getMetaAccess()),
+                                    filterConstructors(publicConstructorsField.get(originalReflectionData), reflectionMethods, access.getMetaAccess()),
+                                    nullaryConstructor(declaredConstructorsField.get(originalReflectionData), reflectionMethods),
+                                    filterFields(declaredPublicFieldsField.get(originalReflectionData), reflectionFields.keySet(), access.getMetaAccess()),
+                                    filterMethods(declaredPublicMethodsField.get(originalReflectionData), reflectionMethods, access.getMetaAccess()),
+                                    filterClasses(clazz.getDeclaredClasses(), reflectionClasses, access.getMetaAccess()),
+                                    filterClasses(clazz.getClasses(), reflectionClasses, access.getMetaAccess()),
+                                    enclosingMethodOrConstructor(clazz));
+                }
+
+                hub.setReflectionData(reflectionData);
             } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException ex) {
                 throw VMError.shouldNotReachHere(ex);
             }
@@ -192,8 +282,6 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
     private static Constructor<?> nullaryConstructor(Object constructors, Set<?> reflectionMethods) {
         for (Constructor<?> constructor : (Constructor<?>[]) constructors) {
             if (constructor.getParameterCount() == 0 && reflectionMethods.contains(constructor)) {
-                /* Ensure the annotations data structures are initialized. */
-                constructor.getDeclaredAnnotations();
                 return constructor;
             }
         }
@@ -206,6 +294,12 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
         try {
             enclosingMethod = clazz.getEnclosingMethod();
             enclosingConstructor = clazz.getEnclosingConstructor();
+        } catch (NoClassDefFoundError e) {
+            /*
+             * If any of the methods or fields in the class of the enclosing method reference
+             * missing types in their signatures a NoClassDefFoundError is thrown. Skip the class.
+             */
+            return null;
         } catch (InternalError ex) {
             // Checkstyle: stop
             System.err.println("GR-7731: Could not find the enclosing method of class " + clazz.getTypeName() +
@@ -217,7 +311,7 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
         if (enclosingMethod == null && enclosingConstructor == null) {
             return null;
         } else if (enclosingMethod != null && enclosingConstructor != null) {
-            throw VMError.shouldNotReachHere("Classs has both an enclosingMethod and an enclosingConstructor: " + clazz + ", " + enclosingMethod + ", " + enclosingConstructor);
+            throw VMError.shouldNotReachHere("Class has both an enclosingMethod and an enclosingConstructor: " + clazz + ", " + enclosingMethod + ", " + enclosingConstructor);
         }
 
         Executable enclosingMethodOrConstructor = enclosingMethod != null ? enclosingMethod : enclosingConstructor;
@@ -229,37 +323,66 @@ public class ReflectionDataBuilder implements RuntimeReflectionSupport {
         }
     }
 
-    private static <T> T[] filter(Object elements, Set<?> filter, T[] prototypeArray) {
-        List<Object> result = new ArrayList<>();
-        for (Object element : (Object[]) elements) {
-            if (filter.contains(element)) {
-                if (element instanceof AccessibleObject) {
-                    /* Ensure the annotations data structures are initialized. */
-                    ((AccessibleObject) element).getDeclaredAnnotations();
+    private static Field[] filterFields(Object fields, Set<Field> filterSet, AnalysisMetaAccess metaAccess) {
+        return filterFields(fields, filterSet::contains, metaAccess);
+    }
+
+    private static boolean isHiddenIn(Field field, Class<?> clazz) {
+        try {
+            return !clazz.getField(field.getName()).equals(field);
+        } catch (NoSuchFieldException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
+    private static Field[] filterFields(Object fields, Predicate<Field> filter, AnalysisMetaAccess metaAccess) {
+        List<Field> result = new ArrayList<>();
+        for (Field field : (Field[]) fields) {
+            if (filter.test(field) && !SubstitutionReflectivityFilter.shouldExclude(field, metaAccess)) {
+                try {
+                    if (!metaAccess.lookupJavaField(field).isAnnotationPresent(Delete.class)) {
+                        result.add(field);
+                    }
+                } catch (DeletedElementException ignored) { // filter
                 }
-                result.add(element);
+            }
+        }
+        return result.toArray(new Field[0]);
+    }
+
+    private static Constructor<?>[] filterConstructors(Object methods, Set<Executable> filter, AnalysisMetaAccess metaAccess) {
+        return filterMethods(methods, filter, metaAccess, new Constructor<?>[0]);
+    }
+
+    private static Method[] filterMethods(Object methods, Set<Executable> filter, AnalysisMetaAccess metaAccess) {
+        return filterMethods(methods, filter, metaAccess, new Method[0]);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Executable> T[] filterMethods(Object methods, Set<Executable> filter, AnalysisMetaAccess metaAccess, T[] prototypeArray) {
+        List<T> result = new ArrayList<>();
+        for (T method : (T[]) methods) {
+            if (filter.contains(method) && !SubstitutionReflectivityFilter.shouldExclude(method, metaAccess)) {
+                result.add(method);
             }
         }
         return result.toArray(prototypeArray);
     }
 
-    private static Method findMethod(Class<?> declaringClass, String methodName, Class<?>... parameterTypes) {
-        try {
-            Method result = declaringClass.getDeclaredMethod(methodName, parameterTypes);
-            result.setAccessible(true);
-            return result;
-        } catch (NoSuchMethodException ex) {
-            throw VMError.shouldNotReachHere(ex);
+    private static Class<?>[] filterClasses(Object classes, Set<Class<?>> filter, AnalysisMetaAccess metaAccess) {
+        List<Class<?>> result = new ArrayList<>();
+        for (Class<?> clazz : (Class<?>[]) classes) {
+            if (filter.contains(clazz) && !SubstitutionReflectivityFilter.shouldExclude(clazz, metaAccess)) {
+                result.add(clazz);
+            }
         }
+        return result.toArray(new Class<?>[0]);
     }
 
-    private static Field findField(Class<?> declaringClass, String fieldName) {
-        try {
-            Field result = declaringClass.getDeclaredField(fieldName);
-            result.setAccessible(true);
-            return result;
-        } catch (NoSuchFieldException ex) {
-            throw VMError.shouldNotReachHere(ex);
-        }
+    boolean inspectFinalFieldWritableForAnalysis(Field field) {
+        assert Modifier.isFinal(field.getModifiers());
+        EnumSet<FieldFlag> flags = reflectionFields.getOrDefault(field, NO_FIELD_FLAGS);
+        analyzedFinalFields.add(field);
+        return flags.contains(FieldFlag.FINAL_BUT_WRITABLE);
     }
 }

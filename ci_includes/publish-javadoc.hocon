@@ -1,7 +1,7 @@
 # Publish Javadoc of graal components post-merge
 
 builds += [
-  ${linux-amd64} ${labsjdk8} {
+  ${linux-amd64} ${oraclejdk8} {
     timelimit : "30:00",
     run : [
         [cd, "./sdk"],
@@ -33,7 +33,7 @@ builds += [
         ["git", "add", "sdk/javadoc", "truffle/javadoc", "tools/javadoc", "graphio/javadoc"],
         ["git", "config", "user.name", "Javadoc Publisher"],
         ["git", "config", "user.email", "graal-dev@openjdk.java.net"],
-        ["git", "commit", "-m", [ "echo", "Javadoc as of", [ "date", "+%Y/%m/%d" ] ] ],
+        ["git", "diff", "--staged", "--quiet", "||", "git", "commit", "-m", [ "echo", "Javadoc as of", [ "date", "+%Y/%m/%d" ] ] ],
         ["git", "push", "origin", "gh-pages"],
     ],
     targets : [post-merge],

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,11 +36,10 @@ public interface ImageBuildTask {
      * Main function for remote image building which is invoked on every image building request sent
      * to the server.
      *
-     * @apiNote Standard error and standard output for image building will be reported remotely only
-     *          if printed within this method.
-     * @apiNote After {@code build} finishes, the static state of the JDK and
-     *          {@link NativeImageBuildServer} must not have pointers to classes loaded by
-     *          {@code compilationClassLoader}.
+     * API NOTE: Standard error and standard output for image building will be reported remotely
+     * only if printed within this method. After {@code build} finishes, the static state of the JDK
+     * and {@link NativeImageBuildServer} must not have pointers to classes loaded by
+     * {@code compilationClassLoader}.
      *
      * @param args arguments passed with the request to the SVM image builder
      * @param classpath the whole classpath used for the image
@@ -46,7 +47,7 @@ public interface ImageBuildTask {
      * @return exit status of compilation
      * @see NativeImageBuildServer
      */
-    int build(String[] args, String[] classpath, ClassLoader compilationClassLoader);
+    int build(String[] args, String[] classpath, NativeImageClassLoader compilationClassLoader);
 
     /**
      * Requests interruption of the image build.

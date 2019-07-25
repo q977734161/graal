@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -192,9 +194,19 @@ public class AArch64HotSpotMove {
         }
 
         public static void emitUncompressCode(AArch64MacroAssembler masm, Register inputRegister, Register resReg, Register baseReg, int shift, boolean nonNull) {
+            // result = ptr << shift
+            if (baseReg == null) {
+                if (shift != 0) {
+                    masm.shl(64, resReg, inputRegister, shift);
+                } else if (!resReg.equals(inputRegister)) {
+                    masm.movx(resReg, inputRegister);
+                }
+                return;
+            }
+
             // result = base + (ptr << shift)
-            if (nonNull || baseReg == null) {
-                masm.add(64, resReg, baseReg == null ? zr : baseReg, inputRegister, AArch64Assembler.ShiftType.LSL, shift);
+            if (nonNull) {
+                masm.add(64, resReg, baseReg, inputRegister, AArch64Assembler.ShiftType.LSL, shift);
             } else {
                 // if ptr is null it has to be null after decompression
                 Label done = new Label();

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -66,9 +68,8 @@ public final class MachOObjectFile extends ObjectFile {
     private static final ByteOrder nativeOrder = ByteOrder.nativeOrder();
     private static final ByteOrder oppositeOrder = (nativeOrder == ByteOrder.BIG_ENDIAN) ? ByteOrder.LITTLE_ENDIAN : ByteOrder.BIG_ENDIAN;
 
-    MachOCpuType cpuType = MachOCpuType.X86_64; // FIXME: smarter defaults
-
-    int cpuSubType = 3; // FIXME: what does this mean? + smarter defaults?
+    final MachOCpuType cpuType;
+    final int cpuSubType;
 
     private final MachOHeader header;
 
@@ -79,6 +80,13 @@ public final class MachOObjectFile extends ObjectFile {
      * Create an empty Mach-O object file.
      */
     public MachOObjectFile() {
+        if ("arm".equals(System.getProperty("svm.targetArch"))) {
+            cpuType = MachOCpuType.ARM64;
+            cpuSubType = 0;
+        } else {
+            cpuType = MachOCpuType.X86_64;
+            cpuSubType = 3;
+        }
         header = new MachOHeader("MachOHeader");
         setByteOrder(ByteOrder.nativeOrder());
 
@@ -138,6 +146,10 @@ public final class MachOObjectFile extends ObjectFile {
     }
 
     @Override
+    public void setMainEntryPoint(String name) {
+    }
+
+    @Override
     protected int initialVaddr() {
         // HACK: this (and the superclass version)
         // is baking in *per-OS* knowledge, not just per-format knowledge...
@@ -158,26 +170,7 @@ public final class MachOObjectFile extends ObjectFile {
     @Override
     public Symbol createDefinedSymbol(String name, Element baseSection, long position, int size, boolean isCode, boolean isGlobal) {
         MachOSymtab symtab = (MachOSymtab) getOrCreateSymbolTable();
-        /*
-         * FIXME: Mach-O symbol visibility has an unfortunate interaction with relocation addends.
-         * Specifically, relocation against local symbols is recorded in the relocation record by
-         * using only the *section number* of the relocation's target. This means you have to use
-         * the addend to encode the offset from the section start. This is really annoying! (See
-         * r_symbolnum in relocation_info in the Mach-O documentation.)
-         *
-         * As a consequence, I always create global symbols here. The same Mach-O documentation
-         * bizarrely implies that x86-64 compilers don't generate local relocs anyway, viz.:
-         *
-         * "Note: In the OS X x86-64 environment scattered relocations are not used.
-         * Compiler-generated code uses mostly external relocations, in which the r_extern bit is
-         * set to 1 and the r_symbolnum field contains the symbol-table index of the target label."
-         *
-         * Note that abstaining from scattered relocations is completely irrelevant here. You can
-         * have non-scattered non-extern relocations, and the salient point is that *these* are not
-         * generated.
-         */
-        boolean globalFlagToPass = true; // override "isGlobal"
-        return symtab.newDefinedEntry(name, (MachOSection) baseSection, position, size, globalFlagToPass, isCode);
+        return symtab.newDefinedEntry(name, (MachOSection) baseSection, position, size, isGlobal, isCode);
     }
 
     @Override
@@ -1657,7 +1650,7 @@ public final class MachOObjectFile extends ObjectFile {
         @Override
         protected void writePayload(OutputAssembler out, Map<Element, LayoutDecisionMap> alreadyDecided) {
             int symtabOffset = (int) alreadyDecided.get(symtab).getDecidedValue(LayoutDecision.Kind.OFFSET);
-            int symtabEntriesCount = symtab.entries.size();
+            int symtabEntriesCount = symtab.getEntryCount();
             int strtabOffset = (int) alreadyDecided.get(symtab.strtab).getDecidedValue(LayoutDecision.Kind.OFFSET);
             int strtabSize = (int) alreadyDecided.get(symtab.strtab).getDecidedValue(LayoutDecision.Kind.SIZE);
             writePayloadFields(out, symtabOffset, symtabEntriesCount, strtabOffset, strtabSize);
@@ -2262,14 +2255,6 @@ public final class MachOObjectFile extends ObjectFile {
     public void setFlags(EnumSet<Flag> flags) {
         this.flags.clear();
         this.flags.addAll(flags);
-    }
-
-    public void setCpuType(MachOCpuType cpuType) {
-        this.cpuType = cpuType;
-    }
-
-    public void setCpuSubtype(int cpuSubType) {
-        this.cpuSubType = cpuSubType;
     }
 
     protected LinkEditSegment64Command getOrCreateLinkEditSegment() {

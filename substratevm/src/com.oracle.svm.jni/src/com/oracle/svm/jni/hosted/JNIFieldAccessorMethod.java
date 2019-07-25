@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,19 +34,19 @@ import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.extended.RawLoadNode;
 import org.graalvm.compiler.nodes.extended.RawStoreNode;
+import org.graalvm.nativeimage.c.function.CEntryPoint.FatalExceptionHandler;
 import org.graalvm.word.LocationIdentity;
 
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.core.c.function.CEntryPointOptions.FatalExceptionHandler;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.Publish;
 import com.oracle.svm.core.graal.nodes.CEntryPointEnterNode;
-import com.oracle.svm.core.graal.nodes.CEntryPointEnterNode.EnterAction;
 import com.oracle.svm.core.graal.nodes.CEntryPointLeaveNode;
 import com.oracle.svm.core.graal.nodes.CEntryPointLeaveNode.LeaveAction;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.code.CEntryPointData;
+import com.oracle.svm.hosted.code.SimpleSignature;
 import com.oracle.svm.jni.nativeapi.JNIEnvironment;
 import com.oracle.svm.jni.nativeapi.JNIFieldId;
 import com.oracle.svm.jni.nativeapi.JNIObjectHandle;
@@ -101,7 +103,7 @@ public final class JNIFieldAccessorMethod extends JNIGeneratedMethod {
         return sb.toString();
     }
 
-    private JNISignature createSignature(MetaAccessProvider metaAccess) {
+    private SimpleSignature createSignature(MetaAccessProvider metaAccess) {
         Class<?> valueClass = fieldKind.toJavaClass();
         if (fieldKind.isObject()) {
             valueClass = JNIObjectHandle.class;
@@ -120,7 +122,7 @@ public final class JNIFieldAccessorMethod extends JNIGeneratedMethod {
         } else {
             returnType = metaAccess.lookupJavaType(valueClass);
         }
-        return new JNISignature(args, returnType);
+        return new SimpleSignature(args, returnType);
     }
 
     @Override
@@ -131,7 +133,7 @@ public final class JNIFieldAccessorMethod extends JNIGeneratedMethod {
         state.initializeForMethodStart(null, true, providers.getGraphBuilderPlugins());
 
         ValueNode vmThread = kit.loadLocal(0, signature.getParameterKind(0));
-        kit.append(new CEntryPointEnterNode(EnterAction.Enter, vmThread));
+        kit.append(CEntryPointEnterNode.enter(vmThread));
 
         List<ValueNode> arguments = kit.loadArguments(signature.toParameterTypes(null));
         ValueNode object;

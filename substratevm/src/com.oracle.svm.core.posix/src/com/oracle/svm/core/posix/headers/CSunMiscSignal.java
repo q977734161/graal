@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -44,6 +46,10 @@ public class CSunMiscSignal {
     /* Wait for a notification on the semaphore. */
     @CFunction("cSunMiscSignal_await")
     public static native int await();
+
+    /* Notify a thread waiting on the semaphore. */
+    @CFunction("cSunMiscSignal_post")
+    public static native int post();
 
     /* Returns 1 if the signal is in the range of the counters, 0 otherwise. */
     @CFunction("cSunMiscSignal_signalRangeCheck")

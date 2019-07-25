@@ -2,25 +2,46 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
+
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.fail;
 
 import java.util.function.Consumer;
 
@@ -31,16 +52,12 @@ import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.junit.Assert;
 import org.junit.Test;
 
-import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleException;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.ForeignAccess.StandardFactory;
-import com.oracle.truffle.api.interop.Message;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.RootNode;
 
 public class PolyglotExceptionTest {
 
@@ -148,76 +165,65 @@ public class PolyglotExceptionTest {
         context.close();
     }
 
-    private static class CauseErrorTruffleObject implements TruffleObject {
+    @ExportLibrary(InteropLibrary.class)
+    static class CauseErrorTruffleObject implements TruffleObject {
 
         RuntimeException thrownError;
 
-        public ForeignAccess getForeignAccess() {
-            return CauseErrorObjectFactory.INSTANCE;
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
+        }
+
+        @ExportMessage
+        final Object execute(@SuppressWarnings("unused") Object[] arguments) {
+            throw thrownError;
         }
 
     }
 
-    private static class CauseErrorObjectFactory implements StandardFactory {
-
-        private static final ForeignAccess INSTANCE = ForeignAccess.create(CauseErrorTruffleObject.class, new CauseErrorObjectFactory());
-
-        public CallTarget accessIsExecutable() {
-            return Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(true));
-        }
-
-        public CallTarget accessExecute(int argumentsLength) {
-            return Truffle.getRuntime().createCallTarget(new RootNode(null) {
-
-                @Child private Node execute = Message.createExecute(0).createNode();
-
-                @Override
-                public Object execute(VirtualFrame frame) {
-                    CauseErrorTruffleObject to = (CauseErrorTruffleObject) frame.getArguments()[0];
-                    throw to.thrownError;
-                }
-            });
-        }
-
-    }
-
-    private static class VerifyErrorTruffleObject implements TruffleObject {
+    @ExportLibrary(InteropLibrary.class)
+    static class VerifyErrorTruffleObject implements TruffleObject {
 
         Consumer<Throwable> verifyError;
 
-        public ForeignAccess getForeignAccess() {
-            return VerifyErrorObjectFactory.INSTANCE;
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
+        }
+
+        @ExportMessage
+        final Object execute(Object[] arguments) {
+            Object arg = arguments[0];
+            try {
+                InteropLibrary.getFactory().getUncached().execute(arg);
+                Assert.fail();
+            } catch (Throwable e) {
+                verifyError.accept(e);
+            }
+            return true;
         }
 
     }
 
-    private static class VerifyErrorObjectFactory implements StandardFactory {
-
-        private static final ForeignAccess INSTANCE = ForeignAccess.create(VerifyErrorTruffleObject.class, new VerifyErrorObjectFactory());
-
-        public CallTarget accessIsExecutable() {
-            return Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(true));
+    @Test
+    public void testRecursiveHostException() {
+        Context context = Context.create();
+        RuntimeException e1 = new RuntimeException();
+        RuntimeException e2 = new RuntimeException();
+        e1.initCause(e2);
+        e2.initCause(e1);
+        Value throwError = context.asValue(new ProxyExecutable() {
+            public Object execute(Value... arguments) {
+                throw e1;
+            }
+        });
+        try {
+            throwError.execute();
+            fail();
+        } catch (PolyglotException e) {
+            assertSame(e1, e.asHostException());
         }
-
-        public CallTarget accessExecute(int argumentsLength) {
-            return Truffle.getRuntime().createCallTarget(new RootNode(null) {
-
-                @Child private Node execute = Message.createExecute(0).createNode();
-
-                @Override
-                public Object execute(VirtualFrame frame) {
-                    VerifyErrorTruffleObject to = (VerifyErrorTruffleObject) frame.getArguments()[0];
-                    Object arg = frame.getArguments()[1];
-                    try {
-                        ForeignAccess.sendExecute(execute, (TruffleObject) arg, new Object[0]);
-                        Assert.fail();
-                    } catch (Throwable e) {
-                        to.verifyError.accept(e);
-                    }
-                    return true;
-                }
-            });
-        }
-
     }
+
 }

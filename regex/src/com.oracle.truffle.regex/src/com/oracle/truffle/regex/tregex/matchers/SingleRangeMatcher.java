@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,27 +24,33 @@
  */
 package com.oracle.truffle.regex.tregex.matchers;
 
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.regex.charset.SortedListOfRanges;
 
 /**
  * Matcher for a single character range.
  */
-public final class SingleRangeMatcher extends ProfiledCharMatcher {
+public abstract class SingleRangeMatcher extends InvertibleCharMatcher {
 
     private final char lo;
     private final char hi;
 
     /**
      * Constructs a new {@link SingleRangeMatcher}.
-     * 
-     * @param invert see {@link ProfiledCharMatcher}.
+     *
+     * @param invert see {@link InvertibleCharMatcher}.
      * @param lo inclusive lower bound of range to match.
      * @param hi inclusive upper bound of range to match.
      */
-    public SingleRangeMatcher(boolean invert, char lo, char hi) {
+    SingleRangeMatcher(boolean invert, char lo, char hi) {
         super(invert);
         this.lo = lo;
         this.hi = hi;
+    }
+
+    public static SingleRangeMatcher create(boolean invert, char lo, char hi) {
+        return SingleRangeMatcherNodeGen.create(invert, lo, hi);
     }
 
     /**
@@ -61,9 +67,9 @@ public final class SingleRangeMatcher extends ProfiledCharMatcher {
         return hi;
     }
 
-    @Override
-    public boolean matchChar(char c) {
-        return lo <= c && hi >= c;
+    @Specialization
+    boolean match(char c, boolean compactString) {
+        return result((!compactString || lo < 256) && lo <= c && hi >= c);
     }
 
     @Override
@@ -72,8 +78,8 @@ public final class SingleRangeMatcher extends ProfiledCharMatcher {
     }
 
     @Override
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     public String toString() {
-        return modifiersToString() + MatcherBuilder.rangeToString(lo, hi);
+        return modifiersToString() + SortedListOfRanges.rangeToString(lo, hi);
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -55,6 +57,7 @@ import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
 
+import com.oracle.graal.pointsto.ObjectScanner.ReusableSet;
 import com.oracle.graal.pointsto.api.HostVM;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
@@ -117,8 +120,8 @@ public abstract class BigBang {
     public final AtomicLong numParsedGraphs = new AtomicLong();
     private final CompletionExecutor.Timing timing;
 
-    public final Timer typeFlowTimer = new Timer("(typeflow)", false);
-    public final Timer checkObjectsTimer = new Timer("(objects)", false);
+    public final Timer typeFlowTimer;
+    public final Timer checkObjectsTimer;
 
     public BigBang(OptionValues options, AnalysisUniverse universe, HostedProviders providers, HostVM hostVM, ForkJoinPool executorService,
                     UnsupportedFeatures unsupportedFeatures) {
@@ -126,6 +129,9 @@ public abstract class BigBang {
         this.debugHandlerFactories = Collections.singletonList(new GraalDebugHandlersFactory(providers.getSnippetReflection()));
         this.debug = DebugContext.create(options, debugHandlerFactories);
         this.hostVM = hostVM;
+        String imageName = hostVM.getImageName();
+        this.typeFlowTimer = new Timer(imageName, "(typeflow)", false);
+        this.checkObjectsTimer = new Timer(imageName, "(objects)", false);
 
         this.universe = universe;
         this.metaAccess = (AnalysisMetaAccess) providers.getMetaAccess();
@@ -259,11 +265,11 @@ public abstract class BigBang {
     }
 
     public AnalysisPolicy analysisPolicy() {
-        return hostVM.analysisPolicy();
+        return universe.analysisPolicy();
     }
 
     public AnalysisContextPolicy<AnalysisContext> contextPolicy() {
-        return hostVM.analysisPolicy().getContextPolicy();
+        return universe.analysisPolicy().getContextPolicy();
     }
 
     public AnalysisUniverse getUniverse() {
@@ -379,8 +385,9 @@ public abstract class BigBang {
             }
 
             @Override
-            public DebugContext getDebug(OptionValues ignored, List<DebugHandlersFactory> factories) {
-                return DebugContext.DISABLED;
+            public DebugContext getDebug(OptionValues opts, List<DebugHandlersFactory> factories) {
+                assert opts == getOptions();
+                return DebugContext.disabled(opts);
             }
         });
 
@@ -478,6 +485,11 @@ public abstract class BigBang {
         return executor;
     }
 
+    public abstract boolean isValidClassLoader(Object valueObj);
+
+    public void checkUserLimitations() {
+    }
+
     public interface TypeFlowRunnable extends DebugContextRunnable {
         TypeFlow<?> getTypeFlow();
     }
@@ -510,7 +522,8 @@ public abstract class BigBang {
 
             @Override
             public DebugContext getDebug(OptionValues opts, List<DebugHandlersFactory> factories) {
-                return DebugContext.DISABLED;
+                assert opts == getOptions();
+                return DebugContext.disabled(opts);
             }
         });
     }
@@ -532,14 +545,7 @@ public abstract class BigBang {
 
             int numTypes;
             do {
-                try (StopTimer t = typeFlowTimer.start()) {
-                    executor.start();
-                    executor.complete();
-                    didSomeWork |= (executor.getPostedOperations() > 0);
-                    executor.shutdown();
-                }
-                /* Initialize for the next iteration. */
-                executor.init(timing);
+                didSomeWork |= doTypeflow();
 
                 /*
                  * Check if the object graph introduces any new types, which leads to new operations
@@ -563,6 +569,20 @@ public abstract class BigBang {
         }
     }
 
+    @SuppressWarnings("try")
+    public boolean doTypeflow() throws InterruptedException {
+        boolean didSomeWork;
+        try (StopTimer ignored = typeFlowTimer.start()) {
+            executor.start();
+            executor.complete();
+            didSomeWork = (executor.getPostedOperations() > 0);
+            executor.shutdown();
+        }
+        /* Initialize for the next iteration. */
+        executor.init(timing);
+        return didSomeWork;
+    }
+
     /**
      * Check if the type is allowed to be used for synchronization.
      *
@@ -573,13 +593,23 @@ public abstract class BigBang {
     public void checkUnsupportedSynchronization(AnalysisMethod method, int bci, AnalysisType aType) {
     }
 
-    @SuppressWarnings("try")
-    private void checkObjectGraph() {
-        // scan constants
-        ObjectScanner objectScanner = new AnalysisObjectScanner(this);
-        checkObjectGraph(objectScanner);
-        objectScanner.scanBootImageHeapRoots();
+    private ReusableSet scannedObjects = new ReusableSet();
 
+    @SuppressWarnings("try")
+    private void checkObjectGraph() throws InterruptedException {
+        scannedObjects.reset();
+        // scan constants
+        ObjectScanner objectScanner = new AnalysisObjectScanner(this, scannedObjects);
+        checkObjectGraph(objectScanner);
+        if (PointstoOptions.ScanObjectsParallel.getValue(options)) {
+            executor.start();
+            objectScanner.scanBootImageHeapRoots(executor);
+            executor.complete();
+            executor.shutdown();
+            executor.init(timing);
+        } else {
+            objectScanner.scanBootImageHeapRoots(null);
+        }
         AnalysisType.updateAssignableTypes(this);
     }
 

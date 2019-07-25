@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -50,9 +52,10 @@ import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 import org.graalvm.compiler.nodes.virtual.VirtualInstanceNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
+import org.graalvm.compiler.serviceprovider.SpeculationReasonGroup;
+import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 import org.graalvm.compiler.truffle.compiler.nodes.TruffleAssumption;
 import org.graalvm.compiler.truffle.compiler.substitutions.KnownTruffleTypes;
-import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -86,24 +89,6 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
 
     private final SpeculationReason intrinsifyAccessorsSpeculation;
 
-    static final class IntrinsifyFrameAccessorsSpeculationReason implements SpeculationReason {
-        private final JavaConstant frameDescriptor;
-
-        IntrinsifyFrameAccessorsSpeculationReason(JavaConstant frameDescriptor) {
-            this.frameDescriptor = frameDescriptor;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            return obj instanceof IntrinsifyFrameAccessorsSpeculationReason && ((IntrinsifyFrameAccessorsSpeculationReason) obj).frameDescriptor.equals(this.frameDescriptor);
-        }
-
-        @Override
-        public int hashCode() {
-            return frameDescriptor.hashCode();
-        }
-    }
-
     private static JavaKind asJavaKind(JavaConstant frameSlotTag) {
         int tagValue = frameSlotTag.asInt();
         JavaKind rawKind = TruffleCompilerRuntime.getRuntime().getJavaKindForFrameSlotKind(tagValue);
@@ -123,6 +108,8 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
         throw new IllegalStateException("Unexpected frame slot kind tag: " + tagValue);
     }
 
+    private static final SpeculationReasonGroup INTRINSIFY_FRAME_ACCESSORS_SPECULATIONS = new SpeculationReasonGroup("IntrinsifyFrameAccessor");
+
     public NewFrameNode(GraphBuilderContext b, ValueNode frameDescriptorNode, ValueNode arguments, KnownTruffleTypes types) {
         super(TYPE, StampFactory.objectNonNull(TypeReference.createExactTrusted(types.classFrameClass)));
 
@@ -135,7 +122,8 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
         JavaConstant frameDescriptor = frameDescriptorNode.asJavaConstant();
 
         /*
-         * We access the FrameDescriptor only here and copy out all relevant data. So later
+         * We access the FrameDescriptor only here and copy out all relevant data (being extra
+         * paranoid when copying data out since they may be concurrently modified). So later
          * modifications to the FrameDescriptor by the running Truffle thread do not interfere. The
          * frame version assumption is registered first, so that we get invalidated in case the
          * FrameDescriptor changes.
@@ -149,8 +137,12 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
          * data arrays, which means that set-methods need a FrameState. Most of the benefit of
          * accessor method intrinsification is avoiding the FrameState creation during partial
          * evaluation.
+         *
+         * The frame descriptor of a call target does not change and since a SpeculationLog is
+         * already associated with a specific call target we only need a single speculation object
+         * representing a speculation on a NewFrameNode.
          */
-        this.intrinsifyAccessorsSpeculation = new IntrinsifyFrameAccessorsSpeculationReason(frameDescriptor);
+        this.intrinsifyAccessorsSpeculation = INTRINSIFY_FRAME_ACCESSORS_SPECULATIONS.createSpeculationReason();
 
         boolean intrinsify = false;
         if (!constantReflection.readFieldValue(types.fieldFrameDescriptorMaterializeCalled, frameDescriptor).asBoolean()) {
@@ -165,19 +157,21 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
         JavaConstant slotArrayList = constantReflection.readFieldValue(types.fieldFrameDescriptorSlots, frameDescriptor);
         JavaConstant slotArray = constantReflection.readFieldValue(types.fieldArrayListElementData, slotArrayList);
         int slotsArrayLength = constantReflection.readArrayLength(slotArray);
+
         frameSlotKinds = new JavaKind[slotsArrayLength];
         int limit = -1;
         for (int i = 0; i < slotsArrayLength; i++) {
-            JavaKind kind = null;
             JavaConstant slot = constantReflection.readArrayElement(slotArray, i);
             if (slot.isNonNull()) {
                 JavaConstant slotKind = constantReflection.readFieldValue(types.fieldFrameSlotKind, slot);
-                if (slotKind.isNonNull()) {
-                    kind = asJavaKind(constantReflection.readFieldValue(types.fieldFrameSlotKindTag, slotKind));
-                    limit = i;
+                JavaConstant slotIndex = constantReflection.readFieldValue(types.fieldFrameSlotIndex, slot);
+                if (slotKind.isNonNull() && slotIndex.isNonNull()) {
+                    final JavaKind kind = asJavaKind(constantReflection.readFieldValue(types.fieldFrameSlotKindTag, slotKind));
+                    final int index = slotIndex.asInt();
+                    limit = index > limit ? index : limit;
+                    frameSlotKinds[index] = kind;
                 }
             }
-            frameSlotKinds[i] = kind;
         }
         this.frameSize = limit + 1;
 
@@ -232,7 +226,7 @@ public final class NewFrameNode extends FixedWithNextNode implements IterableNod
 
     @Override
     public void virtualize(VirtualizerTool tool) {
-        ResolvedJavaType frameType = stamp(NodeView.DEFAULT).javaType(tool.getMetaAccessProvider());
+        ResolvedJavaType frameType = stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess());
         ResolvedJavaField[] frameFields = frameType.getInstanceFields(true);
 
         ResolvedJavaField descriptorField = findField(frameFields, "descriptor");

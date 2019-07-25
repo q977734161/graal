@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,9 +37,9 @@ import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.VMError;
 
 /**
@@ -115,7 +117,7 @@ public final class PinnedBuffer implements AutoCloseable {
         } else if (buffer == null) {
             return WordFactory.nullPointer();
         } else {
-            long address = KnownIntrinsics.unsafeCast(buffer, Target_java_nio_Buffer.class).address;
+            long address = SubstrateUtil.cast(buffer, Target_java_nio_Buffer.class).address;
             return WordFactory.pointer(address + (position << shift));
         }
     }

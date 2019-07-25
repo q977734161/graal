@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -72,14 +74,14 @@ public final class SPARCArrayEqualsOp extends SPARCLIRInstruction {
     @Temp({REG}) protected AllocatableValue temp4;
     @Temp({REG}) protected AllocatableValue temp5;
 
-    public SPARCArrayEqualsOp(LIRGeneratorTool tool, JavaKind kind, AllocatableValue result, AllocatableValue array1, AllocatableValue array2, AllocatableValue length) {
+    public SPARCArrayEqualsOp(LIRGeneratorTool tool, JavaKind kind, AllocatableValue result, AllocatableValue array1, AllocatableValue array2, AllocatableValue length, boolean directPointers) {
         super(TYPE, SIZE);
 
         assert !kind.isNumericFloat() : "Float arrays comparison (bitwise_equal || both_NaN) isn't supported";
         this.kind = kind;
 
-        this.arrayBaseOffset = tool.getProviders().getArrayOffsetProvider().arrayBaseOffset(kind);
-        this.arrayIndexScale = tool.getProviders().getArrayOffsetProvider().arrayScalingFactor(kind);
+        this.arrayBaseOffset = directPointers ? 0 : tool.getProviders().getMetaAccess().getArrayBaseOffset(kind);
+        this.arrayIndexScale = tool.getProviders().getMetaAccess().getArrayIndexScale(kind);
 
         this.resultValue = result;
         this.array1Value = array1;

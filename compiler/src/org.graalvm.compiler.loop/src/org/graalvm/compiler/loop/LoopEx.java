@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -74,8 +76,6 @@ import org.graalvm.compiler.nodes.debug.ControlFlowAnchored;
 import org.graalvm.compiler.nodes.extended.ValueAnchorNode;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
-import jdk.vm.ci.code.BytecodeFrame;
-
 public class LoopEx {
     private final Loop<Block> loop;
     private LoopFragmentInside inside;
@@ -83,6 +83,7 @@ public class LoopEx {
     private CountedLoopInfo counted;
     private LoopsData data;
     private EconomicMap<Node, InductionVariable> ivs;
+    private boolean countedLoopChecked;
 
     LoopEx(Loop<Block> loop, LoopsData data) {
         this.loop = loop;
@@ -141,10 +142,12 @@ public class LoopEx {
     }
 
     public boolean isCounted() {
+        assert countedLoopChecked;
         return counted != null;
     }
 
     public CountedLoopInfo counted() {
+        assert countedLoopChecked;
         return counted;
     }
 
@@ -161,7 +164,7 @@ public class LoopEx {
 
     @Override
     public String toString() {
-        return (isCounted() ? "CountedLoop [" + counted() + "] " : "Loop ") + "(depth=" + loop().getDepth() + ") " + loopBegin();
+        return (countedLoopChecked && isCounted() ? "CountedLoop [" + counted() + "] " : "Loop ") + "(depth=" + loop().getDepth() + ") " + loopBegin();
     }
 
     private class InvariantPredicate implements NodePredicate {
@@ -209,6 +212,10 @@ public class LoopEx {
     }
 
     public boolean detectCounted() {
+        if (countedLoopChecked) {
+            return isCounted();
+        }
+        countedLoopChecked = true;
         LoopBeginNode loopBegin = loopBegin();
         FixedNode next = loopBegin.next();
         while (next instanceof FixedGuardNode || next instanceof ValueAnchorNode || next instanceof FullInfopointNode) {
@@ -217,8 +224,8 @@ public class LoopEx {
         if (next instanceof IfNode) {
             IfNode ifNode = (IfNode) next;
             boolean negated = false;
-            if (!loopBegin.isLoopExit(ifNode.falseSuccessor())) {
-                if (!loopBegin.isLoopExit(ifNode.trueSuccessor())) {
+            if (!isCfgLoopExit(ifNode.falseSuccessor())) {
+                if (!isCfgLoopExit(ifNode.trueSuccessor())) {
                     return false;
                 }
                 negated = true;
@@ -299,12 +306,17 @@ public class LoopEx {
                     }
                     break;
                 default:
-                    throw GraalError.shouldNotReachHere();
+                    throw GraalError.shouldNotReachHere(condition.toString());
             }
             counted = new CountedLoopInfo(this, iv, ifNode, limit, oneOff, negated ? ifNode.falseSuccessor() : ifNode.trueSuccessor());
             return true;
         }
         return false;
+    }
+
+    private boolean isCfgLoopExit(AbstractBeginNode begin) {
+        Block block = data.getCFG().blockFor(begin);
+        return loop.getDepth() > block.getLoopDepth() || loop.isNaturalExit(block);
     }
 
     public LoopsData loopsData() {
@@ -319,7 +331,7 @@ public class LoopEx {
         work.add(cfg.blockFor(branch));
         while (!work.isEmpty()) {
             Block b = work.remove();
-            if (loop().getExits().contains(b)) {
+            if (loop().isLoopExit(b)) {
                 assert !exits.contains(b.getBeginNode());
                 exits.add(b.getBeginNode());
             } else if (blocks.add(b.getBeginNode())) {
@@ -332,7 +344,7 @@ public class LoopEx {
                 }
             }
         }
-        LoopFragment.computeNodes(branchNodes, branch.graph(), blocks, exits);
+        LoopFragment.computeNodes(branchNodes, branch.graph(), this, blocks, exits);
     }
 
     public EconomicMap<Node, InductionVariable> getInductionVariables() {
@@ -375,7 +387,7 @@ public class LoopEx {
                 if (loop.isOutsideLoop(op)) {
                     continue;
                 }
-                if (op.usages().count() == 1 && op.usages().first() == baseIvNode) {
+                if (op.hasExactlyOneUsage() && op.usages().first() == baseIvNode) {
                     /*
                      * This is just the base induction variable increment with no other uses so
                      * don't bother reporting it.
@@ -463,7 +475,7 @@ public class LoopEx {
             }
             if (node instanceof FrameState) {
                 FrameState frameState = (FrameState) node;
-                if (frameState.bci == BytecodeFrame.AFTER_EXCEPTION_BCI || frameState.bci == BytecodeFrame.UNWIND_BCI) {
+                if (frameState.isExceptionHandlingBCI()) {
                     return false;
                 }
             }

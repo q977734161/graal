@@ -2,30 +2,50 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
+import com.oracle.truffle.api.test.OSUtils;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
@@ -38,6 +58,7 @@ import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
@@ -45,9 +66,14 @@ import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.AbstractMap;
 import java.util.Arrays;
 import java.util.Collection;
@@ -62,35 +88,62 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import org.graalvm.polyglot.io.FileSystem;
 
-final class MemoryFileSystem implements FileSystem {
+public final class MemoryFileSystem implements FileSystem {
     private static final byte[] EMPTY = new byte[0];
+    private static final UserPrincipal USER = new UserPrincipal() {
+        @Override
+        public String getName() {
+            return "";
+        }
+
+        @Override
+        public int hashCode() {
+            return 0;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other == USER;
+        }
+    };
+    private static final GroupPrincipal GROUP = new GroupPrincipal() {
+        @Override
+        public String getName() {
+            return "";
+        }
+
+        @Override
+        public int hashCode() {
+            return 0;
+        }
+    };
 
     private final Map<Long, FileInfo> inodes;
     private final Map<Long, byte[]> blocks;
     private final Path root;
-    private Path userDir;
+    private volatile Path userDir;
     private long nextInode = 0;
 
-    MemoryFileSystem() throws IOException {
+    public MemoryFileSystem() throws IOException {
         this.inodes = new HashMap<>();
         this.blocks = new HashMap<>();
-        root = Paths.get("/");
+        root = MemoryPath.getRootDirectory();
         userDir = root;
         createDirectoryImpl();
     }
 
-    void setUserDir(final Path newUserDir) {
-        userDir = newUserDir;
-    }
-
     @Override
     public Path parsePath(String path) {
-        return Paths.get(path);
+        return new MemoryPath(Paths.get(path));
     }
 
     @Override
     public Path parsePath(URI uri) {
-        return Paths.get(uri);
+        try {
+            return new MemoryPath(Paths.get(uri));
+        } catch (IllegalArgumentException | FileSystemNotFoundException e) {
+            throw new UnsupportedOperationException(e);
+        }
     }
 
     @Override
@@ -323,6 +376,12 @@ final class MemoryFileSystem implements FileSystem {
     }
 
     @Override
+    public void setCurrentWorkingDirectory(Path currentWorkingDirectory) {
+        Objects.requireNonNull(currentWorkingDirectory, "Current working directory must be non null.");
+        this.userDir = currentWorkingDirectory;
+    }
+
+    @Override
     public Path toRealPath(final Path path, LinkOption... options) throws IOException {
         return toAbsolutePath(path);
     }
@@ -343,6 +402,11 @@ final class MemoryFileSystem implements FileSystem {
         }
         dirents.put(fileName, createDirectoryImpl(attrs));
         writeDir(inode, dirents);
+    }
+
+    @Override
+    public String getSeparator() {
+        return ((MemoryPath) root).delegate.getFileSystem().getSeparator();
     }
 
     private static Object[] parse(String attributesSelector) {
@@ -594,6 +658,8 @@ final class MemoryFileSystem implements FileSystem {
 
     private static final class PermissionsAttributes extends BasicFileAttributes {
         private static final String ATTR_PERMISSIONS = "permissions";
+        private static final String ATTR_OWNER = "owner";
+        private static final String ATTR_GROUP = "group";
 
         PermissionsAttributes(long inode, FileInfo fileInfo, int size) {
             super(inode, fileInfo, size);
@@ -603,6 +669,8 @@ final class MemoryFileSystem implements FileSystem {
         Set<String> getSupportedKeys() {
             final Set<String> base = super.getSupportedKeys();
             base.add(ATTR_PERMISSIONS);
+            base.add(ATTR_OWNER);
+            base.add(ATTR_GROUP);
             return base;
         }
 
@@ -620,6 +688,10 @@ final class MemoryFileSystem implements FileSystem {
                     result.add(PosixFilePermission.OWNER_EXECUTE);
                 }
                 return result;
+            } else if (ATTR_OWNER.equals(key)) {
+                return USER;
+            } else if (ATTR_GROUP.equals(key)) {
+                return GROUP;
             }
             return super.getValue(key);
         }
@@ -847,6 +919,220 @@ final class MemoryFileSystem implements FileSystem {
             FileInfo build() {
                 return new FileInfo(type, permissions, ctime, mtime, atime);
             }
+        }
+    }
+
+    private static final class MemoryPath implements Path {
+
+        private final Path delegate;
+
+        MemoryPath(Path delegate) {
+            assert delegate != null;
+            this.delegate = delegate;
+        }
+
+        @Override
+        public java.nio.file.FileSystem getFileSystem() {
+            throw new UnsupportedOperationException("Not supported");
+        }
+
+        @Override
+        public WatchKey register(WatchService watcher, WatchEvent.Kind<?>[] events, WatchEvent.Modifier... modifiers) throws IOException {
+            throw new UnsupportedOperationException("Not supported.");
+        }
+
+        @Override
+        public WatchKey register(WatchService watcher, WatchEvent.Kind<?>... events) throws IOException {
+            throw new UnsupportedOperationException("Not supported.");
+        }
+
+        @Override
+        public File toFile() {
+            throw new UnsupportedOperationException("Not supported.");
+        }
+
+        @Override
+        public boolean isAbsolute() {
+            return delegate.isAbsolute();
+        }
+
+        @Override
+        public Path getRoot() {
+            Path delegateRoot = delegate.getRoot();
+            return delegateRoot == null ? null : new MemoryPath(delegateRoot);
+        }
+
+        @Override
+        public Path getFileName() {
+            Path delegateFileName = delegate.getFileName();
+            return delegateFileName == null ? null : new MemoryPath(delegateFileName);
+        }
+
+        @Override
+        public Path getParent() {
+            Path delegateParent = delegate.getParent();
+            return delegateParent == null ? null : new MemoryPath(delegateParent);
+        }
+
+        @Override
+        public int getNameCount() {
+            return delegate.getNameCount();
+        }
+
+        @Override
+        public Path getName(int index) {
+            Path delegateName = delegate.getName(index);
+            return new MemoryPath(delegateName);
+        }
+
+        @Override
+        public Path subpath(int beginIndex, int endIndex) {
+            Path delegateSubpath = delegate.subpath(beginIndex, endIndex);
+            return new MemoryPath(delegateSubpath);
+        }
+
+        @Override
+        public boolean startsWith(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return delegate.startsWith(((MemoryPath) other).delegate);
+        }
+
+        @Override
+        public boolean startsWith(String other) {
+            return delegate.startsWith(other);
+        }
+
+        @Override
+        public boolean endsWith(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return delegate.endsWith(((MemoryPath) other).delegate);
+        }
+
+        @Override
+        public boolean endsWith(String other) {
+            return delegate.endsWith(other);
+        }
+
+        @Override
+        public Path normalize() {
+            return new MemoryPath(delegate.normalize());
+        }
+
+        @Override
+        public Path resolve(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return new MemoryPath(delegate.resolve(((MemoryPath) other).delegate));
+        }
+
+        @Override
+        public Path resolve(String other) {
+            return new MemoryPath(delegate.resolve(other));
+        }
+
+        @Override
+        public Path resolveSibling(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return new MemoryPath(delegate.resolveSibling(((MemoryPath) other).delegate));
+        }
+
+        @Override
+        public Path resolveSibling(String other) {
+            return new MemoryPath(delegate.resolveSibling(other));
+        }
+
+        @Override
+        public Path relativize(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return new MemoryPath(delegate.relativize(((MemoryPath) other).delegate));
+        }
+
+        @Override
+        public URI toUri() {
+            return delegate.toUri();
+        }
+
+        @Override
+        public Path toAbsolutePath() {
+            return new MemoryPath(delegate.toAbsolutePath());
+        }
+
+        @Override
+        public Path toRealPath(LinkOption... options) throws IOException {
+            return new MemoryPath(delegate.toRealPath(options));
+        }
+
+        @Override
+        public Iterator<Path> iterator() {
+            return new Iterator<Path>() {
+
+                private final Iterator<Path> delegateIt = delegate.iterator();
+
+                @Override
+                public boolean hasNext() {
+                    return delegateIt.hasNext();
+                }
+
+                @Override
+                public Path next() {
+                    return new MemoryPath(delegateIt.next());
+                }
+            };
+        }
+
+        @Override
+        public int compareTo(Path other) {
+            if (other.getClass() != MemoryPath.class) {
+                throw new IllegalArgumentException("Unsupported path: " + other.getClass().getName());
+            }
+            return delegate.compareTo(((MemoryPath) other).delegate);
+        }
+
+        @Override
+        public String toString() {
+            return delegate.toString();
+        }
+
+        @Override
+        public int hashCode() {
+            return delegate.hashCode();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (other == this) {
+                return true;
+            }
+            if (other == null || other.getClass() != MemoryPath.class) {
+                return false;
+            }
+            return delegate.equals(((MemoryPath) other).delegate);
+        }
+
+        static Path getRootDirectory() {
+            Path delegate;
+            if (OSUtils.isUnix()) {
+                delegate = Paths.get("/");
+            } else {
+                delegate = null;
+                for (Path root : Paths.get("").getFileSystem().getRootDirectories()) {
+                    delegate = root;
+                    break;
+                }
+            }
+            if (delegate == null) {
+                throw new IllegalStateException("No root found.");
+            }
+            return new MemoryPath(delegate);
         }
     }
 }

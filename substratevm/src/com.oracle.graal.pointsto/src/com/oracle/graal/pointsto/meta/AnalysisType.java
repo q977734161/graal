@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,7 +41,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.Node;
+import org.graalvm.util.GuardedAnnotationAccess;
 import org.graalvm.word.WordBase;
 
 import com.oracle.graal.pointsto.BigBang;
@@ -81,6 +85,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private boolean isInHeap;
     private boolean isAllocated;
     private boolean isInTypeCheck;
+    private boolean reachabilityListenerNotified;
     private boolean unsafeFieldsRecomputed;
     private boolean unsafeAccessedFieldsRegistered;
 
@@ -142,34 +147,21 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     /* isArray is an expensive operation so we eagerly compute it */
     private boolean isArray;
 
+    public enum UsageKind {
+        InHeap,
+        Allocated,
+        InTypeCheck;
+    }
+
     AnalysisType(AnalysisUniverse universe, ResolvedJavaType javaType, JavaKind storageKind, AnalysisType objectType) {
         this.universe = universe;
         this.wrapped = javaType;
         isArray = wrapped.isArray();
         this.storageKind = storageKind;
         this.unsafeAccessedFieldsRegistered = false;
-        if (universe.hostVM.analysisPolicy().needsConstantCache()) {
+        if (universe.analysisPolicy().needsConstantCache()) {
             this.constantObjectsCache = new ConcurrentHashMap<>();
         }
-
-        /*
-         * Eagerly ask the wrapped type to lookup the declared constructors. This will discover
-         * early any class resolution problems caused by missing parameter types. We cannot cache
-         * the result as AnalysisMethod[], i.e., by calling universe.lookup(JavaMethod[]), because
-         * that would lead to a deadlock, but we could cache it as ResolvedJavaMethod[] which we can
-         * later use in AnalysisType.getDeclaredConstructors().
-         */
-        wrapped.getDeclaredConstructors();
-        /*
-         * Eagerly resolve the enclosing type. It is possible that we are dealing with an incomplete
-         * classpath. While normally JVM doesn't care about missing classes unless they are really
-         * used the analysis is eager to load all reachable classes. The analysis client should deal
-         * with type resolution problems.
-         * 
-         * We cannot cache the result as an AnalysisType, i.e., by calling
-         * universe.lookup(JavaType), because that could lead to a deadlock.
-         */
-        wrapped.getEnclosingType();
 
         /* Ensure the super types as well as the component type (for arrays) is created too. */
         getSuperclass();
@@ -209,7 +201,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private AnalysisType[] convertTypes(ResolvedJavaType[] originalTypes) {
         List<AnalysisType> result = new ArrayList<>(originalTypes.length);
         for (ResolvedJavaType originalType : originalTypes) {
-            if (!universe.hostVM().platformSupported(originalType)) {
+            if (!universe.platformSupported(originalType)) {
                 /* Ignore types that are not in our platform (including hosted-only types). */
                 continue;
             }
@@ -503,20 +495,31 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     public void registerAsInHeap() {
         assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers()));
         isInHeap = true;
+        universe.hostVM.checkForbidden(this, UsageKind.InHeap);
     }
 
     /**
      * @param node For future use and debugging
      */
     public void registerAsAllocated(Node node) {
-        assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers()));
+        assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers())) : this;
         if (!isAllocated) {
             isAllocated = true;
         }
+        universe.hostVM.checkForbidden(this, UsageKind.Allocated);
     }
 
     public void registerAsInTypeCheck() {
         isInTypeCheck = true;
+        universe.hostVM.checkForbidden(this, UsageKind.InTypeCheck);
+    }
+
+    public boolean getReachabilityListenerNotified() {
+        return reachabilityListenerNotified;
+    }
+
+    public void setReachabilityListenerNotified(boolean reachabilityListenerNotified) {
+        this.reachabilityListenerNotified = reachabilityListenerNotified;
     }
 
     /**
@@ -656,6 +659,10 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         return universe.substitutions.resolve(wrapped);
     }
 
+    public ResolvedJavaType getWrappedWithoutResolve() {
+        return wrapped;
+    }
+
     @Override
     public Class<?> getJavaClass() {
         return OriginalClassProvider.getJavaClass(universe.getOriginalSnippetReflection(), wrapped);
@@ -690,13 +697,14 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public final boolean isInitialized() {
-        assert wrapped.isInitialized();
-        return true;
+        return universe.hostVM.isInitialized(this);
     }
 
     @Override
     public void initialize() {
-        assert wrapped.isInitialized();
+        if (!wrapped.isInitialized()) {
+            throw GraalError.shouldNotReachHere("Classes can only be initialized using methods in ClassInitializationFeature: " + toClassName());
+        }
     }
 
     @Override
@@ -707,6 +715,11 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     @Override
     public boolean isInterface() {
         return wrapped.isInterface();
+    }
+
+    @Override
+    public boolean isEnum() {
+        return wrapped.isEnum();
     }
 
     @Override
@@ -877,17 +890,17 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public Annotation[] getAnnotations() {
-        return wrapped.getAnnotations();
+        return GuardedAnnotationAccess.getAnnotations(wrapped);
     }
 
     @Override
     public Annotation[] getDeclaredAnnotations() {
-        return wrapped.getDeclaredAnnotations();
+        return GuardedAnnotationAccess.getDeclaredAnnotations(wrapped);
     }
 
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return wrapped.getAnnotation(annotationClass);
+        return GuardedAnnotationAccess.getAnnotation(wrapped, annotationClass);
     }
 
     @Override
@@ -911,7 +924,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         try {
             return wrapped.isLocal();
         } catch (InternalError e) {
-            universe.getHostVM().warn("unknown locality of class " + wrapped.getName() + ", assuming class is not local. To remove the warning report an issue " +
+            universe.hostVM().warn("unknown locality of class " + wrapped.getName() + ", assuming class is not local. To remove the warning report an issue " +
                             "to the library or language author. The issue is caused by " + wrapped.getName() + " which is not following the naming convention.");
             return false;
         }
@@ -924,7 +937,14 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public AnalysisType getEnclosingType() {
-        return universe.lookup(wrapped.getEnclosingType());
+        ResolvedJavaType wrappedEnclosingType;
+        try {
+            wrappedEnclosingType = wrapped.getEnclosingType();
+        } catch (NoClassDefFoundError e) {
+            /* Ignore NoClassDefFoundError thrown by enclosing type resolution. */
+            return null;
+        }
+        return universe.lookup(wrappedEnclosingType);
     }
 
     @Override
@@ -938,14 +958,17 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     }
 
     @Override
-    public ResolvedJavaMethod getClassInitializer() {
+    public AnalysisMethod getClassInitializer() {
         return universe.lookup(wrapped.getClassInitializer());
     }
 
     @Override
     public boolean isLinked() {
-        assert wrapped.isLinked();
-        return true;
+        /*
+         * If the wrapped type is referencing some missing types verification may fail and the type
+         * will not be linked.
+         */
+        return wrapped.isLinked();
     }
 
     @Override
@@ -980,5 +1003,4 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     public boolean isAnnotation() {
         return (getModifiers() & ANNOTATION) != 0;
     }
-
 }

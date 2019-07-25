@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,10 +25,10 @@
 package com.oracle.svm.tutorial;
 
 import java.util.Collections;
-
 import java.util.Date;
 import java.util.List;
 
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.ObjectHandle;
 import org.graalvm.nativeimage.ObjectHandles;
@@ -37,7 +39,6 @@ import org.graalvm.nativeimage.c.constant.CEnum;
 import org.graalvm.nativeimage.c.constant.CEnumLookup;
 import org.graalvm.nativeimage.c.constant.CEnumValue;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
@@ -58,6 +59,7 @@ import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.OS;
 import com.oracle.svm.core.c.ProjectHeaderFile;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.tutorial.CInterfaceTutorial.CInterfaceTutorialDirectives;
@@ -179,9 +181,15 @@ public class CInterfaceTutorial {
         }
         System.out.format("\n");
 
-        IsolateThread currentThread = CEntryPointContext.getCurrentIsolateThread();
+        IsolateThread currentThread = CurrentIsolate.getCurrentThread();
         /* Call a C function directly. */
-        printingInC(currentThread, data.getCString());
+        if (OS.getCurrent() != OS.WINDOWS) {
+            /*
+             * Calling C functions provided by the main executable from a shared library produced by
+             * the native-image is not yet supported on Windows.
+             */
+            printingInC(currentThread, data.getCString());
+        }
         /* Call a C function indirectly via function pointer. */
         data.getPrintFunction().invoke(currentThread, data.getCString());
     }
@@ -190,7 +198,7 @@ public class CInterfaceTutorial {
     @CEntryPoint(name = "java_entry_point")
     protected static void javaEntryPoint(@SuppressWarnings("unused") IsolateThread thread, MyData data) {
         /* Allocate a C structure in our stack frame. */
-        MyData copy = StackValue.get(SizeOf.get(MyData.class));
+        MyData copy = StackValue.get(MyData.class);
 
         /* Get the size of a C structure. */
         int dataSize = SizeOf.get(MyData.class);
@@ -244,8 +252,14 @@ public class CInterfaceTutorial {
     @CEntryPoint(name = "java_print_day")
     protected static void printDay(@SuppressWarnings("unused") IsolateThread thread, DayOfTheWeek day) {
         System.out.format("Day: %s (Java ordinal: %d, C value: %d)%n", day.name(), day.ordinal(), day.getCValue());
-        System.out.format("  follows %s and %s%n", dayOfTheWeekAdd(day, -2), dayOfTheWeekAdd(day, -1));
-        System.out.format("  is followed by %s and %s%n", dayOfTheWeekAdd(day, +1), dayOfTheWeekAdd(day, +2));
+        if (OS.getCurrent() != OS.WINDOWS) {
+            /*
+             * Calling C functions provided by the main executable from a shared library produced by
+             * the native-image is not yet supported on Windows.
+             */
+            System.out.format(" follows %s and %s%n", dayOfTheWeekAdd(day, -2), dayOfTheWeekAdd(day, -1));
+            System.out.format(" is followed by %s and %s%n", dayOfTheWeekAdd(day, +1), dayOfTheWeekAdd(day, +2));
+        }
     }
 
     /*
@@ -262,8 +276,8 @@ public class CInterfaceTutorial {
         @CField
         byte type();
 
-        @CFieldAddress("typename")
-        CCharPointer typename();
+        @CFieldAddress("name")
+        CCharPointer name();
 
         @CFieldAddress("type")
         CCharPointer typePtr();

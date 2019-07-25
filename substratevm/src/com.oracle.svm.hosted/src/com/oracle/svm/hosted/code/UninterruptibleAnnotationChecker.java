@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,7 @@ import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.java.AbstractNewObjectNode;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.c.function.CFunction;
+import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
 import org.graalvm.nativeimage.c.function.CFunction.Transition;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
@@ -234,7 +237,9 @@ public final class UninterruptibleAnnotationChecker {
 
     private static boolean isNoTransitionCFunction(HostedMethod method) {
         final CFunction cfunctionAnnotation = method.getAnnotation(CFunction.class);
-        return ((cfunctionAnnotation != null) && (cfunctionAnnotation.transition() == Transition.NO_TRANSITION));
+        final InvokeCFunctionPointer invokeCFunctionPointerAnnotation = method.getAnnotation(InvokeCFunctionPointer.class);
+        return (cfunctionAnnotation != null && cfunctionAnnotation.transition() == Transition.NO_TRANSITION) ||
+                        (invokeCFunctionPointerAnnotation != null && invokeCFunctionPointerAnnotation.transition() == Transition.NO_TRANSITION);
     }
 
     private static void printDotGraphEdge(HostedMethod caller, HostedMethod callee) {

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -78,6 +80,7 @@ import org.graalvm.compiler.nodes.spi.LimitedValueProxy;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
 import org.graalvm.compiler.nodes.spi.ValueProxy;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
+import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
 import org.graalvm.compiler.options.Option;
@@ -240,10 +243,12 @@ public class GraphUtil {
             EconomicSet<Node> unsafeNodes = null;
             Graph.NodeEventScope nodeEventScope = null;
             OptionValues options = node.getOptions();
-            if (Graph.Options.VerifyGraalGraphEdges.getValue(options)) {
+            boolean verifyGraalGraphEdges = Graph.Options.VerifyGraalGraphEdges.getValue(options);
+            boolean verifyKillCFGUnusedNodes = GraphUtil.Options.VerifyKillCFGUnusedNodes.getValue(options);
+            if (verifyGraalGraphEdges) {
                 unsafeNodes = collectUnsafeNodes(node.graph());
             }
-            if (GraphUtil.Options.VerifyKillCFGUnusedNodes.getValue(options)) {
+            if (verifyKillCFGUnusedNodes) {
                 EconomicSet<Node> collectedUnusedNodes = unusedNodes = EconomicSet.create(Equivalence.IDENTITY);
                 nodeEventScope = node.graph().trackNodeEvents(new Graph.NodeEventListener() {
                     @Override
@@ -257,12 +262,12 @@ public class GraphUtil {
             debug.dump(DebugContext.VERY_DETAILED_LEVEL, node.graph(), "Before killCFG %s", node);
             killCFGInner(node);
             debug.dump(DebugContext.VERY_DETAILED_LEVEL, node.graph(), "After killCFG %s", node);
-            if (Graph.Options.VerifyGraalGraphEdges.getValue(options)) {
+            if (verifyGraalGraphEdges) {
                 EconomicSet<Node> newUnsafeNodes = collectUnsafeNodes(node.graph());
                 newUnsafeNodes.removeAll(unsafeNodes);
                 assert newUnsafeNodes.isEmpty() : "New unsafe nodes: " + newUnsafeNodes;
             }
-            if (GraphUtil.Options.VerifyKillCFGUnusedNodes.getValue(options)) {
+            if (verifyKillCFGUnusedNodes) {
                 nodeEventScope.close();
                 Iterator<Node> iterator = unusedNodes.iterator();
                 while (iterator.hasNext()) {
@@ -675,7 +680,7 @@ public class GraphUtil {
      * @param mode The mode as documented in {@link FindLengthMode}.
      * @return The array length if one was found, or null otherwise.
      */
-    public static ValueNode arrayLength(ValueNode value, ArrayLengthProvider.FindLengthMode mode) {
+    public static ValueNode arrayLength(ValueNode value, FindLengthMode mode, ConstantReflectionProvider constantReflection) {
         Objects.requireNonNull(mode);
 
         ValueNode current = value;
@@ -685,14 +690,14 @@ public class GraphUtil {
              * ArrayLengthProvider, therefore we check this case first.
              */
             if (current instanceof ArrayLengthProvider) {
-                return ((ArrayLengthProvider) current).findLength(mode);
+                return ((ArrayLengthProvider) current).findLength(mode, constantReflection);
 
             } else if (current instanceof ValuePhiNode) {
-                return phiArrayLength((ValuePhiNode) current, mode);
+                return phiArrayLength((ValuePhiNode) current, mode, constantReflection);
 
             } else if (current instanceof ValueProxyNode) {
                 ValueProxyNode proxy = (ValueProxyNode) current;
-                ValueNode length = arrayLength(proxy.getOriginalNode(), mode);
+                ValueNode length = arrayLength(proxy.getOriginalNode(), mode, constantReflection);
                 if (mode == ArrayLengthProvider.FindLengthMode.CANONICALIZE_READ && length != null && !length.isConstant()) {
                     length = new ValueProxyNode(length, proxy.proxyPoint());
                 }
@@ -708,7 +713,7 @@ public class GraphUtil {
         } while (true);
     }
 
-    private static ValueNode phiArrayLength(ValuePhiNode phi, ArrayLengthProvider.FindLengthMode mode) {
+    private static ValueNode phiArrayLength(ValuePhiNode phi, ArrayLengthProvider.FindLengthMode mode, ConstantReflectionProvider constantReflection) {
         if (phi.merge() instanceof LoopBeginNode) {
             /* Avoid cycle detection by not processing phi functions that could introduce cycles. */
             return null;
@@ -717,7 +722,7 @@ public class GraphUtil {
         ValueNode singleLength = null;
         for (int i = 0; i < phi.values().count(); i++) {
             ValueNode input = phi.values().get(i);
-            ValueNode length = arrayLength(input, mode);
+            ValueNode length = arrayLength(input, mode, constantReflection);
             if (length == null) {
                 return null;
             }
@@ -1036,7 +1041,7 @@ public class GraphUtil {
             return;
         }
 
-        if (newLengthInt >= tool.getMaximumEntryCount()) {
+        if (newLengthInt > tool.getMaximumEntryCount()) {
             /* The new array size is higher than maximum allowed size of virtualized objects. */
             return;
         }
@@ -1047,13 +1052,28 @@ public class GraphUtil {
         if (sourceAlias instanceof VirtualObjectNode) {
             /* The source array is virtualized, just copy over the values. */
             VirtualObjectNode sourceVirtual = (VirtualObjectNode) sourceAlias;
+            boolean alwaysAssignable = newComponentType.getJavaKind() == JavaKind.Object && newComponentType.isJavaLangObject();
             for (int i = 0; i < readLength; i++) {
-                newEntryState[i] = tool.getEntry(sourceVirtual, fromInt + i);
+                ValueNode entry = tool.getEntry(sourceVirtual, fromInt + i);
+                if (!alwaysAssignable) {
+                    ResolvedJavaType entryType = StampTool.typeOrNull(entry, tool.getMetaAccess());
+                    if (entryType == null) {
+                        return;
+                    }
+                    if (!newComponentType.isAssignableFrom(entryType)) {
+                        return;
+                    }
+                }
+                newEntryState[i] = entry;
             }
         } else {
             /* The source array is not virtualized, emit index loads. */
+            ResolvedJavaType sourceType = StampTool.typeOrNull(sourceAlias, tool.getMetaAccess());
+            if (sourceType == null || !sourceType.isArray() || !newComponentType.isAssignableFrom(sourceType.getElementalType())) {
+                return;
+            }
             for (int i = 0; i < readLength; i++) {
-                LoadIndexedNode load = new LoadIndexedNode(null, sourceAlias, ConstantNode.forInt(i + fromInt, graph), elementKind);
+                LoadIndexedNode load = new LoadIndexedNode(null, sourceAlias, ConstantNode.forInt(i + fromInt, graph), null, elementKind);
                 tool.addNode(load);
                 newEntryState[i] = load;
             }

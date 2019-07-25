@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,12 +24,15 @@
  */
 package com.oracle.svm.junit;
 
-import com.oracle.svm.reflect.hosted.ReflectionFeature;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BooleanSupplier;
-import org.graalvm.nativeimage.Feature;
+
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
+import org.graalvm.nativeimage.hosted.Feature;
+
+import com.oracle.svm.reflect.hosted.ReflectionFeature;
 
 public final class JUnitFeature implements Feature {
 
@@ -45,6 +50,7 @@ public final class JUnitFeature implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
+        RuntimeClassInitialization.initializeAtBuildTime(SVMJUnitRunner.class);
         SVMJUnitRunner svmRunner = new SVMJUnitRunner(access);
         ImageSingletons.add(SVMJUnitRunner.class, svmRunner);
     }

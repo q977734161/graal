@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -130,6 +132,7 @@ public class GraphDecoder {
                         nodeStartOffsets[i] = encodedGraph.getStartOffset() - reader.getUVInt();
                     }
                     encodedGraph.nodeStartOffsets = nodeStartOffsets;
+                    graph.setGuardsStage((StructuredGraph.GuardsStage) readObject(this));
                 }
             } else {
                 reader = null;
@@ -316,7 +319,7 @@ public class GraphDecoder {
         public static final NodeClass<ProxyPlaceholder> TYPE = NodeClass.create(ProxyPlaceholder.class);
 
         @Input ValueNode value;
-        @Input(InputType.Unchecked) Node proxyPoint;
+        @Input(InputType.Association) Node proxyPoint;
 
         public ProxyPlaceholder(ValueNode value, MergeNode proxyPoint) {
             super(TYPE, value.stamp(NodeView.DEFAULT));
@@ -875,33 +878,30 @@ public class GraphDecoder {
                 registerNode(outerScope, proxyOrderId, phiInput, true, false);
                 replacement = phiInput;
 
-            } else if (!merge.isPhiAtMerge(existing)) {
-                /* Now we have two different values, so we need to create a phi node. */
-                PhiNode phi;
-                if (proxy instanceof ValueProxyNode) {
-                    phi = graph.addWithoutUnique(new ValuePhiNode(proxy.stamp(NodeView.DEFAULT), merge));
-                } else if (proxy instanceof GuardProxyNode) {
-                    phi = graph.addWithoutUnique(new GuardPhiNode(merge));
-                } else {
-                    throw GraalError.shouldNotReachHere();
-                }
-                /* Add the inputs from all previous exits. */
-                for (int j = 0; j < merge.phiPredecessorCount() - 1; j++) {
-                    phi.addInput(existing);
-                }
-                /* Add the input from this exit. */
-                phi.addInput(phiInput);
-                registerNode(outerScope, proxyOrderId, phi, true, false);
-                replacement = phi;
-                phiCreated = true;
-
             } else {
-                /* Phi node has been created before, so just add the new input. */
-                PhiNode phi = (PhiNode) existing;
-                phi.addInput(phiInput);
-                replacement = phi;
-            }
+                // Fortify: Suppress Null Dereference false positive
+                assert merge != null;
 
+                if (!merge.isPhiAtMerge(existing)) {
+                    /* Now we have two different values, so we need to create a phi node. */
+                    PhiNode phi = proxy.createPhi(merge);
+                    /* Add the inputs from all previous exits. */
+                    for (int j = 0; j < merge.phiPredecessorCount() - 1; j++) {
+                        phi.addInput(existing);
+                    }
+                    /* Add the input from this exit. */
+                    phi.addInput(phiInput);
+                    registerNode(outerScope, proxyOrderId, phi, true, false);
+                    replacement = phi;
+                    phiCreated = true;
+
+                } else {
+                    /* Phi node has been created before, so just add the new input. */
+                    PhiNode phi = (PhiNode) existing;
+                    phi.addInput(phiInput);
+                    replacement = phi;
+                }
+            }
             proxy.replaceAtUsagesAndDelete(replacement);
         }
 
@@ -1320,7 +1320,7 @@ public class GraphDecoder {
     }
 
     protected Object readObject(MethodScope methodScope) {
-        return methodScope.encodedGraph.getObjects()[methodScope.reader.getUVInt()];
+        return methodScope.encodedGraph.getObject(methodScope.reader.getUVInt());
     }
 
     /**
@@ -1329,6 +1329,11 @@ public class GraphDecoder {
      * @param methodScope The current method.
      */
     protected void cleanupGraph(MethodScope methodScope) {
+        for (MergeNode merge : graph.getNodes(MergeNode.TYPE)) {
+            for (ProxyPlaceholder placeholder : merge.usages().filter(ProxyPlaceholder.class).snapshot()) {
+                placeholder.replaceAndDelete(placeholder.value);
+            }
+        }
         assert verifyEdges();
     }
 
@@ -1399,6 +1404,15 @@ class LoopDetector implements Runnable {
     public void run() {
         DebugContext debug = graph.getDebug();
         debug.dump(DebugContext.DETAILED_LEVEL, graph, "Before loop detection");
+
+        if (methodScope.loopExplosionHead == null) {
+            /*
+             * The to-be-exploded loop was not reached during partial evaluation (e.g., because
+             * there was a deoptimization beforehand), or the method might not even contain a loop.
+             * This is an uncommon case, but not an error.
+             */
+            return;
+        }
 
         List<Loop> orderedLoops = findLoops();
         assert orderedLoops.get(orderedLoops.size() - 1) == irreducibleLoopHandler : "outermost loop must be the last element in the list";
@@ -1802,6 +1816,7 @@ class LoopDetector implements Runnable {
             }
         }
         assert loopVariableIndex != -1;
+        assert explosionHeadValue != null;
 
         ValuePhiNode loopVariablePhi;
         SortedMap<Integer, AbstractBeginNode> dispatchTable = new TreeMap<>();

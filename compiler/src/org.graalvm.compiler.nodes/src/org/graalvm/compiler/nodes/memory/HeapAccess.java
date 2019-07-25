@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,17 +34,25 @@ public interface HeapAccess {
      */
     enum BarrierType {
         /**
-         * Primitive stores which do not necessitate barriers.
+         * Primitive access which do not necessitate barriers.
          */
         NONE,
         /**
-         * Array object stores which necessitate precise barriers.
+         * Array object access.
          */
-        PRECISE,
+        ARRAY,
         /**
-         * Field object stores which necessitate imprecise barriers.
+         * Field object access.
          */
-        IMPRECISE
+        FIELD,
+        /**
+         * Unknown (aka field or array) object access.
+         */
+        UNKNOWN,
+        /**
+         * Weak field access (e.g. Hotspot's Reference.referent field).
+         */
+        WEAK_FIELD
     }
 
     /**

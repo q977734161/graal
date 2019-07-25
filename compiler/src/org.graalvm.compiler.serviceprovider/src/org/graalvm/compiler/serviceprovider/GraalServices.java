@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,81 +24,37 @@
  */
 package org.graalvm.compiler.serviceprovider;
 
-import static java.lang.Thread.currentThread;
-import static org.graalvm.compiler.serviceprovider.GraalServices.JMXService.jmx;
-
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Method;
-import java.util.Iterator;
 import java.util.List;
-import java.util.ServiceConfigurationError;
-import java.util.concurrent.atomic.AtomicLong;
 
+import jdk.vm.ci.code.VirtualObject;
+import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
 import jdk.vm.ci.services.JVMCIPermission;
-import jdk.vm.ci.services.Services;
-
-/*
- * Note: Avoid import statements for java.management or com.sun.management to prevent
- * mx creating a jdk.internal.vm.compiler module that `requires` the java.management
- * or jdk.management modules. The GraalServices class is replaced by a multi-release jar
- * version in JDK 9 and later which does not depend these modules.
- *
- * See also org.graalvm.compiler.serviceprovider.GraalServices.LazyJMX in the
- * org.graalvm.compiler.serviceprovider.jdk9 project.
- */
 
 /**
  * Interface to functionality that abstracts over which JDK version Graal is running on.
  */
 public final class GraalServices {
 
-    private static int getJavaSpecificationVersion() {
-        String value = System.getProperty("java.specification.version");
-        if (value.startsWith("1.")) {
-            value = value.substring(2);
-        }
-        return Integer.parseInt(value);
+    private GraalServices() {
     }
 
-    /**
-     * The integer value corresponding to the value of the {@code java.specification.version} system
-     * property after any leading {@code "1."} has been stripped.
-     */
-    public static final int JAVA_SPECIFICATION_VERSION = getJavaSpecificationVersion();
-
-    /**
-     * Determines if the Java runtime is version 8 or earlier.
-     */
-    public static final boolean Java8OrEarlier = JAVA_SPECIFICATION_VERSION <= 8;
-
-    private GraalServices() {
+    private static InternalError shouldNotReachHere() {
+        throw new InternalError("JDK specific overlay missing");
     }
 
     /**
      * Gets an {@link Iterable} of the providers available for a given service.
      *
+     * @param service the service whose provider is being requested
      * @throws SecurityException if on JDK8 and a security manager is present and it denies
      *             {@link JVMCIPermission}
      */
-    @SuppressWarnings("unchecked")
     public static <S> Iterable<S> load(Class<S> service) {
-        assert !service.getName().startsWith("jdk.vm.ci") : "JVMCI services must be loaded via " + Services.class.getName();
-        try {
-            if (loadMethod == null) {
-                loadMethod = Services.class.getMethod("load", Class.class);
-            }
-            return (Iterable<S>) loadMethod.invoke(null, service);
-        } catch (Exception e) {
-            throw new InternalError(e);
-        }
+        throw shouldNotReachHere();
     }
-
-    /**
-     * {@code Services.load(Class)} is only defined in JVMCI-8 so we use reflection to simplify
-     * compiling with javac on JDK 9 or later.
-     */
-    private static volatile Method loadMethod;
 
     /**
      * Gets the provider for a given service for which at most one provider must be available.
@@ -109,123 +67,56 @@ public final class GraalServices {
      *             {@link JVMCIPermission}
      */
     public static <S> S loadSingle(Class<S> service, boolean required) {
-        assert !service.getName().startsWith("jdk.vm.ci") : "JVMCI services must be loaded via " + Services.class.getName();
-        Iterable<S> providers = load(service);
-        S singleProvider = null;
-        try {
-            for (Iterator<S> it = providers.iterator(); it.hasNext();) {
-                singleProvider = it.next();
-                if (it.hasNext()) {
-                    S other = it.next();
-                    throw new InternalError(String.format("Multiple %s providers found: %s, %s", service.getName(), singleProvider.getClass().getName(), other.getClass().getName()));
-                }
-            }
-        } catch (ServiceConfigurationError e) {
-            // If the service is required we will bail out below.
-        }
-        if (singleProvider == null) {
-            if (required) {
-                throw new InternalError(String.format("No provider for %s found", service.getName()));
-            }
-        }
-        return singleProvider;
+        throw shouldNotReachHere();
     }
 
     /**
      * Gets the class file bytes for {@code c}.
+     *
+     * @param c the class for which class file bytes are being requested
+     * @return an input stream for reading the class file bytes or {@code null} if the class file
+     *         bytes could not be found
+     * @throws IOException if there's an IO error retrieving the class file bytes
      */
-    @SuppressWarnings("unused")
     public static InputStream getClassfileAsStream(Class<?> c) throws IOException {
-        String classfilePath = c.getName().replace('.', '/') + ".class";
-        ClassLoader cl = c.getClassLoader();
-        if (cl == null) {
-            return ClassLoader.getSystemResourceAsStream(classfilePath);
-        }
-        return cl.getResourceAsStream(classfilePath);
-    }
-
-    private static final ClassLoader JVMCI_LOADER = GraalServices.class.getClassLoader();
-    private static final ClassLoader JVMCI_PARENT_LOADER = JVMCI_LOADER == null ? null : JVMCI_LOADER.getParent();
-    static {
-        assert JVMCI_PARENT_LOADER == null || JVMCI_PARENT_LOADER.getParent() == null;
+        throw shouldNotReachHere();
     }
 
     /**
      * Determines if invoking {@link Object#toString()} on an instance of {@code c} will only run
      * trusted code.
+     *
+     * @param c
      */
     public static boolean isToStringTrusted(Class<?> c) {
-        ClassLoader cl = c.getClassLoader();
-        return cl == null || cl == JVMCI_LOADER || cl == JVMCI_PARENT_LOADER;
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Creates an encoding of the context objects representing a speculation reason.
+     *
+     * @param groupId
+     * @param groupName
+     * @param context the objects forming a key for the speculation
+     */
+    static SpeculationReason createSpeculationReason(int groupId, String groupName, Object... context) {
+        throw shouldNotReachHere();
     }
 
     /**
      * Gets a unique identifier for this execution such as a process ID or a
-     * {@linkplain #getGlobalTimeStamp() fixed timestamp}.
+     * {@linkplain #getGlobalTimeStamp() fixed time stamp}.
      */
     public static String getExecutionID() {
-        try {
-            String runtimeName = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
-            try {
-                int index = runtimeName.indexOf('@');
-                if (index != -1) {
-                    long pid = Long.parseLong(runtimeName.substring(0, index));
-                    return Long.toString(pid);
-                }
-            } catch (NumberFormatException e) {
-            }
-            return runtimeName;
-        } catch (LinkageError err) {
-            return String.valueOf(getGlobalTimeStamp());
-        }
+        throw shouldNotReachHere();
     }
-
-    private static final AtomicLong globalTimeStamp = new AtomicLong();
 
     /**
      * Gets a time stamp for the current process. This method will always return the same value for
      * the current VM execution.
      */
     public static long getGlobalTimeStamp() {
-        if (globalTimeStamp.get() == 0) {
-            globalTimeStamp.compareAndSet(0, System.currentTimeMillis());
-        }
-        return globalTimeStamp.get();
-    }
-
-    /**
-     * Access to thread specific information made available via Java Management Extensions (JMX).
-     */
-    public static class JMXService {
-        // In this JDK 8 specific implementation, we can reference
-        // JMX classes directly since there's no module dependencies to
-        // worry about - everything is in rt.jar.
-        private final com.sun.management.ThreadMXBean threadMXBean = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
-
-        protected long getThreadAllocatedBytes(long id) {
-            return threadMXBean.getThreadAllocatedBytes(id);
-        }
-
-        protected long getCurrentThreadCpuTime() {
-            return threadMXBean.getCurrentThreadCpuTime();
-        }
-
-        protected boolean isThreadAllocatedMemorySupported() {
-            return threadMXBean.isThreadAllocatedMemorySupported();
-        }
-
-        protected boolean isCurrentThreadCpuTimeSupported() {
-            return threadMXBean.isCurrentThreadCpuTimeSupported();
-        }
-
-        protected List<String> getInputArguments() {
-            return java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
-        }
-
-        // Placing this static field in JMXService (instead of GraalServices)
-        // allows for lazy initialization.
-        static final JMXService jmx = new JMXService();
-
+        throw shouldNotReachHere();
     }
 
     /**
@@ -253,7 +144,7 @@ public final class GraalServices {
      *             measurement.
      */
     public static long getThreadAllocatedBytes(long id) {
-        return jmx.getThreadAllocatedBytes(id);
+        throw shouldNotReachHere();
     }
 
     /**
@@ -261,7 +152,7 @@ public final class GraalServices {
      * current thread.
      */
     public static long getCurrentThreadAllocatedBytes() {
-        return getThreadAllocatedBytes(currentThread().getId());
+        throw shouldNotReachHere();
     }
 
     /**
@@ -278,7 +169,7 @@ public final class GraalServices {
      *             the current thread
      */
     public static long getCurrentThreadCpuTime() {
-        return jmx.getCurrentThreadCpuTime();
+        throw shouldNotReachHere();
     }
 
     /**
@@ -286,14 +177,14 @@ public final class GraalServices {
      * measurement.
      */
     public static boolean isThreadAllocatedMemorySupported() {
-        return jmx.isThreadAllocatedMemorySupported();
+        throw shouldNotReachHere();
     }
 
     /**
      * Determines if the Java virtual machine supports CPU time measurement for the current thread.
      */
     public static boolean isCurrentThreadCpuTimeSupported() {
-        return jmx.isCurrentThreadCpuTimeSupported();
+        throw shouldNotReachHere();
     }
 
     /**
@@ -311,6 +202,46 @@ public final class GraalServices {
      * @return the input arguments to the JVM or {@code null} if they are unavailable
      */
     public static List<String> getInputArguments() {
-        return jmx.getInputArguments();
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Returns the fused multiply add of the three arguments; that is, returns the exact product of
+     * the first two arguments summed with the third argument and then rounded once to the nearest
+     * {@code float}.
+     */
+    @SuppressWarnings("unused")
+    public static float fma(float a, float b, float c) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Returns the fused multiply add of the three arguments; that is, returns the exact product of
+     * the first two arguments summed with the third argument and then rounded once to the nearest
+     * {@code double}.
+     */
+    @SuppressWarnings("unused")
+    public static double fma(double a, double b, double c) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Creates a new {@link VirtualObject} based on a given existing object, with the given
+     * contents. If {@code type} is an instance class then {@link VirtualObject#getValues} provides
+     * the values for the fields returned by {@link ResolvedJavaType#getInstanceFields(boolean)
+     * getInstanceFields(true)}. If {@code type} is an array then the length of
+     * {@link VirtualObject#getValues} determines the array length.
+     *
+     * @param type the type of the object whose allocation was removed during compilation. This can
+     *            be either an instance or an array type.
+     * @param id a unique id that identifies the object within the debug information for one
+     *            position in the compiled code.
+     * @param isAutoBox a flag that tells the runtime that the object may be a boxed primitive that
+     *            needs to be obtained from the box cache instead of creating a new instance.
+     * @return a new {@link VirtualObject} instance.
+     */
+    @SuppressWarnings("unused")
+    public static VirtualObject createVirtualObject(ResolvedJavaType type, int id, boolean isAutoBox) {
+        throw shouldNotReachHere();
     }
 }

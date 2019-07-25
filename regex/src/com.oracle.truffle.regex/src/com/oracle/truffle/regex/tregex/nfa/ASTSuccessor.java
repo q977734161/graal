@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,9 @@
 package com.oracle.truffle.regex.tregex.nfa;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.regex.charset.CharSet;
+import com.oracle.truffle.regex.tregex.automaton.TransitionBuilder;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
-import com.oracle.truffle.regex.tregex.matchers.MatcherBuilder;
 import com.oracle.truffle.regex.tregex.parser.ast.CharacterClass;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
@@ -40,7 +41,7 @@ import java.util.stream.Collectors;
 
 final class ASTSuccessor implements JsonConvertible {
 
-    private ArrayList<ASTTransitionSetBuilder> mergedStates = new ArrayList<>();
+    private ArrayList<TransitionBuilder<ASTTransitionSet>> mergedStates = new ArrayList<>();
     private boolean lookAroundsMerged = false;
     private List<ASTStep> lookAheads = Collections.emptyList();
     private List<ASTStep> lookBehinds = Collections.emptyList();
@@ -57,11 +58,11 @@ final class ASTSuccessor implements JsonConvertible {
     }
 
     public void addInitialTransition(ASTTransition transition) {
-        MatcherBuilder matcherBuilder = MatcherBuilder.createFull();
+        CharSet matcherBuilder = CharSet.getFull();
         if (transition.getTarget() instanceof CharacterClass) {
             matcherBuilder = ((CharacterClass) transition.getTarget()).getMatcherBuilder();
         }
-        mergedStates.add(new ASTTransitionSetBuilder(new ASTTransitionSet(transition), matcherBuilder));
+        mergedStates.add(new TransitionBuilder<>(new ASTTransitionSet(transition), matcherBuilder));
     }
 
     public void setLookAheads(ArrayList<ASTStep> lookAheads) {
@@ -79,7 +80,7 @@ final class ASTSuccessor implements JsonConvertible {
         lookBehinds.addAll(addLookBehinds);
     }
 
-    public ArrayList<ASTTransitionSetBuilder> getMergedStates(ASTTransitionCanonicalizer canonicalizer) {
+    public ArrayList<TransitionBuilder<ASTTransitionSet>> getMergedStates(ASTTransitionCanonicalizer canonicalizer) {
         if (!lookAroundsMerged) {
             mergeLookArounds(canonicalizer);
             lookAroundsMerged = true;
@@ -89,29 +90,29 @@ final class ASTSuccessor implements JsonConvertible {
 
     private void mergeLookArounds(ASTTransitionCanonicalizer canonicalizer) {
         assert mergedStates.size() == 1;
-        ASTTransitionSetBuilder successor = mergedStates.get(0);
+        TransitionBuilder<ASTTransitionSet> successor = mergedStates.get(0);
         for (ASTStep lookBehind : lookBehinds) {
             addAllIntersecting(canonicalizer, successor, lookBehind, mergedStates);
         }
-        ASTTransitionSetBuilder[] mergedLookBehinds = canonicalizer.run(mergedStates, compilationBuffer);
+        TransitionBuilder<ASTTransitionSet>[] mergedLookBehinds = canonicalizer.run(mergedStates, compilationBuffer);
         mergedStates.clear();
         Collections.addAll(mergedStates, mergedLookBehinds);
-        ArrayList<ASTTransitionSetBuilder> newMergedStates = new ArrayList<>();
+        ArrayList<TransitionBuilder<ASTTransitionSet>> newMergedStates = new ArrayList<>();
         for (ASTStep lookAhead : lookAheads) {
-            for (ASTTransitionSetBuilder state : mergedStates) {
+            for (TransitionBuilder<ASTTransitionSet> state : mergedStates) {
                 addAllIntersecting(canonicalizer, state, lookAhead, newMergedStates);
             }
-            ArrayList<ASTTransitionSetBuilder> tmp = mergedStates;
+            ArrayList<TransitionBuilder<ASTTransitionSet>> tmp = mergedStates;
             mergedStates = newMergedStates;
             newMergedStates = tmp;
             newMergedStates.clear();
         }
     }
 
-    private void addAllIntersecting(ASTTransitionCanonicalizer canonicalizer, ASTTransitionSetBuilder state, ASTStep lookAround, ArrayList<ASTTransitionSetBuilder> result) {
+    private void addAllIntersecting(ASTTransitionCanonicalizer canonicalizer, TransitionBuilder<ASTTransitionSet> state, ASTStep lookAround, ArrayList<TransitionBuilder<ASTTransitionSet>> result) {
         for (ASTSuccessor successor : lookAround.getSuccessors()) {
-            for (ASTTransitionSetBuilder lookAroundState : successor.getMergedStates(canonicalizer)) {
-                MatcherBuilder intersection = state.getMatcherBuilder().createIntersectionMatcher(lookAroundState.getMatcherBuilder(), compilationBuffer);
+            for (TransitionBuilder<ASTTransitionSet> lookAroundState : successor.getMergedStates(canonicalizer)) {
+                CharSet intersection = state.getMatcherBuilder().createIntersection(lookAroundState.getMatcherBuilder(), compilationBuffer);
                 if (intersection.matchesSomething()) {
                     result.add(state.createMerged(lookAroundState, intersection));
                 }

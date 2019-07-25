@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,10 +45,9 @@ import java.util.Arrays;
  * }
  * </pre>
  */
-public class ByteArrayBuffer {
+public class ByteArrayBuffer extends AbstractArrayBuffer {
 
     private byte[] buf;
-    private int size = 0;
 
     public ByteArrayBuffer() {
         this(16);
@@ -58,12 +57,14 @@ public class ByteArrayBuffer {
         buf = new byte[initialSize];
     }
 
-    public void clear() {
-        size = 0;
+    @Override
+    int getBufferLength() {
+        return buf.length;
     }
 
-    public int size() {
-        return size;
+    @Override
+    void grow(int newSize) {
+        buf = Arrays.copyOf(buf, newSize);
     }
 
     public byte get(int i) {
@@ -71,18 +72,14 @@ public class ByteArrayBuffer {
     }
 
     public void add(byte b) {
-        if (size == buf.length) {
-            grow(size * 2);
+        if (length == buf.length) {
+            grow(length * 2);
         }
-        buf[size] = b;
-        size++;
-    }
-
-    private void grow(int newSize) {
-        buf = Arrays.copyOf(buf, newSize);
+        buf[length] = b;
+        length++;
     }
 
     public byte[] toArray() {
-        return Arrays.copyOf(buf, size);
+        return Arrays.copyOf(buf, length);
     }
 }

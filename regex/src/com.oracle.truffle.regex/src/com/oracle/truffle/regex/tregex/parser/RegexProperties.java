@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,10 +40,11 @@ public class RegexProperties implements JsonConvertible {
     private boolean complexLookAheadAssertions = false;
     private boolean negativeLookAheadAssertions = false;
     private boolean lookBehindAssertions = false;
+    private boolean nonLiteralLookBehindAssertions = false;
     private boolean complexLookBehindAssertions = false;
     private boolean negativeLookBehindAssertions = false;
-    private boolean loops = false;
     private boolean largeCountedRepetitions = false;
+    private String innerLiteral = null;
 
     public boolean hasAlternations() {
         return alternations;
@@ -113,6 +114,14 @@ public class RegexProperties implements JsonConvertible {
         lookBehindAssertions = true;
     }
 
+    public boolean hasNonLiteralLookBehindAssertions() {
+        return nonLiteralLookBehindAssertions;
+    }
+
+    public void setNonLiteralLookBehindAssertions() {
+        nonLiteralLookBehindAssertions = true;
+    }
+
     public boolean hasComplexLookBehindAssertions() {
         return complexLookBehindAssertions;
     }
@@ -129,20 +138,24 @@ public class RegexProperties implements JsonConvertible {
         negativeLookBehindAssertions = true;
     }
 
-    public boolean hasLoops() {
-        return loops;
-    }
-
-    public void setLoops() {
-        loops = true;
-    }
-
     public boolean hasLargeCountedRepetitions() {
         return largeCountedRepetitions;
     }
 
     public void setLargeCountedRepetitions() {
         largeCountedRepetitions = true;
+    }
+
+    public void setInnerLiteral(String containedLiteral) {
+        this.innerLiteral = containedLiteral;
+    }
+
+    public boolean hasInnerLiteral() {
+        return innerLiteral != null;
+    }
+
+    public String getInnerLiteral() {
+        return innerLiteral;
     }
 
     @TruffleBoundary
@@ -156,9 +169,9 @@ public class RegexProperties implements JsonConvertible {
                         Json.prop("complexLookAheadAssertions", complexLookAheadAssertions),
                         Json.prop("negativeLookAheadAssertions", negativeLookAheadAssertions),
                         Json.prop("lookBehindAssertions", lookBehindAssertions),
+                        Json.prop("nonLiteralLookBehindAssertions", nonLiteralLookBehindAssertions),
                         Json.prop("complexLookBehindAssertions", complexLookBehindAssertions),
                         Json.prop("negativeLookBehindAssertions", negativeLookBehindAssertions),
-                        Json.prop("loops", loops),
                         Json.prop("largeCountedRepetitions", largeCountedRepetitions));
     }
 }

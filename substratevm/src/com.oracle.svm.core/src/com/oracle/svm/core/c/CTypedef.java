@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,14 +30,17 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Defines the name of the typedef to be used in signatures instead of pointers.
+ * Defines a name for C type to be used in an entry-point method signature.
+ *
+ * Can be placed either on a type declaration or at a type-use site. If placed on both, the type-use
+ * site takes precedence.
  */
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE})
+@Target({ElementType.TYPE_USE})
 public @interface CTypedef {
 
     /**
-     * Name of the typedef to be used for this pointer.
+     * Name to be used for this C type.
      */
     String name();
 

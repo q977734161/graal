@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,14 +26,20 @@ package com.oracle.svm.core.code;
 
 import org.graalvm.nativeimage.c.function.CodePointer;
 
-import com.oracle.svm.core.heap.ReferenceMapDecoder;
-import com.oracle.svm.core.heap.ReferenceMapEncoder;
+import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
+import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
+import com.oracle.svm.core.util.VMError;
 
 /**
  * Information about an instruction pointer (IP), created and returned by methods in
  * {@link CodeInfoTable}.
  */
 public class CodeInfoQueryResult {
+
+    /**
+     * Marker value for the frame size of entry points that is used by {@link #isEntryPoint()}.
+     */
+    public static final int ENTRY_POINT_FRAME_SIZE = 1;
 
     /**
      * Marker value returned by {@link #getExceptionOffset()} when no exception handler is
@@ -58,11 +66,9 @@ public class CodeInfoQueryResult {
      */
     protected static final FrameInfoQueryResult NO_FRAME_INFO = null;
 
-    protected AbstractCodeInfo data;
     protected CodePointer ip;
     protected long totalFrameSize;
     protected long exceptionOffset;
-    protected byte[] referenceMapEncoding;
     protected long referenceMapIndex;
     protected FrameInfoQueryResult frameInfo;
 
@@ -74,9 +80,17 @@ public class CodeInfoQueryResult {
     }
 
     /**
+     * Indicates if the method containing the IP is an entry point method.
+     */
+    public boolean isEntryPoint() {
+        return totalFrameSize == ENTRY_POINT_FRAME_SIZE;
+    }
+
+    /**
      * Returns the frame size of the method containing the IP.
      */
     public long getTotalFrameSize() {
+        VMError.guarantee(totalFrameSize != ENTRY_POINT_FRAME_SIZE, "Entry point method: no valid frame size");
         return totalFrameSize;
     }
 
@@ -89,16 +103,9 @@ public class CodeInfoQueryResult {
     }
 
     /**
-     * Returns the encoded reference map information, to be used together with
-     * {@link #getReferenceMapIndex()}. Encoding is handled by {@link ReferenceMapEncoder}, decoding
-     * is handled by {@link ReferenceMapDecoder}.
-     */
-    public byte[] getReferenceMapEncoding() {
-        return referenceMapEncoding;
-    }
-
-    /**
-     * Index into the {@link #getReferenceMapEncoding() encoded reference map} for the IP.
+     * Index into the {@link CodeInfoAccess#getReferenceMapEncoding(CodeInfo)} encoded reference
+     * map} for the code. Encoding is handled by {@link CodeReferenceMapEncoder}, decoding is
+     * handled by {@link CodeReferenceMapDecoder}.
      */
     public long getReferenceMapIndex() {
         return referenceMapIndex;

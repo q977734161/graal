@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,7 +32,6 @@ import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.constant.CEnumLookup;
 import org.graalvm.nativeimage.c.constant.CEnumValue;
 
@@ -53,8 +54,11 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  */
 public class CEnumCallWrapperMethod extends CustomSubstitutionMethod {
 
-    CEnumCallWrapperMethod(ResolvedJavaMethod method) {
+    private final NativeLibraries nativeLibraries;
+
+    CEnumCallWrapperMethod(NativeLibraries nativeLibraries, ResolvedJavaMethod method) {
         super(method);
+        this.nativeLibraries = nativeLibraries;
     }
 
     @Override
@@ -81,12 +85,12 @@ public class CEnumCallWrapperMethod extends CustomSubstitutionMethod {
         JavaKind pushKind = CInterfaceInvocationPlugin.pushKind(method);
         ValueNode returnValue;
         if (method.getAnnotation(CEnumLookup.class) != null) {
-            EnumInfo enumInfo = (EnumInfo) ImageSingletons.lookup(NativeLibraries.class).findElementInfo(returnType);
+            EnumInfo enumInfo = (EnumInfo) nativeLibraries.findElementInfo(returnType);
             JavaKind parameterKind = JavaKind.Int;
             returnValue = tool.createEnumLookupInvoke(kit, returnType, enumInfo, parameterKind, arg);
         } else if (method.getAnnotation(CEnumValue.class) != null) {
             ResolvedJavaType declaringType = method.getDeclaringClass();
-            EnumInfo enumInfo = (EnumInfo) ImageSingletons.lookup(NativeLibraries.class).findElementInfo(declaringType);
+            EnumInfo enumInfo = (EnumInfo) nativeLibraries.findElementInfo(declaringType);
             ValueNode invoke = tool.createEnumValueInvoke(kit, enumInfo, returnType.getJavaKind(), arg);
 
             ValueNode adapted = CInterfaceInvocationPlugin.adaptPrimitiveType(graph, invoke, invoke.stamp(NodeView.DEFAULT).getStackKind(), returnType.getJavaKind(), false);

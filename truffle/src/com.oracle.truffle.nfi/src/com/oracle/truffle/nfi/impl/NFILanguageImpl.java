@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.nfi.impl;
 
@@ -31,17 +47,50 @@ import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.nfi.types.NativeLibraryDescriptor;
-import com.oracle.truffle.nfi.types.Parser;
+import com.oracle.truffle.nfi.impl.FunctionExecuteNode.SlowPathExecuteNode;
+import com.oracle.truffle.nfi.spi.NFIBackend;
+import com.oracle.truffle.nfi.spi.NFIBackendFactory;
+import com.oracle.truffle.nfi.spi.NFIBackendTools;
+import com.oracle.truffle.nfi.spi.types.NativeLibraryDescriptor;
 
-@TruffleLanguage.Registration(id = "native", name = "nfi-native", version = "0.1", mimeType = NFILanguageImpl.MIME_TYPE, internal = true)
+@TruffleLanguage.Registration(id = "internal/nfi-native", name = "nfi-native", version = "0.1", characterMimeTypes = NFILanguageImpl.MIME_TYPE, internal = true, services = NFIBackendFactory.class)
 public class NFILanguageImpl extends TruffleLanguage<NFIContext> {
 
     public static final String MIME_TYPE = "trufflenfi/native";
 
+    @CompilationFinal private CallTarget slowPathCall;
+    @CompilationFinal private NFIBackendImpl backend;
+
+    CallTarget getSlowPathCall() {
+        if (slowPathCall == null) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            slowPathCall = Truffle.getRuntime().createCallTarget(new SlowPathExecuteNode(this));
+        }
+        return slowPathCall;
+    }
+
+    NFIBackendTools getTools() {
+        return backend.tools;
+    }
+
     @Override
     protected NFIContext createContext(Env env) {
-        return new NFIContext(env);
+        env.registerService(new NFIBackendFactory() {
+
+            @Override
+            public String getBackendId() {
+                return "native";
+            }
+
+            @Override
+            public NFIBackend createBackend(NFIBackendTools tools) {
+                if (backend == null) {
+                    backend = new NFIBackendImpl(tools);
+                }
+                return backend;
+            }
+        });
+        return new NFIContext(this, env);
     }
 
     @Override
@@ -79,7 +128,7 @@ public class NFILanguageImpl extends TruffleLanguage<NFIContext> {
             super(language);
             this.name = name;
             this.flags = flags;
-            this.ctxRef = language.getContextReference();
+            this.ctxRef = lookupContextReference(NFILanguageImpl.class);
         }
 
         @Override
@@ -91,7 +140,7 @@ public class NFILanguageImpl extends TruffleLanguage<NFIContext> {
         public Object execute(VirtualFrame frame) {
             if (!ctxRef.get().env.isNativeAccessAllowed()) {
                 CompilerDirectives.transferToInterpreter();
-                throw new NFIUnsatisfiedLinkError("Access to native code is not allowed by the host environment.");
+                throw new NFIUnsatisfiedLinkError("Access to native code is not allowed by the host environment.", this);
             }
             if (cached == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -107,7 +156,7 @@ public class NFILanguageImpl extends TruffleLanguage<NFIContext> {
 
         GetDefaultLibraryNode(NFILanguageImpl language) {
             super(language);
-            this.ctxRef = language.getContextReference();
+            this.ctxRef = lookupContextReference(NFILanguageImpl.class);
         }
 
         @Override
@@ -119,60 +168,74 @@ public class NFILanguageImpl extends TruffleLanguage<NFIContext> {
         public Object execute(VirtualFrame frame) {
             if (!ctxRef.get().env.isNativeAccessAllowed()) {
                 CompilerDirectives.transferToInterpreter();
-                throw new NFIUnsatisfiedLinkError("Access to native code is not allowed by the host environment.");
+                throw new NFIUnsatisfiedLinkError("Access to native code is not allowed by the host environment.", this);
             }
             return LibFFILibrary.createDefault();
         }
     }
 
-    @Override
-    protected CallTarget parse(ParsingRequest request) throws Exception {
-        CharSequence library = request.getSource().getCharacters();
-        RootNode root;
-        NativeLibraryDescriptor descriptor = Parser.parseLibraryDescriptor(library);
-        NFIContext ctx = getContextReference().get();
+    private final class NFIBackendImpl implements NFIBackend {
 
-        if (descriptor.isDefaultLibrary()) {
-            root = new GetDefaultLibraryNode(this);
-        } else {
-            int flags = 0;
-            boolean lazyOrNow = false;
-            if (descriptor.getFlags() != null) {
-                for (String flag : descriptor.getFlags()) {
-                    switch (flag) {
-                        case "RTLD_GLOBAL":
-                            flags |= ctx.RTLD_GLOBAL;
-                            break;
-                        case "RTLD_LOCAL":
-                            flags |= ctx.RTLD_LOCAL;
-                            break;
-                        case "RTLD_LAZY":
-                            flags |= ctx.RTLD_LAZY;
-                            lazyOrNow = true;
-                            break;
-                        case "RTLD_NOW":
-                            flags |= ctx.RTLD_NOW;
-                            lazyOrNow = true;
-                            break;
-                    }
-                }
-            }
-            if (!lazyOrNow) {
-                // default to 'RTLD_NOW' if neither 'RTLD_LAZY' nor 'RTLD_NOW' was specified
-                flags |= ctx.RTLD_NOW;
-            }
-            root = new LoadLibraryNode(this, descriptor.getFilename(), flags);
+        final NFIBackendTools tools;
+
+        NFIBackendImpl(NFIBackendTools tools) {
+            this.tools = tools;
         }
 
-        return Truffle.getRuntime().createCallTarget(root);
+        @Override
+        public CallTarget parse(NativeLibraryDescriptor descriptor) {
+            RootNode root;
+            NFIContext ctx = getContextReference().get();
+
+            if (descriptor.isDefaultLibrary()) {
+                root = new GetDefaultLibraryNode(NFILanguageImpl.this);
+            } else {
+                int flags = 0;
+                boolean lazyOrNow = false;
+                if (descriptor.getFlags() != null) {
+                    for (String flag : descriptor.getFlags()) {
+                        switch (flag) {
+                            case "RTLD_GLOBAL":
+                                flags |= ctx.RTLD_GLOBAL;
+                                break;
+                            case "RTLD_LOCAL":
+                                flags |= ctx.RTLD_LOCAL;
+                                break;
+                            case "RTLD_LAZY":
+                                flags |= ctx.RTLD_LAZY;
+                                lazyOrNow = true;
+                                break;
+                            case "RTLD_NOW":
+                                flags |= ctx.RTLD_NOW;
+                                lazyOrNow = true;
+                                break;
+                        }
+                    }
+                }
+                if (!lazyOrNow) {
+                    // default to 'RTLD_NOW' if neither 'RTLD_LAZY' nor 'RTLD_NOW' was specified
+                    flags |= ctx.RTLD_NOW;
+                }
+                root = new LoadLibraryNode(NFILanguageImpl.this, descriptor.getFilename(), flags);
+            }
+
+            return Truffle.getRuntime().createCallTarget(root);
+        }
     }
 
-    static ContextReference<NFIContext> getCurrentContextReference() {
-        return getCurrentLanguage(NFILanguageImpl.class).getContextReference();
+    @Override
+    protected CallTarget parse(ParsingRequest request) throws Exception {
+        return Truffle.getRuntime().createCallTarget(new RootNode(this) {
+
+            @Override
+            public Object execute(VirtualFrame frame) {
+                throw new UnsupportedOperationException("illegal access to internal language");
+            }
+        });
     }
 
     @Override
     protected boolean isObjectOfLanguage(Object object) {
-        return object instanceof LibFFIFunction || object instanceof LibFFILibrary || object instanceof NativePointer || object instanceof NativeString;
+        return object instanceof LibFFILibrary || object instanceof NativePointer || object instanceof NativeString;
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,6 +28,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+
 public interface LinkerInvocation {
 
     List<String> getInputFiles();
@@ -34,9 +38,9 @@ public interface LinkerInvocation {
 
     void addInputFile(int index, String filename);
 
-    Map<String, String> getSymbolAliases();
+    Map<ResolvedJavaMethod, String> getSymbolAliases();
 
-    void addSymbolAlias(String alias, String definition);
+    void addSymbolAlias(ResolvedJavaMethod definition, String alias);
 
     List<String> getLibPaths();
 

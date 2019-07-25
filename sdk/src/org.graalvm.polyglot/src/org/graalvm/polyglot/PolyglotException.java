@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.polyglot;
 
@@ -61,7 +77,7 @@ import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractStackFrameImpl;
  *
  * @see Context
  * @see Value
- * @since 1.0
+ * @since 19.0
  */
 @SuppressWarnings("serial")
 public final class PolyglotException extends RuntimeException {
@@ -80,7 +96,7 @@ public final class PolyglotException extends RuntimeException {
     /**
      * Prints host and guest language stack frames to the standard {@link System#err error output}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public void printStackTrace() {
@@ -90,7 +106,7 @@ public final class PolyglotException extends RuntimeException {
     /**
      * Prints host and guest language stack frames to specified print stream.
      *
-     * @since 1.0
+     * @since 19.0
      */
 
     @Override
@@ -101,7 +117,7 @@ public final class PolyglotException extends RuntimeException {
     /**
      * Prints host and guest language stack frames to specified print writer.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public void printStackTrace(PrintWriter s) {
@@ -112,11 +128,11 @@ public final class PolyglotException extends RuntimeException {
      * Unsupported, {@link PolyglotException} instances are not writable therefore filling the stack
      * trace has no effect for them.
      *
-     * @since 1.0
+     * @since 19.0
      */
+    @SuppressWarnings("sync-override")
     @Override
-    public synchronized Throwable fillInStackTrace() {
-        // nothing to do
+    public Throwable fillInStackTrace() {
         return this;
     }
 
@@ -125,7 +141,7 @@ public final class PolyglotException extends RuntimeException {
      * recommended to use {@link #getPolyglotStackTrace()} as the guest language stack elements do
      * not always fit the Java format for stack trace elements.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public StackTraceElement[] getStackTrace() {
@@ -137,7 +153,7 @@ public final class PolyglotException extends RuntimeException {
      * {@link #isInternalError() internal} then the original java class name is included in the
      * message. The message never returns <code>null</code>.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public String getMessage() {
@@ -148,17 +164,40 @@ public final class PolyglotException extends RuntimeException {
      * Gets a guest language source location of this error or <code>null</code> if no source
      * location is available for this exception.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public SourceSection getSourceLocation() {
         return impl.getSourceLocation();
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * @since 19.0
+     */
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof PolyglotException) {
+            return impl.equals(((PolyglotException) obj).impl);
+        }
+        return false;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @since 19.0
+     */
+    @Override
+    public int hashCode() {
+        return impl.hashCode();
+    }
+
+    /**
      * Unsupported, {@link PolyglotException} instances are not writable therefore setting the stack
      * trace has no effect for them.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public void setStackTrace(StackTraceElement[] stackTrace) {
@@ -180,7 +219,7 @@ public final class PolyglotException extends RuntimeException {
      * the first method invocation in the sequence.
      *
      * @see StackFrame
-     * @since 1.0
+     * @since 19.0
      */
     public Iterable<StackFrame> getPolyglotStackTrace() {
         return impl.getPolyglotStackTrace();
@@ -191,7 +230,7 @@ public final class PolyglotException extends RuntimeException {
      * case the first {@link #getPolyglotStackTrace() stack frame} returns a
      * {@link StackFrame#isHostFrame() host frame} as zeroth element.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isHostException() {
         return impl.isHostException();
@@ -202,7 +241,7 @@ public final class PolyglotException extends RuntimeException {
      * case the first {@link #getPolyglotStackTrace() stack frame} returns a
      * {@link StackFrame#isGuestFrame() guest frame} as zeroth element.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isGuestException() {
         return !impl.isHostException();
@@ -216,7 +255,7 @@ public final class PolyglotException extends RuntimeException {
      *
      * @throws UnsupportedOperationException if this exception is not a host exception. Call
      *             {@link #isHostException()} to ensure its originating from the host language.
-     * @since 1.0
+     * @since 19.0
      */
     public Throwable asHostException() {
         return impl.asHostException();
@@ -228,7 +267,7 @@ public final class PolyglotException extends RuntimeException {
      * hard to understand for guest language programmers and might contain implementation specific
      * details that allows guest language implementers to debug the problem.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isInternalError() {
         return impl.isInternalError();
@@ -240,7 +279,7 @@ public final class PolyglotException extends RuntimeException {
      * decides to cancel the current execution. The context that caused a cancel event becomes
      * unusable, i.e. closed.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isCancelled() {
         return impl.isCancelled();
@@ -251,7 +290,7 @@ public final class PolyglotException extends RuntimeException {
      * program to exit the application using a builtin command. The provided exit code can be
      * accessed using {@link #getExitStatus()}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isExit() {
         return impl.isExit();
@@ -261,7 +300,7 @@ public final class PolyglotException extends RuntimeException {
      * Returns <code>true</code> if this exception indicates a parser or syntax error. In such a
      * case #get
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isSyntaxError() {
         return impl.isSyntaxError();
@@ -280,17 +319,17 @@ public final class PolyglotException extends RuntimeException {
      * A shell might react to this exception and prompt for additional source code, if this method
      * returns <code>true</code>.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isIncompleteSource() {
         return impl.isIncompleteSource();
     }
 
     /**
-     * Returns an additional guest language object. The value is never <code>null</code> and returns
-     * a Value object where {@link Value#isNull()} returns as true if it is not available.
+     * Returns an additional guest language object. Returns <code>null</code> if no exception object
+     * is available.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public Value getGuestObject() {
         return impl.getGuestObject();
@@ -301,7 +340,7 @@ public final class PolyglotException extends RuntimeException {
      * exited}. The exit status is intended to be passed to {@link System#exit(int)}.
      *
      * @see #isExit()
-     * @since 1.0
+     * @since 19.0
      */
     public int getExitStatus() {
         return impl.getExitStatus();
@@ -311,7 +350,7 @@ public final class PolyglotException extends RuntimeException {
      * Represents a polyglot stack frame originating from a guest language or the host language
      * Java.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public final class StackFrame {
 
@@ -326,7 +365,7 @@ public final class PolyglotException extends RuntimeException {
          * provide a {@link #getSourceLocation() source location}. Instead the Java stack frame can
          * be accessed using {@link #toHostFrame()}.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public boolean isHostFrame() {
             return impl.isHostFrame();
@@ -335,7 +374,7 @@ public final class PolyglotException extends RuntimeException {
         /**
          * Returns true if the stack frame originates from the guest language.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public boolean isGuestFrame() {
             return !impl.isHostFrame();
@@ -346,7 +385,7 @@ public final class PolyglotException extends RuntimeException {
          * This is supported for host stack frames as well as guest language stack frames. A
          * conversion to the host frame format can be useful for interoperability.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public StackTraceElement toHostFrame() {
             return impl.toHostFrame();
@@ -356,7 +395,7 @@ public final class PolyglotException extends RuntimeException {
          * Returns the source location of the stack frame or <code>null</code> if no source location
          * is available. Host frames do never provide a source location.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public SourceSection getSourceLocation() {
             return impl.getSourceLocation();
@@ -367,7 +406,7 @@ public final class PolyglotException extends RuntimeException {
          * name is returned. In guest languages it returns a useful identifier for code. For
          * example, in JavaScript this can be the function name.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public String getRootName() {
             return impl.getRootName();
@@ -377,7 +416,7 @@ public final class PolyglotException extends RuntimeException {
          * Returns the language of this stack frame. In case of the host language a synthetic Java
          * language object is returned.
          *
-         * @since 1.0
+         * @since 19.0
          */
         public Language getLanguage() {
             return impl.getLanguage();
@@ -387,7 +426,7 @@ public final class PolyglotException extends RuntimeException {
          * Returns a string representation of this stack frame. The format is inspired by the Java
          * stack frame format.
          *
-         * @since 1.0
+         * @since 19.0
          */
         @Override
         public String toString() {

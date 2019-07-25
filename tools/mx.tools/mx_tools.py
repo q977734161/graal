@@ -37,11 +37,18 @@ import mx
 from mx_unittest import unittest
 from mx_jackpot import jackpot
 from mx_gate import Task
-from urlparse import urljoin
 import mx_gate
 import mx_unittest
 import mx_benchmark
 import mx_sdk
+
+import sys
+
+if sys.version_info[0] < 3:
+    from urlparse import urljoin
+else:
+    from urllib.parse import urljoin # pylint: disable=no-name-in-module
+
 
 _suite = mx.suite('tools')
 
@@ -94,7 +101,7 @@ def checkLinks(javadocDir):
                     minIndex = sectionIndex
                     if minIndex < 0:
                         minIndex = len(full)
-                    if questionIndex >= 0 and questionIndex < minIndex:
+                    if 0 <= questionIndex < minIndex:
                         minIndex = questionIndex
                     path = full[0:minIndex]
 
@@ -117,9 +124,10 @@ def checkLinks(javadocDir):
         else:
             content = open(referencedfile, 'r').read()
             for path, s in sections:
-                if not s == None:
-                    where = content.find('name="' + s + '"')
-                    if where == -1:
+                if not s is None:
+                    whereName = content.find('name="' + s + '"')
+                    whereId = content.find('id="' + s + '"')
+                    if whereName == -1 and whereId == -1:
                         mx.warn('There should be section ' + s + ' in ' + referencedfile + ". Referenced from " + path)
                         err = True
 
@@ -135,7 +143,7 @@ def _unittest_config_participant(config):
 
         # This is required for the call to setAccessible in
         # TruffleTCK.testValueWithSource to work.
-        vmArgs = vmArgs + ['--add-opens=com.oracle.truffle.truffle_api/com.oracle.truffle.api.vm=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
+        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.api.vm=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
     return (vmArgs, mainClass, mainClassArgs)
 
 mx_unittest.add_config_participant(_unittest_config_participant)
@@ -172,8 +180,25 @@ mx_sdk.register_graalvm_component(mx_sdk.GraalVmTool(
     include_by_default=True,
 ))
 
+mx_sdk.register_graalvm_component(mx_sdk.GraalVmJdkComponent(
+    suite=_suite,
+    name='VisualVM',
+    short_name='vvm',
+    dir_name='visualvm',
+    license_files=[],
+    third_party_license_files=[],
+    support_distributions=['tools:VISUALVM_GRAALVM_SUPPORT'],
+    provided_executables=['bin/<exe:jvisualvm>']
+))
+
+for mode in ['jvm', 'native']:
+    mx_sdk.add_graalvm_hostvm_config(mode + '-cpusampler-exclude-inlined-roots', launcher_args=['--' + mode, '--cpusampler', '--cpusampler.Mode=exclude_inlined_roots'])
+    mx_sdk.add_graalvm_hostvm_config(mode + '-cpusampler-roots', launcher_args=['--' + mode, '--cpusampler', '--cpusampler.Mode=roots'])
+    mx_sdk.add_graalvm_hostvm_config(mode + '-cpusampler-statements', launcher_args=['--' + mode, '--cpusampler', '--cpusampler.Mode=statements'])
+    mx_sdk.add_graalvm_hostvm_config(mode + '-cputracer-roots', launcher_args=['--' + mode, '--cputracer', '--cputracer.TraceRoots=true'])
+    mx_sdk.add_graalvm_hostvm_config(mode + '-cputracer-statements', launcher_args=['--' + mode, '--cputracer', '--cputracer.TraceStatements=true'])
+
 mx.update_commands(_suite, {
     'javadoc' : [javadoc, ''],
     'gate' : [mx_gate.gate, ''],
 })
-

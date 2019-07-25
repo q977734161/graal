@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,6 +31,7 @@ import static com.oracle.graal.pointsto.reports.ReportUtils.LAST_CHILD;
 import static com.oracle.graal.pointsto.reports.ReportUtils.fieldComparator;
 import static com.oracle.graal.pointsto.reports.ReportUtils.methodComparator;
 
+import java.io.File;
 import java.io.PrintWriter;
 import java.util.ArrayDeque;
 import java.util.Collection;
@@ -55,7 +58,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 public final class ObjectTreePrinter extends ObjectScanner {
 
     public static void print(BigBang bigbang, String path, String reportName) {
-        ReportUtils.report("object tree", path + "/reports", "object_tree_" + reportName, "txt",
+        ReportUtils.report("object tree", path + File.separatorChar + "reports", "object_tree_" + reportName, "txt",
                         writer -> ObjectTreePrinter.doPrint(writer, bigbang));
     }
 
@@ -284,7 +287,7 @@ public final class ObjectTreePrinter extends ObjectScanner {
     private final SimpleMatcher defaultSuppressRootMatcher;
 
     private ObjectTreePrinter(BigBang bigbang) {
-        super(bigbang);
+        super(bigbang, new ReusableSet());
 
         /* Use linked hash map for predictable iteration order. */
         this.constantToNode = new LinkedHashMap<>();

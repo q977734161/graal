@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,19 +29,15 @@ import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 import java.lang.reflect.Method;
 import java.util.function.Function;
 
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
-import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.CEntryPointLiteralCodePointer;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.infrastructure.UniverseMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.annotate.Substitute;
-import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.CompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
@@ -78,7 +76,7 @@ public class CEntryPointLiteralFeature implements Feature {
                     AnalysisMethod aStub = CEntryPointCallStubSupport.singleton().getStubForMethod(aMethod);
                     HostedMethod hStub = (HostedMethod) metaAccess.getUniverse().lookup(aStub);
                     assert hStub.wrapped.isEntryPoint();
-                    assert hStub.isCodeAddressOffsetValid();
+                    assert hStub.isCompiled();
                     /*
                      * Only during compilation and native image writing, we do the actual
                      * replacement.
@@ -108,16 +106,5 @@ public class CEntryPointLiteralFeature implements Feature {
 
         metaAccess = config.getMetaAccess();
         bb = null;
-    }
-}
-
-@TargetClass(CEntryPointLiteral.class)
-final class Target_org_graalvm_nativeimage_c_function_CEntryPointLiteral {
-
-    @Alias protected CFunctionPointer functionPointer;
-
-    @Substitute
-    public CFunctionPointer getFunctionPointer() {
-        return functionPointer;
     }
 }

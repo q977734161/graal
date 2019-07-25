@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,6 +47,15 @@ public interface Commands {
     String LONG_OPTION_FORCE = "force"; // NOI18N
 
     /**
+     * Interpret command line parameters as files.
+     */
+    String OPTION_FILES = "L"; // NOI18N
+    String LONG_OPTION_FILES = "local-file"; // NOI18N
+
+    @Deprecated String OPTION_FILES_OLD = "F"; // NOI18N
+    @Deprecated String LONG_OPTION_FILES_OLD = "file"; // NOI18N
+
+    /**
      * Replace different files.
      */
     String OPTION_REPLACE_DIFFERENT_FILES = "o"; // NOI18N
@@ -62,7 +71,7 @@ public interface Commands {
      * List files.
      */
     String OPTION_LIST_FILES = "l";
-    String LONG_OPTION_LIST_FILES = "filelist";
+    String LONG_OPTION_LIST_FILES = "list-files";
 
     /**
      * Display full paths in lists.
@@ -104,13 +113,13 @@ public interface Commands {
      * Validate only.
      */
     String OPTION_VALIDATE = "y";
-    String LONG_OPTION_VALIDATE = "validate-only";
+    String LONG_OPTION_VALIDATE = "only-validate";
 
     /**
      * Full validation, may require download of components.
      */
     String OPTION_VALIDATE_DOWNLOAD = "Y";
-    String LONG_OPTION_VALIDATE_DOWNLOAD = "full-validation";
+    String LONG_OPTION_VALIDATE_DOWNLOAD = "validate-before";
 
     /**
      * Print error stack traces.
@@ -134,17 +143,50 @@ public interface Commands {
      * Interpret parameters as remote component IDs, uses user-defined catalog URL.
      */
     String OPTION_FOREIGN_CATALOG = "C";
-    String LONG_OPTION_FOREIGN_CATALOG = "user-catalog";
+    String LONG_OPTION_FOREIGN_CATALOG = "custom-catalog";
 
     /**
      * Interpret parameters as URLs.
      */
     String OPTION_URLS = "u";
-    String LONG_OPTION_URLS = "urls";
+    String LONG_OPTION_URLS = "url";
 
     /**
      * When present on a command, will terminate option processing and all parameters will be passed
      * on as positionals.
      */
     String DO_NOT_PROCESS_OPTIONS = "*";
+
+    /**
+     * Fails if a component which already exists is to be installed.
+     */
+    String OPTION_FAIL_EXISTING = "i"; // NOI18N
+    String LONG_OPTION_FAIL_EXISTING = "fail-existing"; // NOI18N
+
+    /**
+     * Automatic YES to all questions.
+     */
+    String OPTION_AUTO_YES = "A";
+    String LONG_OPTION_AUTO_YES = "auto-yes";
+
+    /**
+     * Abort on all prompts except YES/NO.
+     */
+    String OPTION_NON_INTERACTIVE = "N";
+    String LONG_OPTION_NON_INTERACTIVE = "non-interactive";
+
+    /**
+     * Operate on all components, irrespective of version.
+     */
+    String OPTION_ALL = "a";
+    String LONG_OPTION_ALL = "all-versions";
+
+    /**
+     * Ignores missing components on upgrade.
+     */
+    String OPTION_IGNORE_MISSING_COMPONENTS = "x"; // NOI18N
+    String LONG_OPTION_IGNORE_MISSING_COMPONENTS = "ignore-missing"; // NOI18N
+
+    String OPTION_VERSION = "V";
+    String LONG_OPTION_VERSION = "use-version";
 }

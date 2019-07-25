@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,7 +31,10 @@ import static jdk.vm.ci.code.MemoryBarriers.JMM_PRE_VOLATILE_WRITE;
 import static jdk.vm.ci.meta.DeoptimizationAction.InvalidateReprofile;
 import static jdk.vm.ci.meta.DeoptimizationReason.BoundsCheckException;
 import static jdk.vm.ci.meta.DeoptimizationReason.NullCheckException;
+import static org.graalvm.compiler.core.common.SpeculativeExecutionAttacksMitigations.Options.UseIndexMasking;
 import static org.graalvm.compiler.nodes.NamedLocationIdentity.ARRAY_LENGTH_LOCATION;
+import static org.graalvm.compiler.nodes.calc.BinaryArithmeticNode.branchlessMax;
+import static org.graalvm.compiler.nodes.calc.BinaryArithmeticNode.branchlessMin;
 import static org.graalvm.compiler.nodes.java.ArrayLengthNode.readArrayLength;
 import static org.graalvm.compiler.nodes.util.GraphUtil.skipPiWhileNonNull;
 
@@ -41,7 +46,7 @@ import java.util.List;
 import org.graalvm.compiler.api.directives.GraalDirectives;
 import org.graalvm.compiler.api.replacements.Snippet;
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
+import org.graalvm.compiler.core.common.LIRKind;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.common.type.IntegerStamp;
 import org.graalvm.compiler.core.common.type.ObjectStamp;
@@ -84,6 +89,7 @@ import org.graalvm.compiler.nodes.extended.GuardedUnsafeLoadNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.extended.JavaReadNode;
 import org.graalvm.compiler.nodes.extended.JavaWriteNode;
+import org.graalvm.compiler.nodes.extended.LoadArrayComponentHubNode;
 import org.graalvm.compiler.nodes.extended.LoadHubNode;
 import org.graalvm.compiler.nodes.extended.MembarNode;
 import org.graalvm.compiler.nodes.extended.RawLoadNode;
@@ -109,11 +115,14 @@ import org.graalvm.compiler.nodes.java.NewInstanceNode;
 import org.graalvm.compiler.nodes.java.RawMonitorEnterNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
+import org.graalvm.compiler.nodes.java.UnsafeCompareAndExchangeNode;
 import org.graalvm.compiler.nodes.java.UnsafeCompareAndSwapNode;
+import org.graalvm.compiler.nodes.java.ValueCompareAndSwapNode;
 import org.graalvm.compiler.nodes.memory.HeapAccess.BarrierType;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.memory.WriteNode;
 import org.graalvm.compiler.nodes.memory.address.AddressNode;
+import org.graalvm.compiler.nodes.memory.address.IndexAddressNode;
 import org.graalvm.compiler.nodes.memory.address.OffsetAddressNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
@@ -129,9 +138,7 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.replacements.SnippetLowerableMemoryNode.SnippetLowering;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode;
-import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
 import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode;
-import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import org.graalvm.word.LocationIdentity;
 
 import jdk.vm.ci.code.CodeUtil;
@@ -139,12 +146,12 @@ import jdk.vm.ci.code.MemoryBarriers;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.SpeculationLog;
 
 /**
  * VM-independent lowerings for standard Java nodes. VM-specific methods are abstract and must be
@@ -156,6 +163,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
     protected final ForeignCallsProvider foreignCalls;
     protected final TargetDescription target;
     private final boolean useCompressedOops;
+    private final ResolvedJavaType objectArrayType;
 
     private BoxingSnippets.Templates boxingSnippets;
     private ConstantStringIndexOfSnippets.Templates indexOfSnippets;
@@ -165,6 +173,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         this.foreignCalls = foreignCalls;
         this.target = target;
         this.useCompressedOops = useCompressedOops;
+        this.objectArrayType = metaAccess.lookupJavaType(Object[].class);
     }
 
     public void initialize(OptionValues options, Iterable<DebugHandlersFactory> factories, SnippetCounter.Group.Factory factory, Providers providers, SnippetReflectionProvider snippetReflection) {
@@ -175,6 +184,10 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
 
     public final TargetDescription getTarget() {
         return target;
+    }
+
+    public MetaAccessProvider getMetaAccess() {
+        return metaAccess;
     }
 
     @Override
@@ -191,14 +204,20 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                 lowerLoadIndexedNode((LoadIndexedNode) n, tool);
             } else if (n instanceof StoreIndexedNode) {
                 lowerStoreIndexedNode((StoreIndexedNode) n, tool);
+            } else if (n instanceof IndexAddressNode) {
+                lowerIndexAddressNode((IndexAddressNode) n);
             } else if (n instanceof ArrayLengthNode) {
                 lowerArrayLengthNode((ArrayLengthNode) n, tool);
             } else if (n instanceof LoadHubNode) {
                 lowerLoadHubNode((LoadHubNode) n, tool);
+            } else if (n instanceof LoadArrayComponentHubNode) {
+                lowerLoadArrayComponentHubNode((LoadArrayComponentHubNode) n);
             } else if (n instanceof MonitorEnterNode) {
                 lowerMonitorEnterNode((MonitorEnterNode) n, tool, graph);
             } else if (n instanceof UnsafeCompareAndSwapNode) {
                 lowerCompareAndSwapNode((UnsafeCompareAndSwapNode) n);
+            } else if (n instanceof UnsafeCompareAndExchangeNode) {
+                lowerCompareAndExchangeNode((UnsafeCompareAndExchangeNode) n);
             } else if (n instanceof AtomicReadAndWriteNode) {
                 lowerAtomicReadAndWriteNode((AtomicReadAndWriteNode) n);
             } else if (n instanceof RawLoadNode) {
@@ -227,6 +246,10 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                 lowerBinaryMath((BinaryMathIntrinsicNode) n, tool);
             } else if (n instanceof StringIndexOfNode) {
                 lowerIndexOf((StringIndexOfNode) n);
+            } else if (n instanceof StringLatin1IndexOfNode) {
+                lowerLatin1IndexOf((StringLatin1IndexOfNode) n);
+            } else if (n instanceof StringUTF16IndexOfNode) {
+                lowerUTF16IndexOf((StringUTF16IndexOfNode) n);
             } else if (n instanceof UnpackEndianHalfNode) {
                 lowerSecondHalf((UnpackEndianHalfNode) n);
             } else {
@@ -257,6 +280,40 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         }
     }
 
+    private void lowerLatin1IndexOf(StringLatin1IndexOfNode n) {
+        if (n.getArgument(2).isConstant()) {
+            SnippetLowering lowering = new SnippetLowering() {
+                @Override
+                public void lower(SnippetLowerableMemoryNode node, LoweringTool tool) {
+                    if (tool.getLoweringStage() != LoweringTool.StandardLoweringStage.LOW_TIER) {
+                        return;
+                    }
+                    indexOfSnippets.lowerLatin1(node, tool);
+                }
+            };
+            SnippetLowerableMemoryNode snippetLower = new SnippetLowerableMemoryNode(lowering, NamedLocationIdentity.getArrayLocation(JavaKind.Byte), n.stamp(NodeView.DEFAULT), n.toArgumentArray());
+            n.graph().add(snippetLower);
+            n.graph().replaceFixedWithFixed(n, snippetLower);
+        }
+    }
+
+    private void lowerUTF16IndexOf(StringUTF16IndexOfNode n) {
+        if (n.getArgument(2).isConstant()) {
+            SnippetLowering lowering = new SnippetLowering() {
+                @Override
+                public void lower(SnippetLowerableMemoryNode node, LoweringTool tool) {
+                    if (tool.getLoweringStage() != LoweringTool.StandardLoweringStage.LOW_TIER) {
+                        return;
+                    }
+                    indexOfSnippets.lowerUTF16(node, tool);
+                }
+            };
+            SnippetLowerableMemoryNode snippetLower = new SnippetLowerableMemoryNode(lowering, NamedLocationIdentity.getArrayLocation(JavaKind.Byte), n.stamp(NodeView.DEFAULT), n.toArgumentArray());
+            n.graph().add(snippetLower);
+            n.graph().replaceFixedWithFixed(n, snippetLower);
+        }
+    }
+
     private void lowerBinaryMath(BinaryMathIntrinsicNode math, LoweringTool tool) {
         if (tool.getLoweringStage() == LoweringTool.StandardLoweringStage.HIGH_TIER) {
             return;
@@ -264,27 +321,20 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         ResolvedJavaMethod method = math.graph().method();
         if (method != null) {
             if (method.getAnnotation(Snippet.class) != null) {
-                /*
-                 * In the context of the snippet use the LIR lowering instead of the Node lowering.
-                 */
+                // In the context of SnippetStub, i.e., Graal-generated stubs, use the LIR
+                // lowering to emit the stub assembly code instead of the Node lowering.
                 return;
             }
             if (method.getName().equalsIgnoreCase(math.getOperation().name()) && tool.getMetaAccess().lookupJavaType(Math.class).equals(method.getDeclaringClass())) {
-                /*
-                 * A root compilation of the intrinsic method should emit the full assembly
-                 * implementation.
-                 */
+                // A root compilation of the intrinsic method should emit the full assembly
+                // implementation.
                 return;
             }
-
         }
-        ForeignCallDescriptor foreignCall = toForeignCall(math.getOperation());
-        if (foreignCall != null) {
-            StructuredGraph graph = math.graph();
-            ForeignCallNode call = graph.add(new ForeignCallNode(foreignCalls, toForeignCall(math.getOperation()), math.getX(), math.getY()));
-            graph.addAfterFixed(tool.lastFixedNode(), call);
-            math.replaceAtUsages(call);
-        }
+        StructuredGraph graph = math.graph();
+        ForeignCallNode call = graph.add(new ForeignCallNode(foreignCalls, math.getOperation().foreignCallDescriptor, math.getX(), math.getY()));
+        graph.addAfterFixed(tool.lastFixedNode(), call);
+        math.replaceAtUsages(call);
     }
 
     private void lowerUnaryMath(UnaryMathIntrinsicNode math, LoweringTool tool) {
@@ -293,36 +343,16 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         }
         ResolvedJavaMethod method = math.graph().method();
         if (method != null) {
-            if (method.getAnnotation(Snippet.class) != null) {
-                /*
-                 * In the context of the snippet use the LIR lowering instead of the Node lowering.
-                 */
-                return;
-            }
             if (method.getName().equalsIgnoreCase(math.getOperation().name()) && tool.getMetaAccess().lookupJavaType(Math.class).equals(method.getDeclaringClass())) {
-                /*
-                 * A root compilation of the intrinsic method should emit the full assembly
-                 * implementation.
-                 */
+                // A root compilation of the intrinsic method should emit the full assembly
+                // implementation.
                 return;
             }
-
         }
-        ForeignCallDescriptor foreignCall = toForeignCall(math.getOperation());
-        if (foreignCall != null) {
-            StructuredGraph graph = math.graph();
-            ForeignCallNode call = math.graph().add(new ForeignCallNode(foreignCalls, foreignCall, math.getValue()));
-            graph.addAfterFixed(tool.lastFixedNode(), call);
-            math.replaceAtUsages(call);
-        }
-    }
-
-    protected ForeignCallDescriptor toForeignCall(UnaryOperation operation) {
-        return operation.foreignCallDescriptor;
-    }
-
-    protected ForeignCallDescriptor toForeignCall(BinaryOperation operation) {
-        return operation.foreignCallDescriptor;
+        StructuredGraph graph = math.graph();
+        ForeignCallNode call = math.graph().add(new ForeignCallNode(foreignCalls, math.getOperation().foreignCallDescriptor, math.getValue()));
+        graph.addAfterFixed(tool.lastFixedNode(), call);
+        math.replaceAtUsages(call);
     }
 
     protected void lowerVerifyHeap(VerifyHeapNode n) {
@@ -390,17 +420,22 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         }
     }
 
+    public static final IntegerStamp POSITIVE_ARRAY_INDEX_STAMP = StampFactory.forInteger(32, 0, Integer.MAX_VALUE - 1);
+
     /**
      * Create a PiNode on the index proving that the index is positive. On some platforms this is
      * important to allow the index to be used as an int in the address mode.
      */
     public AddressNode createArrayIndexAddress(StructuredGraph graph, ValueNode array, JavaKind elementKind, ValueNode index, GuardingNode boundsCheck) {
-        IntegerStamp indexStamp = StampFactory.forInteger(32, 0, Integer.MAX_VALUE - 1);
-        ValueNode positiveIndex = graph.maybeAddOrUnique(PiNode.create(index, indexStamp, boundsCheck != null ? boundsCheck.asNode() : null));
+        ValueNode positiveIndex = graph.maybeAddOrUnique(PiNode.create(index, POSITIVE_ARRAY_INDEX_STAMP, boundsCheck != null ? boundsCheck.asNode() : null));
         return createArrayAddress(graph, array, elementKind, positiveIndex);
     }
 
     public AddressNode createArrayAddress(StructuredGraph graph, ValueNode array, JavaKind elementKind, ValueNode index) {
+        return createArrayAddress(graph, array, elementKind, elementKind, index);
+    }
+
+    public AddressNode createArrayAddress(StructuredGraph graph, ValueNode array, JavaKind arrayKind, JavaKind elementKind, ValueNode index) {
         ValueNode wordIndex;
         if (target.wordSize > 4) {
             wordIndex = graph.unique(new SignExtendNode(index, target.wordSize * 8));
@@ -409,13 +444,18 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
             wordIndex = index;
         }
 
-        int shift = CodeUtil.log2(arrayScalingFactor(elementKind));
+        int shift = CodeUtil.log2(metaAccess.getArrayIndexScale(elementKind));
         ValueNode scaledIndex = graph.unique(new LeftShiftNode(wordIndex, ConstantNode.forInt(shift, graph)));
 
-        int base = arrayBaseOffset(elementKind);
+        int base = metaAccess.getArrayBaseOffset(arrayKind);
         ValueNode offset = graph.unique(new AddNode(scaledIndex, ConstantNode.forIntegerKind(target.wordJavaKind, base, graph)));
 
         return graph.unique(new OffsetAddressNode(array, offset));
+    }
+
+    protected void lowerIndexAddressNode(IndexAddressNode indexAddress) {
+        AddressNode lowered = createArrayAddress(indexAddress.graph(), indexAddress.getArray(), indexAddress.getArrayKind(), indexAddress.getElementKind(), indexAddress.getIndex());
+        indexAddress.replaceAndDelete(lowered);
     }
 
     protected void lowerLoadIndexedNode(LoadIndexedNode loadIndexed, LoweringTool tool) {
@@ -426,7 +466,12 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         Stamp loadStamp = loadStamp(loadIndexed.stamp(NodeView.DEFAULT), elementKind);
 
         GuardingNode boundsCheck = getBoundsCheck(loadIndexed, array, tool);
-        AddressNode address = createArrayIndexAddress(graph, array, elementKind, loadIndexed.index(), boundsCheck);
+        ValueNode index = loadIndexed.index();
+        if (UseIndexMasking.getValue(graph.getOptions())) {
+            index = proxyIndex(loadIndexed, index, array, tool);
+        }
+        AddressNode address = createArrayIndexAddress(graph, array, elementKind, index, boundsCheck);
+
         ReadNode memoryRead = graph.add(new ReadNode(address, NamedLocationIdentity.getArrayLocation(elementKind), loadStamp, BarrierType.NONE));
         memoryRead.setGuard(boundsCheck);
         ValueNode readValue = implicitLoadConvert(graph, elementKind, memoryRead);
@@ -448,7 +493,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         JavaKind elementKind = storeIndexed.elementKind();
 
         LogicNode condition = null;
-        if (elementKind == JavaKind.Object && !StampTool.isPointerAlwaysNull(value)) {
+        if (storeIndexed.getStoreCheck() == null && elementKind == JavaKind.Object && !StampTool.isPointerAlwaysNull(value)) {
             /* Array store check. */
             TypeReference arrayType = StampTool.typeReferenceOrNull(array);
             if (arrayType != null && arrayType.isExact()) {
@@ -513,6 +558,12 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         loadHub.replaceAtUsagesAndDelete(hub);
     }
 
+    protected void lowerLoadArrayComponentHubNode(LoadArrayComponentHubNode loadHub) {
+        StructuredGraph graph = loadHub.graph();
+        ValueNode hub = createReadArrayComponentHub(graph, loadHub.getValue(), loadHub);
+        graph.replaceFixed(loadHub, hub);
+    }
+
     protected void lowerMonitorEnterNode(MonitorEnterNode monitorEnter, LoweringTool tool, StructuredGraph graph) {
         ValueNode object = createNullCheckedValue(monitorEnter.object(), monitorEnter, tool);
         ValueNode hub = graph.addOrUnique(LoadHubNode.create(object, tool.getStampProvider(), tool.getMetaAccess(), tool.getConstantReflection()));
@@ -530,9 +581,25 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         ValueNode newValue = implicitStoreConvert(graph, valueKind, cas.newValue());
 
         AddressNode address = graph.unique(new OffsetAddressNode(cas.object(), cas.offset()));
-        BarrierType barrierType = storeBarrierType(cas.object(), expectedValue);
+        BarrierType barrierType = guessStoreBarrierType(cas.object(), expectedValue);
         LogicCompareAndSwapNode atomicNode = graph.add(new LogicCompareAndSwapNode(address, cas.getLocationIdentity(), expectedValue, newValue, barrierType));
         atomicNode.setStateAfter(cas.stateAfter());
+        graph.replaceFixedWithFixed(cas, atomicNode);
+    }
+
+    protected void lowerCompareAndExchangeNode(UnsafeCompareAndExchangeNode cas) {
+        StructuredGraph graph = cas.graph();
+        JavaKind valueKind = cas.getValueKind();
+
+        ValueNode expectedValue = implicitStoreConvert(graph, valueKind, cas.expected());
+        ValueNode newValue = implicitStoreConvert(graph, valueKind, cas.newValue());
+
+        AddressNode address = graph.unique(new OffsetAddressNode(cas.object(), cas.offset()));
+        BarrierType barrierType = guessStoreBarrierType(cas.object(), expectedValue);
+        ValueCompareAndSwapNode atomicNode = graph.add(new ValueCompareAndSwapNode(address, expectedValue, newValue, cas.getLocationIdentity(), barrierType));
+        ValueNode coercedNode = implicitLoadConvert(graph, valueKind, atomicNode, true);
+        atomicNode.setStateAfter(cas.stateAfter());
+        cas.replaceAtUsages(coercedNode);
         graph.replaceFixedWithFixed(cas, atomicNode);
     }
 
@@ -543,8 +610,9 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         ValueNode newValue = implicitStoreConvert(graph, valueKind, n.newValue());
 
         AddressNode address = graph.unique(new OffsetAddressNode(n.object(), n.offset()));
-        BarrierType barrierType = storeBarrierType(n.object(), n.newValue());
-        LoweredAtomicReadAndWriteNode memoryRead = graph.add(new LoweredAtomicReadAndWriteNode(address, n.getLocationIdentity(), newValue, barrierType));
+        BarrierType barrierType = guessStoreBarrierType(n.object(), n.newValue());
+        LIRKind lirAccessKind = LIRKind.fromJavaKind(target.arch, valueKind);
+        LoweredAtomicReadAndWriteNode memoryRead = graph.add(new LoweredAtomicReadAndWriteNode(address, n.getLocationIdentity(), newValue, lirAccessKind, barrierType));
         memoryRead.setStateAfter(n.stateAfter());
 
         ValueNode readValue = implicitLoadConvert(graph, valueKind, memoryRead);
@@ -698,6 +766,8 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                     } else {
                         newObject = graph.add(createNewArrayFromVirtual(virtual, ConstantNode.forInt(entryCount, graph)));
                     }
+                    // The final STORE_STORE barrier will be emitted by finishAllocatedObjects
+                    newObject.clearEmitMemoryBarrier();
 
                     recursiveLowerings.add(newObject);
                     graph.addBeforeFixed(commit, newObject);
@@ -727,7 +797,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                                     barrierType = fieldInitializationBarrier(entryKind);
                                 }
                             } else {
-                                address = createOffsetAddress(graph, newObject, arrayBaseOffset(entryKind) + i * arrayScalingFactor(entryKind));
+                                address = createOffsetAddress(graph, newObject, metaAccess.getArrayBaseOffset(entryKind) + i * metaAccess.getArrayIndexScale(entryKind));
                                 barrierType = arrayInitializationBarrier(entryKind);
                             }
                             if (address != null) {
@@ -758,10 +828,10 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
                                 if (virtual instanceof VirtualInstanceNode) {
                                     VirtualInstanceNode virtualInstance = (VirtualInstanceNode) virtual;
                                     address = createFieldAddress(graph, newObject, virtualInstance.field(i));
-                                    barrierType = BarrierType.IMPRECISE;
+                                    barrierType = fieldStoreBarrierType(virtualInstance.field(i));
                                 } else {
                                     address = createArrayAddress(graph, newObject, virtual.entryKind(i), ConstantNode.forInt(i, graph));
-                                    barrierType = BarrierType.PRECISE;
+                                    barrierType = arrayStoreBarrierType(virtual.entryKind(i));
                                 }
                                 if (address != null) {
                                     WriteNode write = new WriteNode(address, LocationIdentity.init(), implicitStoreConvert(graph, JavaKind.Object, allocValue), barrierType);
@@ -875,41 +945,45 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
     }
 
     protected BarrierType fieldStoreBarrierType(ResolvedJavaField field) {
-        if (field.getJavaKind() == JavaKind.Object) {
-            return BarrierType.IMPRECISE;
+        if (getStorageKind(field) == JavaKind.Object) {
+            return BarrierType.FIELD;
         }
         return BarrierType.NONE;
     }
 
     protected BarrierType arrayStoreBarrierType(JavaKind elementKind) {
         if (elementKind == JavaKind.Object) {
-            return BarrierType.PRECISE;
+            return BarrierType.ARRAY;
         }
         return BarrierType.NONE;
     }
 
     public BarrierType fieldInitializationBarrier(JavaKind entryKind) {
-        return entryKind == JavaKind.Object ? BarrierType.IMPRECISE : BarrierType.NONE;
+        return entryKind == JavaKind.Object ? BarrierType.FIELD : BarrierType.NONE;
     }
 
     public BarrierType arrayInitializationBarrier(JavaKind entryKind) {
-        return entryKind == JavaKind.Object ? BarrierType.PRECISE : BarrierType.NONE;
+        return entryKind == JavaKind.Object ? BarrierType.ARRAY : BarrierType.NONE;
     }
 
-    private static BarrierType unsafeStoreBarrierType(RawStoreNode store) {
+    private BarrierType unsafeStoreBarrierType(RawStoreNode store) {
         if (!store.needsBarrier()) {
             return BarrierType.NONE;
         }
-        return storeBarrierType(store.object(), store.value());
+        return guessStoreBarrierType(store.object(), store.value());
     }
 
-    private static BarrierType storeBarrierType(ValueNode object, ValueNode value) {
+    private BarrierType guessStoreBarrierType(ValueNode object, ValueNode value) {
         if (value.getStackKind() == JavaKind.Object && object.getStackKind() == JavaKind.Object) {
             ResolvedJavaType type = StampTool.typeOrNull(object);
-            if (type != null && !type.isArray()) {
-                return BarrierType.IMPRECISE;
+            // Array types must use a precise barrier, so if the type is unknown or is a supertype
+            // of Object[] then treat it as an array.
+            if (type != null && type.isArray()) {
+                return BarrierType.ARRAY;
+            } else if (type == null || type.isAssignableFrom(objectArrayType)) {
+                return BarrierType.UNKNOWN;
             } else {
-                return BarrierType.PRECISE;
+                return BarrierType.FIELD;
             }
         }
         return BarrierType.NONE;
@@ -924,11 +998,6 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
     public abstract ValueNode staticFieldBase(StructuredGraph graph, ResolvedJavaField field);
 
     public abstract int arrayLengthOffset();
-
-    @Override
-    public int arrayScalingFactor(JavaKind elementKind) {
-        return target.arch.getPlatformKind(elementKind).getSizeInBytes();
-    }
 
     public Stamp loadStamp(Stamp stamp, JavaKind kind) {
         return loadStamp(stamp, kind, true);
@@ -1035,14 +1104,20 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
 
     protected abstract ValueNode createReadArrayComponentHub(StructuredGraph graph, ValueNode arrayHub, FixedNode anchor);
 
+    protected ValueNode proxyIndex(AccessIndexedNode n, ValueNode index, ValueNode array, LoweringTool tool) {
+        StructuredGraph graph = index.graph();
+        ValueNode arrayLength = readOrCreateArrayLength(n, array, tool, graph);
+        ValueNode lengthMinusOne = SubNode.create(arrayLength, ConstantNode.forInt(1), NodeView.DEFAULT);
+        return branchlessMax(branchlessMin(index, lengthMinusOne, NodeView.DEFAULT), ConstantNode.forInt(0), NodeView.DEFAULT);
+    }
+
     protected GuardingNode getBoundsCheck(AccessIndexedNode n, ValueNode array, LoweringTool tool) {
-        StructuredGraph graph = n.graph();
-        ValueNode arrayLength = readArrayLength(array, tool.getConstantReflection());
-        if (arrayLength == null) {
-            arrayLength = createReadArrayLength(array, n, tool);
-        } else {
-            arrayLength = arrayLength.isAlive() ? arrayLength : graph.addOrUniqueWithInputs(arrayLength);
+        if (n.getBoundsCheck() != null) {
+            return n.getBoundsCheck();
         }
+
+        StructuredGraph graph = n.graph();
+        ValueNode arrayLength = readOrCreateArrayLength(n, array, tool, graph);
 
         LogicNode boundsCheck = IntegerBelowNode.create(n.index(), arrayLength, NodeView.DEFAULT);
         if (boundsCheck.isTautology()) {
@@ -1051,11 +1126,21 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         return tool.createGuard(n, graph.addOrUniqueWithInputs(boundsCheck), BoundsCheckException, InvalidateReprofile);
     }
 
+    private ValueNode readOrCreateArrayLength(AccessIndexedNode n, ValueNode array, LoweringTool tool, StructuredGraph graph) {
+        ValueNode arrayLength = readArrayLength(array, tool.getConstantReflection());
+        if (arrayLength == null) {
+            arrayLength = createReadArrayLength(array, n, tool);
+        } else {
+            arrayLength = arrayLength.isAlive() ? arrayLength : graph.addOrUniqueWithInputs(arrayLength);
+        }
+        return arrayLength;
+    }
+
     protected GuardingNode createNullCheck(ValueNode object, FixedNode before, LoweringTool tool) {
         if (StampTool.isPointerNonNull(object)) {
             return null;
         }
-        return tool.createGuard(before, before.graph().unique(IsNullNode.create(object)), NullCheckException, InvalidateReprofile, JavaConstant.NULL_POINTER, true, null);
+        return tool.createGuard(before, before.graph().unique(IsNullNode.create(object)), NullCheckException, InvalidateReprofile, SpeculationLog.NO_SPECULATION, true, null);
     }
 
     protected ValueNode createNullCheckedValue(ValueNode object, FixedNode before, LoweringTool tool) {
@@ -1071,10 +1156,10 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider {
         StructuredGraph graph = address.graph();
         ValueNode offset = ((OffsetAddressNode) address).getOffset();
 
-        int base = arrayBaseOffset(elementKind);
+        int base = metaAccess.getArrayBaseOffset(elementKind);
         ValueNode scaledIndex = graph.unique(new SubNode(offset, ConstantNode.forIntegerStamp(offset.stamp(NodeView.DEFAULT), base, graph)));
 
-        int shift = CodeUtil.log2(arrayScalingFactor(elementKind));
+        int shift = CodeUtil.log2(metaAccess.getArrayIndexScale(elementKind));
         ValueNode ret = graph.unique(new RightShiftNode(scaledIndex, ConstantNode.forInt(shift, graph)));
         return IntegerConvertNode.convert(ret, StampFactory.forKind(JavaKind.Int), graph, NodeView.DEFAULT);
     }

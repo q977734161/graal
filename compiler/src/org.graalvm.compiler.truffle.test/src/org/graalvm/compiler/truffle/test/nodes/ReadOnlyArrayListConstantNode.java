@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,9 +29,8 @@ import java.util.List;
 import org.graalvm.compiler.test.AddExports;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.interop.impl.ReadOnlyArrayList;
 
-@AddExports("com.oracle.truffle.truffle_api/com.oracle.truffle.api.interop.impl")
+@AddExports("org.graalvm.truffle/com.oracle.truffle.api.interop.impl")
 public class ReadOnlyArrayListConstantNode extends AbstractTestNode {
 
     private final int value;
@@ -39,8 +40,9 @@ public class ReadOnlyArrayListConstantNode extends AbstractTestNode {
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int execute(VirtualFrame frame) {
-        List<Object> arr = ReadOnlyArrayList.asList(new Object[]{value, value, value}, 0, 3);
+        List<Object> arr = com.oracle.truffle.api.interop.impl.ReadOnlyArrayList.asList(new Object[]{value, value, value}, 0, 3);
         return (int) arr.subList(1, 3).get(0);
     }
 }

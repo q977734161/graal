@@ -25,19 +25,26 @@
 package org.graalvm.component.installer.persist.test;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
 public class Handler extends URLStreamHandler {
     private static Map<String, URL> bindings = Collections.synchronizedMap(new HashMap<>());
     private static Map<String, URLConnection> connections = Collections.synchronizedMap(new HashMap<>());
+    private static Map<String, Collection<URLConnection>> multiConnections = Collections.synchronizedMap(new HashMap<>());
     private static Set<String> visitedURLs = Collections.synchronizedSet(new HashSet<>());
+    private static Map<String, URLConnection> httpProxyConnections = Collections.synchronizedMap(new HashMap<>());
 
     public Handler() {
     }
@@ -50,9 +57,19 @@ public class Handler extends URLStreamHandler {
         connections.put(s, con);
     }
 
+    public static void bindMulti(String s, URLConnection con) {
+        multiConnections.computeIfAbsent(s, (k) -> new ArrayList<>()).add(con);
+    }
+
+    public static void bindProxy(String s, URLConnection con) {
+        httpProxyConnections.put(s, con);
+    }
+
     public static void clear() {
         bindings.clear();
         connections.clear();
+        httpProxyConnections.clear();
+        multiConnections.clear();
         visitedURLs.clear();
     }
 
@@ -65,8 +82,35 @@ public class Handler extends URLStreamHandler {
     }
 
     @Override
+    protected URLConnection openConnection(URL u, Proxy p) throws IOException {
+        if (p.type() == Proxy.Type.DIRECT) {
+            return openConnection(u);
+        } else if (p.type() != Proxy.Type.HTTP) {
+            return null;
+        }
+        URLConnection c = httpProxyConnections.get(u.toString());
+        if (c != null) {
+            return doOpenConnection(u, c);
+        } else {
+            throw new ConnectException(u.toExternalForm());
+        }
+    }
+
+    @Override
     protected URLConnection openConnection(URL u) throws IOException {
         URLConnection c = connections.get(u.toString());
+        if (c == null) {
+            Collection<URLConnection> col = multiConnections.getOrDefault(u.toString(), Collections.emptyList());
+            Iterator<URLConnection> it = col.iterator();
+            if (it.hasNext()) {
+                c = it.next();
+                it.remove();
+            }
+        }
+        return doOpenConnection(u, c);
+    }
+
+    private static URLConnection doOpenConnection(URL u, URLConnection c) throws IOException {
         visitedURLs.add(u.toString());
         if (c != null) {
             return c;

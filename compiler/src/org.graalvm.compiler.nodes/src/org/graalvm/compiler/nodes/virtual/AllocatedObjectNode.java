@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2009, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,6 +28,7 @@ import static org.graalvm.compiler.nodeinfo.InputType.Extension;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_0;
 
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.graph.NodeClass;
@@ -72,7 +75,7 @@ public final class AllocatedObjectNode extends FloatingNode implements Virtualiz
     }
 
     @Override
-    public ValueNode findLength(ArrayLengthProvider.FindLengthMode mode) {
-        return GraphUtil.arrayLength(virtualObject, mode);
+    public ValueNode findLength(FindLengthMode mode, ConstantReflectionProvider constantReflection) {
+        return GraphUtil.arrayLength(virtualObject, mode, constantReflection);
     }
 }

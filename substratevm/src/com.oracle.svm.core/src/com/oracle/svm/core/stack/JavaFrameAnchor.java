@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.core.stack;
 
+import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.word.Pointer;
@@ -29,8 +32,9 @@ import org.graalvm.word.PointerBase;
 
 /**
  * A stack-based structure that is present in the stack frame of a Java method that calls to C code.
- * It stores the last Java frame information, so that stack walking can start the stack walk from
- * there. The head of the linked list is maintained by {@link JavaFrameAnchors}
+ * It stores the last Java frame information (stack pointer and instruction pointer), so that stack
+ * walking can start the stack walk from there. The head of the linked list is maintained by
+ * {@link JavaFrameAnchors}
  */
 @RawStructure
 public interface JavaFrameAnchor extends PointerBase {
@@ -45,4 +49,10 @@ public interface JavaFrameAnchor extends PointerBase {
 
     @RawField
     void setLastJavaSP(Pointer value);
+
+    @RawField
+    CodePointer getLastJavaIP();
+
+    @RawField
+    void setLastJavaIP(CodePointer value);
 }

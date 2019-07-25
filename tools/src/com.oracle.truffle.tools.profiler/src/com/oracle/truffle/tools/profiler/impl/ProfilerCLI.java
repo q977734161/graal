@@ -28,6 +28,7 @@ import com.oracle.truffle.api.instrumentation.SourceSectionFilter;
 import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.tools.utils.json.JSONObject;
 import org.graalvm.options.OptionType;
 
 import java.io.File;
@@ -43,7 +44,7 @@ import java.util.regex.PatternSyntaxException;
 
 abstract class ProfilerCLI {
 
-    static final OptionType<Object[]> WILDCARD_FILTER_TYPE = new OptionType<>("Expression", new Object[0],
+    static final OptionType<Object[]> WILDCARD_FILTER_TYPE = new OptionType<>("Expression",
                     new Function<String, Object[]>() {
                         @Override
                         public Object[] apply(String filterWildcardExpression) {
@@ -76,16 +77,17 @@ abstract class ProfilerCLI {
                     });
 
     static SourceSectionFilter buildFilter(boolean roots, boolean statements, boolean calls, boolean internals,
-                    Object[] filterRootName, Object[] filterFile, String filterLanguage) {
+                    Object[] filterRootName, Object[] filterFile, String filterMimeType, String filterLanguage) {
         SourceSectionFilter.Builder builder = SourceSectionFilter.newBuilder();
-        if (!internals || filterFile != null || filterLanguage != null) {
+        if (!internals || filterFile != null || filterMimeType != null || filterLanguage != null) {
             builder.sourceIs(new SourceSectionFilter.SourcePredicate() {
                 @Override
                 public boolean test(Source source) {
                     boolean internal = (internals || !source.isInternal());
                     boolean file = testWildcardExpressions(source.getPath(), filterFile);
-                    boolean mimeType = filterLanguage.equals("") || source.getMimeType().equals(filterLanguage);
-                    return internal && file && mimeType;
+                    boolean mimeType = filterMimeType.equals("") || filterMimeType.equals(source.getMimeType());
+                    final boolean languageId = filterLanguage.equals("") || filterMimeType.equals(source.getLanguage());
+                    return internal && file && mimeType && languageId;
                 }
             });
         }
@@ -225,6 +227,28 @@ abstract class ProfilerCLI {
         }
         s.append('$');
         return s.toString();
+    }
+
+    static JSONObject sourceSectionToJSON(SourceSection sourceSection) {
+        JSONObject sourceSectionJson = new JSONObject();
+        if (sourceSection != null) {
+            Source source = sourceSection.getSource();
+            if (source != null) {
+                if (source.getLanguage() != null) {
+                    sourceSectionJson.put("language", source.getLanguage().toString());
+                }
+                String path = source.getPath();
+                if (path != null) {
+                    sourceSectionJson.put("path", path);
+                }
+            }
+            sourceSectionJson.put("source_name", sourceSection.getSource().getName());
+            sourceSectionJson.put("start_line", sourceSection.getStartLine());
+            sourceSectionJson.put("end_line", sourceSection.getEndLine());
+            sourceSectionJson.put("start_column", sourceSection.getStartColumn());
+            sourceSectionJson.put("end_column", sourceSection.getEndColumn());
+        }
+        return sourceSectionJson;
     }
 
     static class SourceLocation {

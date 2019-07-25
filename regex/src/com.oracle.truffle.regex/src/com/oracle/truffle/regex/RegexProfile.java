@@ -78,8 +78,8 @@ public final class RegexProfile {
     /**
      * Check if the profiling information gathered so far is sufficient for making a decision.
      * 
-     * @return <code>true</code> if the number of times the regular expression was called is
-     *         divisible by {@value #EVALUATION_TRIP_POINT}.
+     * @return {@code true} if the number of times the regular expression was called is divisible by
+     *         {@value #EVALUATION_TRIP_POINT}.
      */
     public boolean atEvaluationTripPoint() {
         return calls.getCount() > 0 && (calls.getCount() % EVALUATION_TRIP_POINT) == 0;
@@ -99,7 +99,7 @@ public final class RegexProfile {
      * Decides whether the capture groups of the regular expression should be matched in an eager
      * manner.
      * 
-     * @return <code>true</code> if:
+     * @return {@code true} if:
      *         <ul>
      *         <li>most searches led to a match</li>
      *         <li>the capture groups of most search results were queried</li>
@@ -117,4 +117,9 @@ public final class RegexProfile {
         return String.format("calls: %d, matches: %d (%.2f%%), cg accesses: %d (%.2f%%), avg matched portion of search space: %.2f%%",
                         calls.getCount(), matches.getCount(), matchRatio() * 100, captureGroupAccesses.getCount(), cgAccessRatio() * 100, avgMatchedPortionOfSearchSpace * 100);
     }
+
+    public interface TracksRegexProfile {
+        RegexProfile getRegexProfile();
+    }
+
 }

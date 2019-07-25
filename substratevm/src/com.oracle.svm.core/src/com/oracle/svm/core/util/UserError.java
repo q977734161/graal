@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -45,7 +47,7 @@ public class UserError {
         }
 
         protected UserException(Iterable<String> messages) {
-            super(String.join("\n", messages));
+            super(String.join(System.lineSeparator(), messages));
             this.messages = messages;
         }
 
@@ -61,6 +63,16 @@ public class UserError {
      */
     public static UserException abort(String message) {
         throw new UserException(message);
+    }
+
+    /**
+     * Stop compilation immediately and report the message to the user.
+     *
+     * @param message the error message to be reported to the user.
+     * @param ex the exception that caused the abort.
+     */
+    public static UserException abort(String message, Throwable ex) {
+        throw ((UserException) new UserException(message).initCause(ex));
     }
 
     /**

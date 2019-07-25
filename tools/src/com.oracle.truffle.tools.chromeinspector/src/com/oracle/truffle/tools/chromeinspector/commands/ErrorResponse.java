@@ -24,7 +24,7 @@
  */
 package com.oracle.truffle.tools.chromeinspector.commands;
 
-import org.json.JSONObject;
+import com.oracle.truffle.tools.utils.json.JSONObject;
 
 public final class ErrorResponse {
 
@@ -42,13 +42,17 @@ public final class ErrorResponse {
         this.message = message;
     }
 
-    public String toJSONString() {
+    public JSONObject toJSON() {
         JSONObject json = new JSONObject();
         json.put(Command.ID, id);
         JSONObject error = new JSONObject();
         error.put(CODE, code);
         error.put(MESSAGE, message);
         json.put(ERROR, error);
-        return json.toString();
+        return json;
+    }
+
+    public String toJSONString() {
+        return toJSON().toString();
     }
 }

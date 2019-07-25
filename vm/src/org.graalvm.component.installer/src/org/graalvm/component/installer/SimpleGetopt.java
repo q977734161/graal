@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,7 @@ public class SimpleGetopt {
     }
 
     // overridable by tests
-    RuntimeException err(String messageKey, Object... args) {
+    public RuntimeException err(String messageKey, Object... args) {
         throw ComponentInstaller.err(messageKey, args);
     }
 
@@ -124,10 +124,6 @@ public class SimpleGetopt {
                 String fullName = result.get(s);
                 if (fullName == null) {
                     result.put(s, o);
-                } else if (fullName.length() == 2) {
-                    continue;
-                } else if (o.length() == 2) {
-                    result.put(o, o);
                 } else {
                     result.put(s, NO_ABBREV);
                 }
@@ -222,13 +218,15 @@ public class SimpleGetopt {
         String param = optParam;
         String optSpec = null;
         String optName = o;
+        Map<String, String> cmdSpec = null;
+
         if (hasCommand()) {
             Map<String, String> cmdAbbrevs = commandAbbreviations.get(command);
             String fullO = cmdAbbrevs.get(optName);
             if (fullO != null) {
                 optName = fullO;
             }
-            Map<String, String> cmdSpec = commandOptions.get(command);
+            cmdSpec = commandOptions.get(command);
             String c = cmdSpec.get(optName);
             if (c != null && optName.length() > 1) {
                 optSpec = cmdSpec.get(c);
@@ -250,6 +248,20 @@ public class SimpleGetopt {
                 optSpec = c;
             }
         }
+        if (optSpec != null && optSpec.startsWith("=")) {
+            String s = optSpec.substring(1);
+            String nspec = null;
+            if (cmdSpec != null) {
+                nspec = cmdSpec.get(s);
+            }
+            if (nspec == null) {
+                nspec = globalOptions.get(s);
+            }
+            if (nspec != null) {
+                optSpec = nspec;
+                optName = s;
+            }
+        }
         if (optSpec == null) {
             if (unknownCommand) {
                 return param;
@@ -257,8 +269,7 @@ public class SimpleGetopt {
             if (command == null) {
                 throw err("ERROR_UnsupportedGlobalOption", o); // NOI18N
             }
-            Map<String, String> cmdSpec = commandOptions.get(command);
-            if (cmdSpec.isEmpty()) {
+            if (cmdSpec == null || cmdSpec.isEmpty()) {
                 throw err("ERROR_CommandWithNoOptions", command); // NOI18N
             }
             throw err("ERROR_UnsupportedOption", o, command); // NOI18N
@@ -297,7 +308,12 @@ public class SimpleGetopt {
     }
 
     public void addCommandOptions(String commandName, Map<String, String> optSpec) {
-        commandOptions.put(commandName, optSpec);
+        commandOptions.put(commandName, new HashMap<>(optSpec));
+    }
+
+    // test only
+    void addCommandOption(String commandName, String optName, String optVal) {
+        commandOptions.get(commandName).put(optName, optVal);
     }
 
     public Map<String, String> getOptValues() {

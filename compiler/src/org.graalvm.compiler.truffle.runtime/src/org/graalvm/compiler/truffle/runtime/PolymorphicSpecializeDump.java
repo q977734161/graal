@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,7 +27,6 @@ package org.graalvm.compiler.truffle.runtime;
 import com.oracle.truffle.api.dsl.Introspection;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
-import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.graphio.GraphOutput;
 import org.graalvm.graphio.GraphStructure;
 
@@ -35,20 +36,18 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.getOptions;
+import org.graalvm.compiler.truffle.common.TruffleDebugContext;
 
 class PolymorphicSpecializeDump {
 
     public static void dumpPolymorphicSpecialize(List<Node> toDump, List<OptimizedDirectCallNode> knownCallNodes) {
         assert toDump.size() > 0;
         assert knownCallNodes.size() > 0;
-        final DebugContext debugContext = DebugContext.create(getOptions(), Collections.emptyList());
-        try {
+        try (TruffleDebugContext debugContext = openDebugContext()) {
             Collections.reverse(toDump);
             PolymorphicSpecializeDump.PolymorphicSpecializeGraph graph = new PolymorphicSpecializeDump.PolymorphicSpecializeGraph(knownCallNodes, toDump);
             final GraphOutput<PolymorphicSpecializeGraph, ?> output = debugContext.buildOutput(
-                            GraphOutput.newBuilder(new PolymorphicSpecializeDump.PolymorphicSpecializeGraphStructure()).protocolVersion(6, 0));
+                            GraphOutput.newBuilder(new PolymorphicSpecializeDump.PolymorphicSpecializeGraphStructure()).protocolVersion(6, 1));
             output.beginGroup(graph, "Polymorphic Specialize [" + knownCallNodes.get(0).getCurrentCallTarget() + "]", "Polymorphic Specialize", null, 0, null);
             output.print(graph, null, 0, toDump.get(toDump.size() - 1).toString());
             output.endGroup();
@@ -56,6 +55,10 @@ class PolymorphicSpecializeDump {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private static TruffleDebugContext openDebugContext() {
+        return GraalTruffleRuntime.getRuntime().getTruffleCompiler().openDebugContext(TruffleRuntimeOptions.asMap(TruffleRuntimeOptions.getOptions()), null);
     }
 
     static class PolymorphicSpecializeGraph {
@@ -118,6 +121,9 @@ class PolymorphicSpecializeDump {
                         dumpNode.edge = new DumpEdge(last);
                     }
                 } else {
+                    // Fortify: Suppress Null Dereference false positive
+                    assert last != null;
+
                     DumpNode n = makeNode(nodeChain.get(i));
                     last.edge = new DumpEdge(n);
                     last = n;

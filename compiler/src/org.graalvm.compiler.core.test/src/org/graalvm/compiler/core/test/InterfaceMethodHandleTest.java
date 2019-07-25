@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -96,8 +98,8 @@ public final class InterfaceMethodHandleTest extends GraalCompilerTest {
     }
 
     @Test
-    public void testInvokeInterface02() throws InstantiationException, IllegalAccessException, ClassNotFoundException {
-        test("invokeInterfaceHandle", loader.findClass(NAME).newInstance());
+    public void testInvokeInterface02() throws Exception {
+        test("invokeInterfaceHandle", loader.findClass(NAME).getDeclaredConstructor().newInstance());
     }
 
     public static Object invokeInterfaceHandle2(I o, int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) throws Throwable {

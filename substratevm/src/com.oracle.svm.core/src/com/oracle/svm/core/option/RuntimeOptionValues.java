@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,6 +26,7 @@ package com.oracle.svm.core.option;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,8 +40,9 @@ import org.graalvm.compiler.options.NestedBooleanOptionKey;
 import org.graalvm.compiler.options.OptionDescriptor;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.RuntimeOptions.OptionClass;
 import org.graalvm.nativeimage.impl.RuntimeOptionsSupport;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionType;
@@ -74,6 +78,7 @@ public class RuntimeOptionValues extends ModifiableOptionValues {
 }
 
 class RuntimeOptionsSupportImpl implements RuntimeOptionsSupport {
+
     @Override
     public void set(String optionName, Object value) {
         if (setXOption(optionName)) {
@@ -108,15 +113,29 @@ class RuntimeOptionsSupportImpl implements RuntimeOptionsSupport {
     }
 
     @Override
-    public OptionDescriptors getOptions() {
+    public OptionDescriptors getOptions(EnumSet<OptionClass> classes) {
         Collection<OptionDescriptor> descriptors = RuntimeOptionParser.singleton().getDescriptors();
         List<org.graalvm.options.OptionDescriptor> graalvmDescriptors = new ArrayList<>(descriptors.size());
         for (OptionDescriptor descriptor : descriptors) {
-            org.graalvm.options.OptionDescriptor.Builder builder = org.graalvm.options.OptionDescriptor.newBuilder(asGraalVMOptionKey(descriptor), descriptor.getName());
-            builder.help(descriptor.getHelp());
-            graalvmDescriptors.add(builder.build());
+            if (classes.contains(getOptionClass(descriptor))) {
+                org.graalvm.options.OptionDescriptor.Builder builder = org.graalvm.options.OptionDescriptor.newBuilder(asGraalVMOptionKey(descriptor), descriptor.getName());
+                String helpMsg = descriptor.getHelp();
+                int helpLen = helpMsg.length();
+                if (helpLen > 0 && helpMsg.charAt(helpLen - 1) != '.') {
+                    helpMsg += '.';
+                }
+                builder.help(helpMsg);
+                graalvmDescriptors.add(builder.build());
+            }
         }
         return OptionDescriptors.create(graalvmDescriptors);
+    }
+
+    private static OptionClass getOptionClass(OptionDescriptor descriptor) {
+        if (descriptor.getOptionKey() instanceof RuntimeOptionKey) {
+            return OptionClass.VM;
+        }
+        return OptionClass.Compiler;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -124,7 +143,7 @@ class RuntimeOptionsSupportImpl implements RuntimeOptionsSupport {
         Class<T> clazz = (Class<T>) descriptor.getOptionValueType();
         OptionType<T> type;
         if (clazz.isEnum()) {
-            type = (OptionType<T>) ENUM_TYPE_CACHE.computeIfAbsent(clazz, c -> new OptionType<>(c.getSimpleName(), null, s -> (T) Enum.valueOf((Class<? extends Enum>) c, s)));
+            type = (OptionType<T>) ENUM_TYPE_CACHE.computeIfAbsent(clazz, c -> new OptionType<>(c.getSimpleName(), s -> (T) Enum.valueOf((Class<? extends Enum>) c, s)));
         } else if (clazz == Long.class) {
             type = (OptionType<T>) LONG_OPTION_TYPE;
         } else {
@@ -142,7 +161,7 @@ class RuntimeOptionsSupportImpl implements RuntimeOptionsSupport {
     }
 
     private static final Map<Class<?>, OptionType<?>> ENUM_TYPE_CACHE = new HashMap<>();
-    private static final OptionType<Long> LONG_OPTION_TYPE = new OptionType<>("long", 0L, RuntimeOptionsSupportImpl::parseLong);
+    private static final OptionType<Long> LONG_OPTION_TYPE = new OptionType<>("long", RuntimeOptionsSupportImpl::parseLong);
 
     private static long parseLong(String v) {
         String valueString = v.toLowerCase();

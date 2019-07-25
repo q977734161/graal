@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -70,6 +72,9 @@ public abstract class Generation {
      *         or a new Object if promotion was done by copying.
      */
     protected abstract Object promoteObject(Object original);
+
+    /** Returns true if the space is a valid Space in this generation, else false. */
+    protected abstract boolean isValidSpace(Space space);
 
     protected abstract boolean verify(HeapVerifier.Occasion occasion);
 }

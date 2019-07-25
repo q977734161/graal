@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -38,9 +40,11 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.SubstrateOptionsParser.BooleanOptionFormat;
 import com.oracle.svm.core.option.SubstrateOptionsParser.OptionParseResult;
+import com.oracle.svm.core.properties.RuntimePropertyParser;
 
 /**
  * Option parser to be used by an application that runs on Substrate VM. The list of options that
@@ -54,12 +58,28 @@ public final class RuntimeOptionParser {
     /**
      * The suggested prefix for all VM options available in an application based on Substrate VM.
      */
-    public static final String DEFAULT_OPTION_PREFIX = "-XX:";
+    private static final String DEFAULT_OPTION_PREFIX = "-XX:";
 
     /**
      * The prefix for Graal style options available in an application based on Substrate VM.
      */
-    public static final String GRAAL_OPTION_PREFIX = "-Dgraal.";
+    private static final String GRAAL_OPTION_PREFIX = "-Dgraal.";
+
+    /**
+     * Parse and consume all standard options and system properties supported by Substrate VM. The
+     * returned array contains all arguments that were not consumed, i.e., were not recognized as
+     * options.
+     */
+    public static String[] parseAndConsumeAllOptions(String[] initialArgs) {
+        String[] args = initialArgs;
+        if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
+            args = RuntimeOptionParser.singleton().parse(args, DEFAULT_OPTION_PREFIX, BooleanOptionFormat.PLUS_MINUS, true);
+            args = RuntimeOptionParser.singleton().parse(args, GRAAL_OPTION_PREFIX, BooleanOptionFormat.NAME_VALUE, true);
+            args = XOptions.singleton().parse(args, true);
+            args = RuntimePropertyParser.parse(args);
+        }
+        return args;
+    }
 
     /**
      * All reachable options.
@@ -105,8 +125,7 @@ public final class RuntimeOptionParser {
      *
      * @param args arguments to be parsed
      * @param optionPrefix prefix for the options
-     * @return the unknown arguments
-     * @returns the elements in {@code args} that do not match any runtime options
+     * @return elements in {@code args} that do not match any runtime options
      * @throws IllegalArgumentException if an element in {@code args} matches a runtime option but
      *             has an invalid format. The parse error is described by
      *             {@link Throwable#getMessage()}.
@@ -123,8 +142,7 @@ public final class RuntimeOptionParser {
      * @param optionPrefix prefix for the options
      * @param systemExitOnError determines whether to call {@link System#exit(int)} if any element
      *            in {@code args} matches a runtime option but has an invalid format
-     * @return the unknown arguments
-     * @returns the elements in {@code args} that do not match any runtime options
+     * @return elements in {@code args} that do not match any runtime options
      * @throws IllegalArgumentException if an element in {@code args} is invalid and
      *             {@code systemExitOnError == false}. The parse error is described by
      *             {@link Throwable#getMessage()}.

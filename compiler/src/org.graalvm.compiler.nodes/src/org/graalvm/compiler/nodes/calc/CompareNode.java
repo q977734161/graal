@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -134,15 +136,38 @@ public abstract class CompareNode extends BinaryOpLogicNode implements Canonical
                     boolean supported = true;
                     if (convertX.getValue().stamp(view) instanceof IntegerStamp) {
                         IntegerStamp intStamp = (IntegerStamp) convertX.getValue().stamp(view);
-                        supported = smallestCompareWidth != null && intStamp.getBits() >= smallestCompareWidth;
+                        boolean isConversionCompatible = convertX.getClass() == convertY.getClass();
+                        supported = smallestCompareWidth != null && intStamp.getBits() >= smallestCompareWidth && isConversionCompatible;
                     }
 
                     if (supported) {
-                        boolean multiUsage = (convertX.asNode().hasMoreThanOneUsage() || convertY.asNode().hasMoreThanOneUsage());
-                        if ((forX instanceof ZeroExtendNode || forX instanceof SignExtendNode) && multiUsage) {
-                            // Do not perform for zero or sign extend if there are multiple usages
-                            // of the value.
-                            return null;
+
+                        ValueNode xValue = convertX.getValue();
+                        ValueNode yValue = convertY.getValue();
+
+                        if (forX instanceof ZeroExtendNode || forX instanceof SignExtendNode) {
+
+                            int introducedUsages = 0;
+                            int eliminatedNodes = 0;
+
+                            if (convertX.asNode().hasExactlyOneUsage()) {
+                                eliminatedNodes++;
+                            } else if (xValue.hasExactlyOneUsage()) {
+                                introducedUsages++;
+                            }
+
+                            if (convertY.asNode().hasExactlyOneUsage()) {
+                                eliminatedNodes++;
+                            } else if (yValue.hasExactlyOneUsage()) {
+                                introducedUsages++;
+                            }
+
+                            if (introducedUsages > eliminatedNodes) {
+                                // Only perform the optimization if there is
+                                // a good trade-off between introduced new usages and
+                                // eliminated nodes.
+                                return null;
+                            }
                         }
                         return duplicateModified(convertX.getValue(), convertY.getValue(), unorderedIsTrue, view);
                     }
@@ -173,7 +198,7 @@ public abstract class CompareNode extends BinaryOpLogicNode implements Canonical
                 boolean supported = true;
                 if (convert.getValue().stamp(view) instanceof IntegerStamp) {
                     IntegerStamp intStamp = (IntegerStamp) convert.getValue().stamp(view);
-                    supported = smallestCompareWidth != null && intStamp.getBits() > smallestCompareWidth;
+                    supported = smallestCompareWidth != null && intStamp.getBits() >= smallestCompareWidth;
                 }
 
                 if (supported) {

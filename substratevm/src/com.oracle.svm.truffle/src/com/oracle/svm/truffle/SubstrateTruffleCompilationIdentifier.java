@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,13 @@
  */
 package com.oracle.svm.truffle;
 
+import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilationIdentifier;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 
 import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
 
-public class SubstrateTruffleCompilationIdentifier extends SubstrateCompilationIdentifier {
+public class SubstrateTruffleCompilationIdentifier extends SubstrateCompilationIdentifier implements TruffleCompilationIdentifier {
 
     private final OptimizedCallTarget optimizedCallTarget;
 
@@ -37,5 +41,14 @@ public class SubstrateTruffleCompilationIdentifier extends SubstrateCompilationI
     @Override
     protected StringBuilder buildName(StringBuilder sb) {
         return sb.append(optimizedCallTarget.toString());
+    }
+
+    @Override
+    public CompilableTruffleAST getCompilable() {
+        return optimizedCallTarget;
+    }
+
+    @Override
+    public void close() {
     }
 }

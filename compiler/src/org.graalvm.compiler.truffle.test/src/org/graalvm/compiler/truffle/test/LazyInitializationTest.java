@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,6 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import static org.graalvm.compiler.serviceprovider.GraalServices.Java8OrEarlier;
 import static org.graalvm.compiler.test.SubprocessUtil.getVMCommandLine;
 import static org.graalvm.compiler.test.SubprocessUtil.withoutDebuggerArguments;
 
@@ -30,11 +31,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.graalvm.compiler.core.CompilerThreadFactory;
+import org.graalvm.compiler.core.GraalCompilerOptions;
 import org.graalvm.compiler.core.common.util.Util;
 import org.graalvm.compiler.debug.Assertions;
 import org.graalvm.compiler.nodes.Cancellable;
@@ -43,9 +46,13 @@ import org.graalvm.compiler.options.OptionDescriptors;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.options.OptionsParser;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.compiler.test.SubprocessUtil;
 import org.graalvm.compiler.test.SubprocessUtil.Subprocess;
+import org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions;
+import org.graalvm.compiler.truffle.runtime.TruffleRuntimeOptions;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Test;
 
 import jdk.vm.ci.runtime.JVMCICompilerFactory;
@@ -79,11 +86,18 @@ public class LazyInitializationTest {
 
     @Test
     public void testSLTck() throws IOException, InterruptedException {
-        List<String> vmArgs = withoutDebuggerArguments(getVMCommandLine());
-        vmArgs.add(Java8OrEarlier ? "-XX:+TraceClassLoading" : "-Xlog:class+init=info");
+        Assume.assumeFalse(TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleCompileImmediately));
+        List<String> vmCommandLine = getVMCommandLine();
+        Assume.assumeFalse("Explicitly enables JVMCI compiler", vmCommandLine.contains("-XX:+UseJVMCINativeLibrary") || vmCommandLine.contains("-XX:+UseJVMCICompiler"));
+        List<String> vmArgs = withoutDebuggerArguments(vmCommandLine);
+        vmArgs.add(JavaVersionUtil.JAVA_SPEC <= 8 ? "-XX:+TraceClassLoading" : "-Xlog:class+init=info");
         vmArgs.add("-dsa");
         vmArgs.add("-da");
         vmArgs.add("-XX:-UseJVMCICompiler");
+
+        // Remove -Dgraal.CompilationFailureAction as it drags in CompilationWrapper
+        vmArgs = vmArgs.stream().filter(e -> !e.contains(GraalCompilerOptions.CompilationFailureAction.getName())).collect(Collectors.toList());
+
         Subprocess proc = SubprocessUtil.java(vmArgs, "com.oracle.mxtool.junit.MxJUnitWrapper", "com.oracle.truffle.sl.test.SLFactorialTest");
         int exitCode = proc.exitCode;
         if (exitCode != 0) {
@@ -122,7 +136,7 @@ public class LazyInitializationTest {
      * Extracts the class name from a line of log output.
      */
     private static String extractClass(String line) {
-        if (Java8OrEarlier) {
+        if (JavaVersionUtil.JAVA_SPEC <= 8) {
             String traceClassLoadingPrefix = "[Loaded ";
             int index = line.indexOf(traceClassLoadingPrefix);
             if (index != -1) {
@@ -168,7 +182,7 @@ public class LazyInitializationTest {
         for (Class<?> cls : loadedGraalClasses) {
             if (OptionDescriptors.class.isAssignableFrom(cls)) {
                 try {
-                    OptionDescriptors optionDescriptors = cls.asSubclass(OptionDescriptors.class).newInstance();
+                    OptionDescriptors optionDescriptors = cls.asSubclass(OptionDescriptors.class).getDeclaredConstructor().newInstance();
                     for (OptionDescriptor option : optionDescriptors) {
                         whitelist.add(option.getDeclaringClass());
                         whitelist.add(option.getOptionValueType());
@@ -212,12 +226,12 @@ public class LazyInitializationTest {
             return true;
         }
 
-        if (cls.equals(jvmciVersionCheck)) {
+        if (cls.equals(jvmciVersionCheck) || Objects.equals(cls.getEnclosingClass(), jvmciVersionCheck)) {
             // The Graal initialization needs to check the JVMCI version.
             return true;
         }
 
-        if (JVMCICompilerFactory.class.isAssignableFrom(cls) || cls.getName().equals("org.graalvm.compiler.hotspot.IsGraalPredicate")) {
+        if (JVMCICompilerFactory.class.isAssignableFrom(cls) || cls.getName().startsWith("org.graalvm.compiler.hotspot.IsGraalPredicate")) {
             // The compiler factories have to be loaded and instantiated by the JVMCI.
             return true;
         }

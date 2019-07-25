@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -141,7 +143,7 @@ public class BasicInductionVariable extends InductionVariable {
     }
 
     @Override
-    public ValueNode extremumNode(boolean assumePositiveTripCount, Stamp stamp) {
+    public ValueNode extremumNode(boolean assumeLoopEntered, Stamp stamp) {
         Stamp fromStamp = phi.stamp(NodeView.DEFAULT);
         StructuredGraph graph = graph();
         ValueNode stride = strideNode();
@@ -150,7 +152,7 @@ public class BasicInductionVariable extends InductionVariable {
             stride = IntegerConvertNode.convert(stride, stamp, graph(), NodeView.DEFAULT);
             initNode = IntegerConvertNode.convert(initNode, stamp, graph(), NodeView.DEFAULT);
         }
-        ValueNode maxTripCount = loop.counted().maxTripCountNode(assumePositiveTripCount);
+        ValueNode maxTripCount = loop.counted().maxTripCountNode(assumeLoopEntered);
         if (!maxTripCount.stamp(NodeView.DEFAULT).isCompatible(stamp)) {
             maxTripCount = IntegerConvertNode.convert(maxTripCount, stamp, graph(), NodeView.DEFAULT);
         }

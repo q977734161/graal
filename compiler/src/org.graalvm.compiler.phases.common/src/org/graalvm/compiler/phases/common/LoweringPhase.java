@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -36,6 +38,7 @@ import java.util.Collection;
 import java.util.List;
 
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
+import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.GraalError;
@@ -66,6 +69,7 @@ import org.graalvm.compiler.nodes.extended.AnchoringNode;
 import org.graalvm.compiler.nodes.extended.GuardedNode;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.memory.MemoryCheckpoint;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
@@ -75,19 +79,19 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.BasePhase;
 import org.graalvm.compiler.phases.Phase;
 import org.graalvm.compiler.phases.schedule.SchedulePhase;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.graalvm.word.LocationIdentity;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.SpeculationLog;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 /**
  * Processes all {@link Lowerable} nodes to do their lowering.
  */
-public class LoweringPhase extends BasePhase<PhaseContext> {
+public class LoweringPhase extends BasePhase<CoreProviders> {
 
     @NodeInfo(cycles = CYCLES_IGNORED, size = SIZE_IGNORED)
     static final class DummyGuardHandle extends ValueNode implements GuardedNode {
@@ -123,12 +127,12 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
 
     final class LoweringToolImpl implements LoweringTool {
 
-        private final PhaseContext context;
+        private final CoreProviders context;
         private final NodeBitMap activeGuards;
         private AnchoringNode guardAnchor;
         private FixedWithNextNode lastFixedNode;
 
-        LoweringToolImpl(PhaseContext context, AnchoringNode guardAnchor, NodeBitMap activeGuards, FixedWithNextNode lastFixedNode) {
+        LoweringToolImpl(CoreProviders context, AnchoringNode guardAnchor, NodeBitMap activeGuards, FixedWithNextNode lastFixedNode) {
             this.context = context;
             this.guardAnchor = guardAnchor;
             this.activeGuards = activeGuards;
@@ -138,6 +142,11 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
         @Override
         public LoweringStage getLoweringStage() {
             return loweringStage;
+        }
+
+        @Override
+        public CoreProviders getProviders() {
+            return context;
         }
 
         @Override
@@ -165,6 +174,10 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
             return context.getReplacements();
         }
 
+        public ForeignCallsProvider getForeignCalls() {
+            return context.getForeignCalls();
+        }
+
         @Override
         public AnchoringNode getCurrentGuardAnchor() {
             return guardAnchor;
@@ -172,7 +185,7 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
 
         @Override
         public GuardingNode createGuard(FixedNode before, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action) {
-            return createGuard(before, condition, deoptReason, action, JavaConstant.NULL_POINTER, false, null);
+            return createGuard(before, condition, deoptReason, action, SpeculationLog.NO_SPECULATION, false, null);
         }
 
         @Override
@@ -181,7 +194,7 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
         }
 
         @Override
-        public GuardingNode createGuard(FixedNode before, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, JavaConstant speculation, boolean negated,
+        public GuardingNode createGuard(FixedNode before, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, Speculation speculation, boolean negated,
                         NodeSourcePosition noDeoptSucccessorPosition) {
             StructuredGraph graph = before.graph();
             if (OptEliminateGuards.getValue(graph.getOptions())) {
@@ -238,7 +251,7 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
      * @param graph a graph that was just {@linkplain #lower lowered}
      * @throws AssertionError if the check fails
      */
-    private boolean checkPostLowering(StructuredGraph graph, PhaseContext context) {
+    private boolean checkPostLowering(StructuredGraph graph, CoreProviders context) {
         Mark expectedMark = graph.getMark();
         lower(graph, context, LoweringMode.VERIFY_LOWERING);
         Mark mark = graph.getMark();
@@ -247,13 +260,13 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
     }
 
     @Override
-    protected void run(final StructuredGraph graph, PhaseContext context) {
+    protected void run(final StructuredGraph graph, CoreProviders context) {
         lower(graph, context, LoweringMode.LOWERING);
         assert checkPostLowering(graph, context);
     }
 
-    private void lower(StructuredGraph graph, PhaseContext context, LoweringMode mode) {
-        IncrementalCanonicalizerPhase<PhaseContext> incrementalCanonicalizer = new IncrementalCanonicalizerPhase<>(canonicalizer);
+    private void lower(StructuredGraph graph, CoreProviders context, LoweringMode mode) {
+        IncrementalCanonicalizerPhase<CoreProviders> incrementalCanonicalizer = new IncrementalCanonicalizerPhase<>(canonicalizer);
         incrementalCanonicalizer.appendPhase(new Round(context, mode, graph.getOptions()));
         incrementalCanonicalizer.apply(graph, context);
         assert graph.verify();
@@ -337,12 +350,12 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
 
     private final class Round extends Phase {
 
-        private final PhaseContext context;
+        private final CoreProviders context;
         private final LoweringMode mode;
         private ScheduleResult schedule;
         private final SchedulePhase schedulePhase;
 
-        private Round(PhaseContext context, LoweringMode mode, OptionValues options) {
+        private Round(CoreProviders context, LoweringMode mode, OptionValues options) {
             this.context = context;
             this.mode = mode;
 

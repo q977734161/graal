@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,10 +27,6 @@ package com.oracle.svm.core.graal.nodes;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
 
-import com.oracle.svm.core.meta.CompressedNullConstant;
-import com.oracle.svm.core.meta.CompressibleConstant;
-import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.JavaConstant;
 import org.graalvm.compiler.core.common.CompressEncoding;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.debug.GraalError;
@@ -37,6 +35,12 @@ import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.CompressionNode;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
+
+import com.oracle.svm.core.meta.CompressedNullConstant;
+import com.oracle.svm.core.meta.CompressibleConstant;
+
+import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.JavaConstant;
 
 @NodeInfo(nameTemplate = "{p#op/s}", cycles = CYCLES_2, size = SIZE_2)
 public final class SubstrateCompressionNode extends CompressionNode {
@@ -53,6 +57,14 @@ public final class SubstrateCompressionNode extends CompressionNode {
 
     public static CompressionNode uncompress(ValueNode input, CompressEncoding encoding) {
         return input.graph().unique(new SubstrateCompressionNode(CompressionOp.Uncompress, input, encoding));
+    }
+
+    @Override
+    public JavaConstant nullConstant() {
+        /*
+         * Return null constant prior to the compression op.
+         */
+        return op == CompressionOp.Uncompress ? CompressedNullConstant.COMPRESSED_NULL : JavaConstant.NULL_POINTER;
     }
 
     @Override
@@ -76,5 +88,10 @@ public final class SubstrateCompressionNode extends CompressionNode {
     @Override
     protected Stamp mkStamp(Stamp input) {
         return SubstrateNarrowOopStamp.mkStamp(op, input, encoding);
+    }
+
+    @Override
+    public boolean mayNullCheckSkipConversion() {
+        return false;
     }
 }

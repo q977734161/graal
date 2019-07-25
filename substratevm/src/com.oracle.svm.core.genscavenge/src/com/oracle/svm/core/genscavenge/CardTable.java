@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -103,8 +105,8 @@ public final class CardTable {
         return isDirtyEntryAtIndexUnchecked(table, index);
     }
 
-    private static boolean isDirtyEntryAtIndexUnchecked(Pointer table, UnsignedWord index) {
-        return isDirtyEntry(readEntryAtIndex(table, index));
+    static boolean isDirtyEntryAtIndexUnchecked(Pointer table, UnsignedWord index) {
+        return isDirtyEntry(readEntryAtIndexUnchecked(table, index));
     }
 
     static boolean containsReferenceToYoungSpace(Object obj) {
@@ -199,8 +201,12 @@ public final class CardTable {
     }
 
     /** Read the entry in a table. */
+    private static int readEntryAtIndexUnchecked(Pointer table, UnsignedWord index) {
+        return table.readByte(indexToTableOffset(index));
+    }
+
     private static int readEntryAtIndex(Pointer table, UnsignedWord index) {
-        final int result = table.readByte(indexToTableOffset(index));
+        int result = readEntryAtIndexUnchecked(table, index);
         assert ((result == DIRTY_ENTRY) || (result == CLEAN_ENTRY)) : "Table entry out of range.";
         return result;
     }
@@ -369,32 +375,20 @@ public final class CardTable {
 
     protected static class ReferenceToYoungObjectVisitor implements ObjectVisitor {
 
-        /* Final state. */
         private final ReferenceToYoungObjectReferenceVisitor visitor;
 
         protected ReferenceToYoungObjectVisitor(ReferenceToYoungObjectReferenceVisitor visitor) {
-            super();
             this.visitor = visitor;
         }
 
         @Override
         public boolean visitObject(Object obj) {
             final Log trace = HeapImpl.getHeapImpl().getHeapVerifierImpl().getTraceLog().string("[ReferenceToYoungObjectVisitor.visitObject:").string("  obj: ").object(obj).newline();
-            if (!visitor.prologue()) {
-                final Log witness = HeapImpl.getHeapImpl().getHeapVerifierImpl().getWitnessLog();
-                witness.string("[[ReferenceToYoungObjectVisitor.visitObject:").string("  obj: ").object(obj).string("  fails prologue").string("]").newline();
-                return false;
-            }
-            trace.string("  past prologue; calling walkObject").newline();
+            visitor.reset();
+            trace.string("  calling walkObject").newline();
             if (!InteriorObjRefWalker.walkObject(obj, visitor)) {
                 final Log witness = HeapImpl.getHeapImpl().getHeapVerifierImpl().getWitnessLog();
                 witness.string("[[ReferenceToYoungObjectVisitor.visitObject:").string("  obj: ").object(obj).string("  fails InteriorObjRefWalker.walkObject").string("]").newline();
-                return false;
-            }
-            trace.string("  past walkObject; calling epilogue").newline();
-            if (!visitor.epilogue()) {
-                final Log witness = HeapImpl.getHeapImpl().getHeapVerifierImpl().getWitnessLog();
-                witness.string("[[ReferenceToYoungObjectVisitor.visitObject:").string("  obj: ").object(obj).string("  fails prologue").string("]").newline();
                 return false;
             }
             trace.string("  visitor.getFound(): ").bool(visitor.found).string("  returns true").string("]").newline();
@@ -431,13 +425,10 @@ public final class CardTable {
         private boolean witnessForDebugging;
 
         ReferenceToYoungObjectReferenceVisitor() {
-            super();
         }
 
-        @Override
-        public boolean prologue() {
+        public void reset() {
             found = false;
-            return true;
         }
 
         @Override
@@ -459,11 +450,7 @@ public final class CardTable {
                 /* Carefully check out the object. */
                 final UnsignedWord header = ObjectHeader.readHeaderFromPointer(p);
                 /* It should *not* be a zapped value. */
-                if (header.equal(HeapPolicy.getProducedHeapChunkZapValue())) {
-                    final Log paranoidLog = Log.log().string("[CardTable.ReferenceToYoungObjectReferenceVisitor.visitObjectReference:");
-                    paranoidLog.string("  objRef: ").hex(objRef).string("  p: ").hex(p).string("  points to zapped header: ").hex(header).string("]").newline();
-                }
-                if (header.equal(HeapPolicy.getConsumedHeapChunkZapValue())) {
+                if (ObjectHeaderImpl.isProducedHeapChunkZapped(header) || ObjectHeaderImpl.isConsumedHeapChunkZapped(header)) {
                     final Log paranoidLog = Log.log().string("[CardTable.ReferenceToYoungObjectReferenceVisitor.visitObjectReference:");
                     paranoidLog.string("  objRef: ").hex(objRef).string("  p: ").hex(p).string("  points to zapped header: ").hex(header).string("]").newline();
                 }

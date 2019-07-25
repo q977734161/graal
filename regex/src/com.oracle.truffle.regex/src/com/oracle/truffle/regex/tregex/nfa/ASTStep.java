@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -64,7 +64,7 @@ public final class ASTStep implements JsonConvertible {
         // to avoid running out of memory in such situations, we have to bailout during the
         // collection of ASTSuccessors in ASTStep, before they are transformed into NFA transitions.
         if (successors.size() > TRegexOptions.TRegexMaxNumberOfASTSuccessorsInOneASTStep) {
-            throw new UnsupportedRegexException("TRegex Bailout: ASTSuccessor explosion");
+            throw new UnsupportedRegexException("ASTSuccessor explosion");
         }
     }
 

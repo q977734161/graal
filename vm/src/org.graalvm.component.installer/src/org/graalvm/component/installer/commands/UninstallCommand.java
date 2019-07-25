@@ -27,18 +27,20 @@ package org.graalvm.component.installer.commands;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.graalvm.component.installer.BundleConstants;
 import org.graalvm.component.installer.CommandInput;
 import org.graalvm.component.installer.Commands;
 import org.graalvm.component.installer.CommonConstants;
+import static org.graalvm.component.installer.CommonConstants.WARN_REBUILD_IMAGES;
 import org.graalvm.component.installer.model.ComponentRegistry;
 import org.graalvm.component.installer.Feedback;
 import org.graalvm.component.installer.InstallerCommand;
 import org.graalvm.component.installer.InstallerStopException;
+import org.graalvm.component.installer.SystemUtils;
 import org.graalvm.component.installer.model.ComponentInfo;
 
 public class UninstallCommand implements InstallerCommand {
@@ -75,6 +77,8 @@ public class UninstallCommand implements InstallerCommand {
 
     @Override
     public int execute() throws IOException {
+        input.getLocalRegistry().verifyAdministratorAccess();
+
         this.registry = input.getLocalRegistry();
 
         ignoreFailures = input.optValue(Commands.OPTION_FORCE) != null;
@@ -93,9 +97,15 @@ public class UninstallCommand implements InstallerCommand {
             if (toUninstall.containsKey(compId)) {
                 continue;
             }
-            ComponentInfo info = input.getLocalRegistry().loadSingleComponent(compId, true);
+            ComponentInfo info = input.getLocalRegistry().loadSingleComponent(compId.toLowerCase(), true);
             if (info == null) {
                 throw feedback.failure("UNINSTALL_UnknownComponentId", null, compId);
+            }
+            if (info.getId().equals(BundleConstants.GRAAL_COMPONENT_ID)) {
+                throw feedback.failure("UNINSTALL_CoreComponent", null, compId);
+            }
+            if (info.isNativeComponent()) {
+                throw feedback.failure("UNINSTALL_NativeComponent", null, compId);
             }
             toUninstall.put(compId, info);
         }
@@ -115,16 +125,17 @@ public class UninstallCommand implements InstallerCommand {
                 }
             }
         } finally {
-            if (rebuildPolyglot) {
-                Path p = Paths.get(CommonConstants.PATH_JRE_BIN);
-                feedback.output("INSTALL_RebuildPolyglotNeeded", File.separator, input.getGraalHomePath().resolve(p));
+            if (rebuildPolyglot && WARN_REBUILD_IMAGES) {
+                Path p = SystemUtils.fromCommonString(CommonConstants.PATH_JRE_BIN);
+                feedback.output("INSTALL_RebuildPolyglotNeeded", File.separator, input.getGraalHomePath().resolve(p).normalize());
             }
         }
         return 0;
     }
 
     void uninstallSingleComponent(ComponentInfo info) throws IOException {
-        Uninstaller inst = new Uninstaller(feedback, info, input.getLocalRegistry());
+        Uninstaller inst = new Uninstaller(feedback, input.getFileOperations(),
+                        info, input.getLocalRegistry());
         configureInstaller(inst);
 
         feedback.output("UNINSTALL_UninstallingComponent",

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,10 @@
  */
 package org.graalvm.compiler.hotspot.meta;
 
+import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntime.runtime;
+
 import java.lang.reflect.Type;
+import java.util.function.Predicate;
 
 import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.graph.Node;
@@ -38,7 +43,6 @@ import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.compiler.phases.tiers.CompilerConfiguration;
 import org.graalvm.compiler.replacements.nodes.MacroNode;
 
-import jdk.vm.ci.hotspot.HotSpotResolvedJavaType;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -47,22 +51,22 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  */
 final class HotSpotInvocationPlugins extends InvocationPlugins {
     private final GraalHotSpotVMConfig config;
-    private final IntrinsificationPredicate intrinsificationPredicate;
+    private final Predicate<ResolvedJavaType> intrinsificationPredicate;
 
     HotSpotInvocationPlugins(GraalHotSpotVMConfig config, CompilerConfiguration compilerConfiguration) {
         this.config = config;
-        intrinsificationPredicate = new IntrinsificationPredicate(compilerConfiguration);
+        this.intrinsificationPredicate = runtime().getIntrinsificationTrustPredicate(compilerConfiguration.getClass());
     }
 
     @Override
-    public void register(InvocationPlugin plugin, Type declaringClass, String name, Type... argumentTypes) {
+    protected void register(InvocationPlugin plugin, boolean isOptional, boolean allowOverwrite, Type declaringClass, String name, Type... argumentTypes) {
         if (!config.usePopCountInstruction) {
             if (name.equals("bitCount")) {
                 assert declaringClass.equals(Integer.class) || declaringClass.equals(Long.class);
                 return;
             }
         }
-        super.register(plugin, declaringClass, name, argumentTypes);
+        super.register(plugin, isOptional, allowOverwrite, declaringClass, name, argumentTypes);
     }
 
     @Override
@@ -102,10 +106,6 @@ final class HotSpotInvocationPlugins extends InvocationPlugins {
 
     @Override
     public boolean canBeIntrinsified(ResolvedJavaType declaringClass) {
-        if (declaringClass instanceof HotSpotResolvedJavaType) {
-            HotSpotResolvedJavaType type = (HotSpotResolvedJavaType) declaringClass;
-            return intrinsificationPredicate.apply(type.mirror());
-        }
-        return false;
+        return intrinsificationPredicate.test(declaringClass);
     }
 }

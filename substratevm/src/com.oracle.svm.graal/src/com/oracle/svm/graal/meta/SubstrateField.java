@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,6 +36,7 @@ import com.oracle.svm.core.annotate.UnknownPrimitiveField;
 import com.oracle.svm.core.hub.AnnotationsEncoding;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
+import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.Replaced;
 import com.oracle.truffle.api.nodes.Node.Child;
 import com.oracle.truffle.api.nodes.Node.Children;
@@ -68,9 +71,9 @@ public class SubstrateField implements SharedField, Replaced {
     final boolean truffleChildrenField;
     final boolean truffleCloneableField;
 
-    public SubstrateField(MetaAccessProvider originalMetaAccess, ResolvedJavaField original, int modifiers, UniqueStringTable stringTable) {
+    public SubstrateField(MetaAccessProvider originalMetaAccess, ResolvedJavaField original, int modifiers, HostedStringDeduplication stringTable) {
         this.modifiers = modifiers;
-        this.name = stringTable.unique(original.getName());
+        this.name = stringTable.deduplicate(original.getName(), true);
         this.hashCode = original.hashCode();
 
         truffleChildField = original.getAnnotation(Child.class) != null;
@@ -143,6 +146,11 @@ public class SubstrateField implements SharedField, Replaced {
     }
 
     @Override
+    public int getOffset() {
+        throw unimplemented();
+    }
+
+    @Override
     public boolean isInternal() {
         throw unimplemented();
     }
@@ -154,7 +162,7 @@ public class SubstrateField implements SharedField, Replaced {
 
     @Override
     public Annotation[] getAnnotations() {
-        return AnnotationsEncoding.getAnnotations(annotationsEncoding);
+        return AnnotationsEncoding.decodeAnnotations(annotationsEncoding);
     }
 
     @Override
@@ -164,7 +172,7 @@ public class SubstrateField implements SharedField, Replaced {
 
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return AnnotationsEncoding.getAnnotation(annotationsEncoding, annotationClass);
+        return AnnotationsEncoding.decodeAnnotation(annotationsEncoding, annotationClass);
     }
 
     @Override

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,7 +44,7 @@ import org.graalvm.compiler.nodes.extended.IntegerSwitchNode;
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
-import org.graalvm.compiler.nodes.spi.StampProvider;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.options.OptionValues;
 
@@ -59,10 +61,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
  */
 public class SimplifyingGraphDecoder extends GraphDecoder {
 
-    protected final MetaAccessProvider metaAccess;
-    protected final ConstantReflectionProvider constantReflection;
-    protected final ConstantFieldProvider constantFieldProvider;
-    protected final StampProvider stampProvider;
+    protected final CoreProviders providers;
     protected final boolean canonicalizeReads;
     protected final CanonicalizerTool canonicalizerTool;
 
@@ -83,17 +82,17 @@ public class SimplifyingGraphDecoder extends GraphDecoder {
 
         @Override
         public MetaAccessProvider getMetaAccess() {
-            return metaAccess;
+            return providers.getMetaAccess();
         }
 
         @Override
         public ConstantReflectionProvider getConstantReflection() {
-            return constantReflection;
+            return providers.getConstantReflection();
         }
 
         @Override
         public ConstantFieldProvider getConstantFieldProvider() {
-            return constantFieldProvider;
+            return providers.getConstantFieldProvider();
         }
 
         @Override
@@ -133,14 +132,9 @@ public class SimplifyingGraphDecoder extends GraphDecoder {
         }
     }
 
-    public SimplifyingGraphDecoder(Architecture architecture, StructuredGraph graph, MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection,
-                    ConstantFieldProvider constantFieldProvider, StampProvider stampProvider,
-                    boolean canonicalizeReads) {
+    public SimplifyingGraphDecoder(Architecture architecture, StructuredGraph graph, CoreProviders providers, boolean canonicalizeReads) {
         super(architecture, graph);
-        this.metaAccess = metaAccess;
-        this.constantReflection = constantReflection;
-        this.constantFieldProvider = constantFieldProvider;
-        this.stampProvider = stampProvider;
+        this.providers = providers;
         this.canonicalizeReads = canonicalizeReads;
         this.canonicalizerTool = new PECanonicalizerTool(graph.getAssumptions(), graph.getOptions());
     }

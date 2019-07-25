@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,9 +24,14 @@
  */
 package com.oracle.svm.core.graal.snippets;
 
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
+import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeInputList;
@@ -41,12 +48,15 @@ import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
 import org.graalvm.compiler.nodes.LogicConstantNode;
 import org.graalvm.compiler.nodes.LogicNode;
 import org.graalvm.compiler.nodes.NamedLocationIdentity;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.FloatConvertNode;
 import org.graalvm.compiler.nodes.calc.IsNullNode;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
+import org.graalvm.compiler.nodes.extended.ForeignCallNode;
 import org.graalvm.compiler.nodes.extended.GetClassNode;
 import org.graalvm.compiler.nodes.extended.LoadHubNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
@@ -61,14 +71,12 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.replacements.amd64.AMD64ConvertSnippets;
 
-import com.oracle.svm.core.amd64.FrameAccess;
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.graal.code.amd64.SubstrateCallingConventionType;
+import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.meta.SharedMethod;
-import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.snippets.ImplicitExceptions;
 
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.TargetDescription;
@@ -76,21 +84,23 @@ import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public final class NonSnippetLowerings {
 
     @SuppressWarnings("unused")
-    public static void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers,
-                    SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        new NonSnippetLowerings(runtimeConfig, options, factories, providers, snippetReflection, lowerings);
+    public static void registerLowerings(RuntimeConfiguration runtimeConfig, Predicate<ResolvedJavaMethod> mustNotAllocatePredicate, OptionValues options, Iterable<DebugHandlersFactory> factories,
+                    Providers providers, SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        new NonSnippetLowerings(runtimeConfig, mustNotAllocatePredicate, options, factories, providers, snippetReflection, lowerings);
     }
 
     private final RuntimeConfiguration runtimeConfig;
+    private final Predicate<ResolvedJavaMethod> mustNotAllocatePredicate;
 
-    private NonSnippetLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+    private NonSnippetLowerings(RuntimeConfiguration runtimeConfig, Predicate<ResolvedJavaMethod> mustNotAllocatePredicate, OptionValues options, Iterable<DebugHandlersFactory> factories,
+                    Providers providers, SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
         this.runtimeConfig = runtimeConfig;
+        this.mustNotAllocatePredicate = mustNotAllocatePredicate;
 
         lowerings.put(BytecodeExceptionNode.class, new BytecodeExceptionLowering());
         lowerings.put(GetClassNode.class, new GetClassLowering());
@@ -99,19 +109,43 @@ public final class NonSnippetLowerings {
         lowerings.put(FloatConvertNode.class, new FloatConvertLowering(options, factories, providers, snippetReflection, ConfigurationValues.getTarget()));
     }
 
-    private static class BytecodeExceptionLowering implements NodeLoweringProvider<BytecodeExceptionNode> {
+    private static final EnumMap<BytecodeExceptionKind, ForeignCallDescriptor> getCachedExceptionDescriptors;
+    private static final EnumMap<BytecodeExceptionKind, ForeignCallDescriptor> createExceptionDescriptors;
+
+    static {
+        getCachedExceptionDescriptors = new EnumMap<>(BytecodeExceptionKind.class);
+        getCachedExceptionDescriptors.put(BytecodeExceptionKind.NULL_POINTER, ImplicitExceptions.GET_CACHED_NULL_POINTER_EXCEPTION);
+        getCachedExceptionDescriptors.put(BytecodeExceptionKind.OUT_OF_BOUNDS, ImplicitExceptions.GET_CACHED_OUT_OF_BOUNDS_EXCEPTION);
+        getCachedExceptionDescriptors.put(BytecodeExceptionKind.CLASS_CAST, ImplicitExceptions.GET_CACHED_CLASS_CAST_EXCEPTION);
+        getCachedExceptionDescriptors.put(BytecodeExceptionKind.ARRAY_STORE, ImplicitExceptions.GET_CACHED_ARRAY_STORE_EXCEPTION);
+        getCachedExceptionDescriptors.put(BytecodeExceptionKind.DIVISION_BY_ZERO, ImplicitExceptions.GET_CACHED_ARITHMETIC_EXCEPTION);
+
+        createExceptionDescriptors = new EnumMap<>(BytecodeExceptionKind.class);
+        createExceptionDescriptors.put(BytecodeExceptionKind.NULL_POINTER, ImplicitExceptions.CREATE_NULL_POINTER_EXCEPTION);
+        createExceptionDescriptors.put(BytecodeExceptionKind.OUT_OF_BOUNDS, ImplicitExceptions.CREATE_OUT_OF_BOUNDS_EXCEPTION);
+        createExceptionDescriptors.put(BytecodeExceptionKind.CLASS_CAST, ImplicitExceptions.CREATE_CLASS_CAST_EXCEPTION);
+        createExceptionDescriptors.put(BytecodeExceptionKind.ARRAY_STORE, ImplicitExceptions.CREATE_ARRAY_STORE_EXCEPTION);
+        createExceptionDescriptors.put(BytecodeExceptionKind.DIVISION_BY_ZERO, ImplicitExceptions.CREATE_DIVISION_BY_ZERO_EXCEPTION);
+    }
+
+    private class BytecodeExceptionLowering implements NodeLoweringProvider<BytecodeExceptionNode> {
         @Override
         public void lower(BytecodeExceptionNode node, LoweringTool tool) {
-            Throwable exception;
-            if (node.getExceptionClass() == NullPointerException.class) {
-                exception = SnippetRuntime.cachedNullPointerException;
-            } else if (node.getExceptionClass() == ArrayIndexOutOfBoundsException.class) {
-                exception = SnippetRuntime.cachedArrayIndexOutOfBoundsException;
+            ForeignCallDescriptor descriptor;
+            List<ValueNode> arguments;
+            if (mustNotAllocatePredicate != null && mustNotAllocatePredicate.test(node.graph().method())) {
+                descriptor = getCachedExceptionDescriptors.get(node.getExceptionKind());
+                arguments = Collections.emptyList();
             } else {
-                throw VMError.shouldNotReachHere();
+                descriptor = createExceptionDescriptors.get(node.getExceptionKind());
+                arguments = node.getArguments();
             }
-            ConstantNode exceptionNode = ConstantNode.forConstant(SubstrateObjectConstant.forObject(exception), tool.getMetaAccess(), node.graph());
-            node.graph().replaceFixedWithFloating(node, exceptionNode);
+            assert descriptor != null && descriptor.getArgumentTypes().length == arguments.size();
+
+            StructuredGraph graph = node.graph();
+            ForeignCallNode foreignCallNode = graph.add(new ForeignCallNode(runtimeConfig.getProviders().getForeignCalls(), descriptor, node.stamp(NodeView.DEFAULT), arguments));
+            foreignCallNode.setStateAfter(node.stateAfter());
+            graph.replaceFixedWithFixed(node, foreignCallNode);
         }
     }
 
@@ -121,6 +155,7 @@ public final class NonSnippetLowerings {
             StampProvider stampProvider = tool.getStampProvider();
             LoadHubNode loadHub = node.graph().unique(new LoadHubNode(stampProvider, node.getObject()));
             node.replaceAtUsagesAndDelete(loadHub);
+            tool.getLowerer().lower(loadHub, tool);
         }
     }
 
@@ -149,7 +184,11 @@ public final class NonSnippetLowerings {
                 LoadHubNode hub = null;
                 CallTargetNode loweredCallTarget;
 
-                if (invokeKind != InvokeKind.Static && implementations.length == 0) {
+                if (invokeKind.isDirect()) {
+                    loweredCallTarget = graph.add(new DirectCallTargetNode(parameters.toArray(new ValueNode[parameters.size()]), callTarget.returnStamp(), signature, callTarget.targetMethod(),
+                                    callType, invokeKind));
+
+                } else if (implementations.length == 0) {
                     /*
                      * We are calling an abstract method with no implementation, i.e., the
                      * closed-world analysis showed that there is no concrete receiver ever
@@ -168,14 +207,10 @@ public final class NonSnippetLowerings {
                     loweredCallTarget = graph.add(new DirectCallTargetNode(parameters.toArray(new ValueNode[parameters.size()]), callTarget.returnStamp(), signature, method, callType,
                                     invokeKind));
 
-                } else if (invokeKind.isDirect()) {
-                    loweredCallTarget = graph.add(new DirectCallTargetNode(parameters.toArray(new ValueNode[parameters.size()]), callTarget.returnStamp(), signature, callTarget.targetMethod(),
-                                    callType, invokeKind));
-
                 } else if (implementations.length == 1) {
                     /*
                      * We only have one possible implementation for a indirect call, so we can emit
-                     * a direct call to the uniqye implementation.
+                     * a direct call to the unique implementation.
                      */
                     SharedMethod uniqueImplementation = implementations[0];
                     loweredCallTarget = graph.add(new DirectCallTargetNode(parameters.toArray(new ValueNode[parameters.size()]), callTarget.returnStamp(), signature, uniqueImplementation,

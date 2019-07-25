@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,7 @@ import org.graalvm.nativeimage.c.function.CFunction.Transition;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
@@ -657,7 +660,7 @@ public class Unistd {
     public static native int _SC_NPROCESSORS_ONLN();
 
     @CConstant
-    @Platforms(Platform.LINUX.class)
+    @Platforms(InternalPlatform.LINUX_AND_JNI.class)
     public static native int _SC_PHYS_PAGES();
 
     @CConstant
@@ -1341,7 +1344,7 @@ public class Unistd {
     // public static native int _CS_V7_ENV();
 
     @CConstant
-    @Platforms(Platform.DARWIN.class)
+    @Platforms(InternalPlatform.DARWIN_AND_JNI.class)
     public static native int _CS_DARWIN_USER_TEMP_DIR();
 
     /** Get file-specific configuration information about PATH. */
@@ -1805,6 +1808,15 @@ public class Unistd {
     public static native SignedWord sendmsg(int socket, Socket.msghdr message, int flags);
 
     public static class NoTransitions {
+        @CFunction(transition = Transition.NO_TRANSITION)
+        public static native int close(int fd);
+
+        @CFunction(transition = Transition.NO_TRANSITION)
+        public static native SignedWord read(int fd, PointerBase buf, UnsignedWord nbytes);
+
+        @CFunction(transition = Transition.NO_TRANSITION)
+        public static native SignedWord write(int fd, PointerBase buf, UnsignedWord n);
+
         @CFunction(transition = Transition.NO_TRANSITION)
         public static native long sysconf(int name);
     }

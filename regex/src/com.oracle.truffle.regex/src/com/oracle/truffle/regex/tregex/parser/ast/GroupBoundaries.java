@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package com.oracle.truffle.regex.tregex.parser.ast;
 
 import com.oracle.truffle.regex.result.PreCalculatedResultFactory;
+import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
 import com.oracle.truffle.regex.tregex.nfa.ASTTransition;
 import com.oracle.truffle.regex.tregex.nfa.NFAStateTransition;
 import com.oracle.truffle.regex.tregex.nodes.DFACaptureGroupPartialTransitionNode;
@@ -74,26 +75,28 @@ public class GroupBoundaries implements JsonConvertible {
     }
 
     /**
-     * Creates a byte array suitable to be part of the <code>indexUpdates</code> parameter passed to
-     * {@link DFACaptureGroupPartialTransitionNode#create(byte[], byte[], byte[][], byte[][], byte)}
+     * Creates a byte array suitable to be part of the {@code indexUpdates} parameter passed to
+     * {@link DFACaptureGroupPartialTransitionNode#create(DFAGenerator, byte[], byte[], byte[][], byte[][], byte)}
      * from this object.
      * 
      * @param targetArray the index of the row to be targeted.
      *
-     * @see DFACaptureGroupPartialTransitionNode#create(byte[], byte[], byte[][], byte[][], byte)
+     * @see DFACaptureGroupPartialTransitionNode#create(DFAGenerator, byte[], byte[], byte[][],
+     *      byte[][], byte)
      */
     public byte[] updatesToPartialTransitionArray(int targetArray) {
         return createPartialTransitionArray(targetArray, updateIndices);
     }
 
     /**
-     * Creates a byte array suitable to be part of the <code>indexClears</code> parameter passed to
-     * {@link DFACaptureGroupPartialTransitionNode#create(byte[], byte[], byte[][], byte[][], byte)}
+     * Creates a byte array suitable to be part of the {@code indexClears} parameter passed to
+     * {@link DFACaptureGroupPartialTransitionNode#create(DFAGenerator, byte[], byte[], byte[][], byte[][], byte)}
      * from this object.
      * 
      * @param targetArray the index of the row to be targeted.
      *
-     * @see DFACaptureGroupPartialTransitionNode#create(byte[], byte[], byte[][], byte[][], byte)
+     * @see DFACaptureGroupPartialTransitionNode#create(DFAGenerator, byte[], byte[], byte[][],
+     *      byte[][], byte)
      */
     public byte[] clearsToPartialTransitionArray(int targetArray) {
         return createPartialTransitionArray(targetArray, clearIndices);

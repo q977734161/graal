@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,9 +24,12 @@
  */
 package com.oracle.svm.core.config;
 
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.c.constant.CEnum;
+import org.graalvm.util.GuardedAnnotationAccess;
 import org.graalvm.word.WordBase;
 
+import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 
@@ -55,53 +60,38 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * </ul>
  * The hashcode is always present in arrays. Note that on 64-bit targets it does not impose any size
  * overhead for arrays with 64-bit aligned elements (e.g. arrays of objects).
- *
- * This class must be final to evaluate to a constant in snippets (without the need of analysis)
  */
-public final class ObjectLayout {
+public class ObjectLayout {
 
-    private final TargetDescription target;
+    private final SubstrateTargetDescription target;
 
-    private final JavaKind hubKind;
-    private final int hubSize;
     private final int referenceSize;
     private final int alignmentMask;
-    private final int deoptScratchSpace;
+    private final int hubOffset;
 
-    public ObjectLayout(TargetDescription target, int deoptScratchSpace) {
+    public ObjectLayout(SubstrateTargetDescription target) {
+        this(target, 0);
+    }
+
+    public ObjectLayout(SubstrateTargetDescription target, int hubOffset) {
         this.target = target;
-        this.hubKind = JavaKind.Object;
-        this.hubSize = sizeInBytes(hubKind);
-        this.referenceSize = sizeInBytes(JavaKind.Object);
-        this.alignmentMask = getAlignment() - 1;
-        this.deoptScratchSpace = deoptScratchSpace;
+        this.referenceSize = target.arch.getPlatformKind(JavaKind.Object).getSizeInBytes();
+        this.alignmentMask = target.wordSize - 1;
+        this.hubOffset = hubOffset;
     }
 
-    public static int roundUp(int number, int mod) {
-        return ((number + mod - 1) / mod) * mod;
-    }
-
-    public static long roundUp(long number, long mod) {
-        return ((number + mod - 1) / mod) * mod;
-    }
-
+    /** The minimum alignment of objects (instances and arrays). */
     public int getAlignment() {
-        return sizeInBytes(JavaKind.Long);
+        return target.wordSize;
     }
 
+    /** Tests if the given offset or address is aligned according to {@link #getAlignment()}. */
     public boolean isAligned(final long value) {
-        return ((value % getAlignment()) == 0L);
+        return (value % getAlignment() == 0L);
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getReferenceSize() {
-        return referenceSize;
-    }
-
-    public boolean isReferenceAligned(final long value) {
-        return ((value % getReferenceSize()) == 0L);
-    }
-
-    public int getCompressedReferenceSize() {
         return referenceSize;
     }
 
@@ -110,63 +100,51 @@ public final class ObjectLayout {
      * {@link DeoptimizedFrame}.
      */
     public int getDeoptScratchSpace() {
-        return deoptScratchSpace;
+        return target.getDeoptScratchSpace();
     }
 
     /**
-     * The size (in bytes) of values with the given kind, assuming an uncompressed reference for
-     * {@link JavaKind#Object}.
+     * The size (in bytes) of values with the given kind.
      */
     public int sizeInBytes(JavaKind kind) {
         return target.arch.getPlatformKind(kind).getSizeInBytes();
     }
 
-    /**
-     * The size (in bytes) of values with the given kind, with {@code isCompressed} specifying
-     * whether a reference is compressed for a {@code kind} of {@link JavaKind#Object}.
-     */
-    public int sizeInBytes(JavaKind kind, boolean isCompressed) {
-        if (kind == JavaKind.Object && isCompressed) {
-            return getCompressedReferenceSize();
-        }
-        return target.arch.getPlatformKind(kind).getSizeInBytes();
-    }
-
     public int getArrayIndexShift(JavaKind kind) {
-        return CodeUtil.log2(sizeInBytes(kind));
+        return CodeUtil.log2(getArrayIndexScale(kind));
     }
 
     public int getArrayIndexScale(JavaKind kind) {
-        return 1 << getArrayIndexShift(kind);
+        return sizeInBytes(kind);
     }
 
     /**
-     * The align to the minimum alignment of objects (instances and arrays), in bytes.
+     * Align the specified offset or address up to {@link #getAlignment()}.
      */
     public int alignUp(int obj) {
         return (obj + alignmentMask) & ~alignmentMask;
     }
 
     /**
-     * The align to the minimum alignment of objects (instances and arrays), in bytes.
+     * Align the specified offset or address up to {@link #getAlignment()}.
      */
     public long alignUp(long obj) {
         return (obj + alignmentMask) & ~alignmentMask;
     }
 
-    @SuppressWarnings("static-method")
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getHubOffset() {
-        return 0;
+        return hubOffset;
     }
 
-    public JavaKind getHubKind() {
-        return hubKind;
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int getHubNextOffset() {
+        return getHubOffset() + getReferenceSize();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getFirstFieldOffset() {
-        return hubSize;
+        return getHubNextOffset();
     }
 
     /*
@@ -178,7 +156,7 @@ public final class ObjectLayout {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getArrayLengthOffset() {
-        return getFirstFieldOffset();
+        return getHubNextOffset();
     }
 
     private int getArrayLengthNextOffset() {
@@ -188,15 +166,15 @@ public final class ObjectLayout {
     private static final JavaKind arrayHashCodeKind = JavaKind.Int;
 
     public int getArrayHashCodeOffset() {
-        return roundUp(getArrayLengthNextOffset(), sizeInBytes(arrayHashCodeKind));
+        return NumUtil.roundUp(getArrayLengthNextOffset(), sizeInBytes(arrayHashCodeKind));
     }
 
     private int getArrayHashCodeNextOffset() {
-        return getArrayHashCodeOffset() + sizeInBytes(JavaKind.Int);
+        return getArrayHashCodeOffset() + sizeInBytes(arrayHashCodeKind);
     }
 
     public int getArrayBaseOffset(JavaKind kind) {
-        return roundUp(getArrayHashCodeNextOffset(), sizeInBytes(kind));
+        return NumUtil.roundUp(getArrayHashCodeNextOffset(), sizeInBytes(kind));
     }
 
     public long getArrayElementOffset(JavaKind kind, int index) {
@@ -211,7 +189,7 @@ public final class ObjectLayout {
         if (metaAccess.lookupJavaType(WordBase.class).isAssignableFrom(type)) {
             return target.wordJavaKind;
         }
-        if (isEntryPoint && type.getAnnotation(CEnum.class) != null) {
+        if (isEntryPoint && GuardedAnnotationAccess.isAnnotationPresent(type, CEnum.class)) {
             return JavaKind.Int;
         }
         return type.getJavaKind();

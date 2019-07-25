@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,10 +41,7 @@ import jdk.vm.ci.meta.MetaUtil;
 public final class JNIAccessibleMethodDescriptor {
 
     private static final String CONSTRUCTOR_NAME = "<init>";
-
-    public static boolean isConstructorName(String name) {
-        return CONSTRUCTOR_NAME.equals(name);
-    }
+    private static final String INITIALIZER_NAME = "<clinit>";
 
     public static JNIAccessibleMethodDescriptor of(JavaMethod method) {
         return new JNIAccessibleMethodDescriptor(method.getName(), method.getSignature().toMethodDescriptor());
@@ -80,6 +79,10 @@ public final class JNIAccessibleMethodDescriptor {
         return name.equals(CONSTRUCTOR_NAME);
     }
 
+    public boolean isClassInitializer() {
+        return name.equals(INITIALIZER_NAME);
+    }
+
     public String getName() {
         return name;
     }
@@ -99,6 +102,21 @@ public final class JNIAccessibleMethodDescriptor {
             return (other == this) || (name.equals(other.name) && signature.equals(other.signature));
         }
         return false;
+    }
+
+    boolean matchesIgnoreReturnType(Method method) {
+        if (!name.equals(method.getName())) {
+            return false;
+        }
+        int position = 1; // skip '('
+        for (Class<?> parameterType : method.getParameterTypes()) {
+            String paramInternal = MetaUtil.toInternalName(parameterType.getName());
+            if (!signature.startsWith(paramInternal, position)) {
+                return false;
+            }
+            position += paramInternal.length();
+        }
+        return signature.startsWith(")", position);
     }
 
     @Override

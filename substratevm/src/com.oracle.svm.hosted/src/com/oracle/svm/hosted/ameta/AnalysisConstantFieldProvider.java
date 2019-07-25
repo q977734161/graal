@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,6 +32,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.meta.ReadableJavaField;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -38,10 +41,15 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 @Platforms(Platform.HOSTED_ONLY.class)
 public class AnalysisConstantFieldProvider extends JavaConstantFieldProvider {
     private final AnalysisUniverse universe;
+    private final AnalysisConstantReflectionProvider constantReflection;
+    private final ClassInitializationSupport classInitializationSupport;
 
-    public AnalysisConstantFieldProvider(AnalysisUniverse universe, MetaAccessProvider metaAccess) {
+    public AnalysisConstantFieldProvider(AnalysisUniverse universe, MetaAccessProvider metaAccess, AnalysisConstantReflectionProvider constantReflection,
+                    ClassInitializationSupport classInitializationSupport) {
         super(metaAccess);
         this.universe = universe;
+        this.constantReflection = constantReflection;
+        this.classInitializationSupport = classInitializationSupport;
     }
 
     @Override
@@ -55,12 +63,20 @@ public class AnalysisConstantFieldProvider extends JavaConstantFieldProvider {
             if (readableField.allowConstantFolding()) {
                 JavaConstant fieldValue = readableField.readValue(universe.toHosted(analysisTool.getReceiver()));
                 if (fieldValue != null) {
-                    return analysisTool.foldConstant(universe.lookup(fieldValue));
+                    return analysisTool.foldConstant(constantReflection.interceptValue(f, universe.lookup(fieldValue)));
                 }
             }
             return null;
         }
 
         return super.readConstantField(field, analysisTool);
+    }
+
+    @Override
+    protected boolean isFinalField(ResolvedJavaField field, ConstantFieldTool<?> tool) {
+        if (classInitializationSupport.shouldInitializeAtRuntime(field.getDeclaringClass())) {
+            return false;
+        }
+        return super.isFinalField(field, tool);
     }
 }

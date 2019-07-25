@@ -1,33 +1,57 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.nodes;
 
+import java.util.concurrent.locks.Lock;
+
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.TruffleLanguage.ContextReference;
+import com.oracle.truffle.api.TruffleLanguage.InlineParsingRequest;
+import com.oracle.truffle.api.TruffleLanguage.LanguageReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.impl.Accessor.EngineSupport;
+import com.oracle.truffle.api.nodes.ExplodeLoop.LoopExplosionKind;
 
 /**
  * Represents an executable node in a Truffle AST. The executable node represents an AST fragment
@@ -38,8 +62,14 @@ import com.oracle.truffle.api.frame.VirtualFrame;
  * @since 0.31
  */
 public abstract class ExecutableNode extends Node {
-
-    final LanguageInfo languageInfo;
+    /*
+     * Since languages were singletons in the past, we cannot use the Env instance stored in
+     * TruffleLanguage for languages that are not yet migrated. We use this sourceVM reference
+     * instead for compatibility.
+     */
+    @CompilationFinal Object sourceVM;
+    final TruffleLanguage<?> language;
+    @CompilationFinal ReferenceCache referenceCache;
 
     /**
      * Creates new executable node with a given language instance. The language instance is
@@ -50,13 +80,23 @@ public abstract class ExecutableNode extends Node {
      */
     protected ExecutableNode(TruffleLanguage<?> language) {
         CompilerAsserts.neverPartOfCompilation();
-        if (language != null) {
-            this.languageInfo = Node.ACCESSOR.languageSupport().getLanguageInfo(language);
-            if (languageInfo == null) {
-                throw new IllegalArgumentException("Truffle language instance is not initialized.");
-            }
+        this.language = language;
+        if (this.language != null) {
+            this.sourceVM = NodeAccessor.ACCESSOR.engineSupport().getVMFromLanguageObject(NodeAccessor.ACCESSOR.languageSupport().getVMObject(this.language));
         } else {
-            this.languageInfo = null;
+            this.sourceVM = getCurrentVM();
+        }
+        if (language != null && getLanguageInfo() == null) {
+            throw new IllegalArgumentException("Truffle language instance is not initialized.");
+        }
+    }
+
+    private static Object getCurrentVM() {
+        EngineSupport engine = NodeAccessor.ACCESSOR.engineSupport();
+        if (engine != null) {
+            return engine.getCurrentVM();
+        } else {
+            return null;
         }
     }
 
@@ -73,12 +113,16 @@ public abstract class ExecutableNode extends Node {
     /**
      * Returns public information about the language. The language can be assumed equal if the
      * instances of the language info instance are the same. To access internal details of the
-     * language within the language implementation use {@link #getLanguage(Class)}.
+     * language within the language implementation use {@link #lookupLanguageReference(Class)}.
      *
      * @since 0.31
      */
     public final LanguageInfo getLanguageInfo() {
-        return languageInfo;
+        if (language != null) {
+            return NodeAccessor.ACCESSOR.languageSupport().getLanguageInfo(language);
+        } else {
+            return null;
+        }
     }
 
     /**
@@ -90,20 +134,97 @@ public abstract class ExecutableNode extends Node {
      *
      * @see #getLanguageInfo()
      * @since 0.31
+     * @deprecated use {@link #getLanguageReference(Class)} instead.
      */
-    @SuppressWarnings("rawtypes")
+    @Deprecated
+    @SuppressWarnings({"rawtypes", "unchecked"})
     public final <C extends TruffleLanguage> C getLanguage(Class<C> languageClass) {
-        if (languageInfo == null) {
+        if (language == null) {
             return null;
         }
-        TruffleLanguage<?> language = languageInfo.getSpi();
-        if (language.getClass() != languageClass) {
-            if (!languageClass.isInstance(language) || languageClass == TruffleLanguage.class || !TruffleLanguage.class.isAssignableFrom(languageClass)) {
+        TruffleLanguage<?> spi = this.language;
+        if (spi.getClass() != languageClass) {
+            if (!languageClass.isInstance(spi) || languageClass == TruffleLanguage.class || !TruffleLanguage.class.isAssignableFrom(languageClass)) {
                 CompilerDirectives.transferToInterpreter();
-                throw new ClassCastException("Illegal language class specified. Expected " + language.getClass().getName() + ".");
+                throw new ClassCastException("Illegal language class specified. Expected " + spi.getClass().getName() + ".");
             }
         }
-        return languageClass.cast(language);
+        return (C) spi;
+    }
+
+    static final class ReferenceCache {
+
+        final Class<?> languageClass;
+        final LanguageReference<?> languageReference;
+        final ContextReference<?> contextReference;
+        final ReferenceCache next;
+
+        @SuppressWarnings("unchecked")
+        ReferenceCache(ExecutableNode executableNode, @SuppressWarnings("rawtypes") Class<? extends TruffleLanguage> languageClass, ReferenceCache next) {
+            this.languageClass = languageClass;
+            if (languageClass != null) {
+                this.languageReference = NodeAccessor.ACCESSOR.engineSupport().lookupLanguageReference(executableNode.sourceVM,
+                                executableNode.language, languageClass);
+                this.contextReference = NodeAccessor.ACCESSOR.engineSupport().lookupContextReference(executableNode.sourceVM,
+                                executableNode.language, languageClass);
+            } else {
+                this.languageReference = null;
+                this.contextReference = null;
+            }
+            this.next = next;
+        }
+
+    }
+
+    @ExplodeLoop(kind = LoopExplosionKind.FULL_EXPLODE_UNTIL_RETURN)
+    @SuppressWarnings("rawtypes")
+    final ReferenceCache lookupReferenceCache(Class<? extends TruffleLanguage> languageClass) {
+        do {
+            ReferenceCache current = this.referenceCache;
+            if (current == GENERIC) {
+                return null;
+            }
+            while (current != null) {
+                if ((current.languageClass == languageClass)) {
+                    return current;
+                }
+                current = current.next;
+            }
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            specializeReferenceCache(languageClass);
+        } while (true);
+    }
+
+    private static final ReferenceCache GENERIC = new ReferenceCache(null, null, null);
+
+    @SuppressWarnings("rawtypes")
+    private void specializeReferenceCache(Class<? extends TruffleLanguage> languageClass) {
+        Lock lock = getLock();
+        lock.lock();
+        try {
+            ReferenceCache current = this.referenceCache;
+            if (current == null) {
+                this.referenceCache = new ReferenceCache(this, languageClass, null);
+            } else {
+                if (sourceVM == null) {
+                    this.referenceCache = GENERIC;
+                } else {
+                    int count = 0;
+                    ReferenceCache original = current;
+                    do {
+                        count++;
+                        current = current.next;
+                    } while (current != null);
+                    if (count >= 5) {
+                        this.referenceCache = GENERIC;
+                    } else {
+                        this.referenceCache = new ReferenceCache(this, languageClass, original);
+                    }
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
 }

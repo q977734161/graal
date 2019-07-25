@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -46,7 +48,7 @@ typedef enum {
 
 typedef struct header_struct {
 	unsigned char type;
-	char typename[3]; // "d1", "d2"
+	char name[3]; // "d1", "d2"
 } h_t;
 
 typedef struct {
@@ -63,8 +65,8 @@ typedef struct d1_struct {
 
 typedef struct d2_struct {
 	h_t h;
-	long long_value;
-	long* long_pointer;
+	long long long_value;
+	long long* long_pointer;
 } d2_t;
 
 

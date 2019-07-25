@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,8 +24,8 @@
  */
 package org.graalvm.compiler.truffle.runtime.debug;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleCompilationStatisticDetails;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleCompilationStatistics;
+import static org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions.TruffleCompilationStatisticDetails;
+import static org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions.TruffleCompilationStatistics;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,7 +42,6 @@ import java.util.function.Function;
 
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.CompilationResultInfo;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.GraphInfo;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.AbstractGraalTruffleRuntimeListener;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
@@ -49,6 +50,8 @@ import org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining.CallTreeNodeVisitor;
 import org.graalvm.compiler.truffle.runtime.TruffleInliningDecision;
+import org.graalvm.compiler.truffle.runtime.TruffleRuntimeOptions;
+import org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions;
 
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
@@ -68,7 +71,6 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
     private int dequeues;
     private int splits;
 
-    private final IntSummaryStatistics deferCompilations = new IntSummaryStatistics();
     private final LongSummaryStatistics timeToQueue = new LongSummaryStatistics();
     private final LongSummaryStatistics timeToCompilation = new LongSummaryStatistics();
 
@@ -117,7 +119,8 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
     private final ThreadLocal<Times> compilationTimes = new ThreadLocal<>();
 
     public static void install(GraalTruffleRuntime runtime) {
-        if (TruffleCompilerOptions.getValue(TruffleCompilationStatistics) || TruffleCompilerOptions.getValue(TruffleCompilationStatisticDetails)) {
+        if (TruffleRuntimeOptions.getValue(TruffleCompilationStatistics) ||
+                        TruffleRuntimeOptions.getValue(TruffleCompilationStatisticDetails)) {
             runtime.addListener(new StatisticsListener(runtime));
         }
     }
@@ -156,7 +159,6 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
         compilationTimes.set(times);
         OptimizedCompilationProfile profile = target.getCompilationProfile();
         if (profile != null) {
-            deferCompilations.accept(profile.getDeferredCount());
             timeToCompilation.accept(times.compilationStarted - profile.getTimestamp());
         }
     }
@@ -185,7 +187,7 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
         loopCount.accept(callTargetStat.getLoopCount());
 
         truffleTierNodeCount.accept(graph.getNodeCount());
-        if (TruffleCompilerOptions.getValue(TruffleCompilationStatisticDetails)) {
+        if (TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleCompilationStatisticDetails)) {
             truffleTierNodeStatistics.accept(Arrays.asList(graph.getNodeTypes(true)));
         }
     }
@@ -205,7 +207,7 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
         final Times times = compilationTimes.get();
         times.graalTierFinished = System.nanoTime();
         graalTierNodeCount.accept(graph.getNodeCount());
-        if (TruffleCompilerOptions.getValue(TruffleCompilationStatisticDetails)) {
+        if (TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleCompilationStatisticDetails)) {
             graalTierNodeStatistics.accept(Arrays.asList(graph.getNodeTypes(true)));
         }
     }
@@ -259,7 +261,6 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
         printStatistic(rt, "Queue Accuracy", 1.0 - dequeues / (double) queues);
         printStatistic(rt, "Compilation Utilization", compilationTime.getSum() / (double) (endTime - firstCompilation));
         printStatistic(rt, "Remaining Compilation Queue", rt.getCompilationQueueSize());
-        printStatistic(rt, "Times defered until compilation", deferCompilations);
 
         printStatisticTime(rt, "Time to queue", timeToQueue);
         printStatisticTime(rt, "Time to compilation", timeToCompilation);
@@ -297,7 +298,7 @@ public final class StatisticsListener extends AbstractGraalTruffleRuntimeListene
         printStatistic(rt, "  Marks", compilationResultMarks);
         printStatistic(rt, "  Data references", compilationResultDataPatches);
 
-        if (TruffleCompilerOptions.getValue(TruffleCompilationStatisticDetails)) {
+        if (TruffleRuntimeOptions.getValue(SharedTruffleRuntimeOptions.TruffleCompilationStatisticDetails)) {
             printStatistic(rt, "Truffle nodes");
             nodeStatistics.printStatistics(rt, Class::getSimpleName);
             printStatistic(rt, "Graal nodes after Truffle tier");

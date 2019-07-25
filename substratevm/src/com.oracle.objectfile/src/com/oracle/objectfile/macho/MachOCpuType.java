@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,7 +29,9 @@ package com.oracle.objectfile.macho;
  */
 public enum MachOCpuType {
     X86_64,
-    POWERPC64;
+    POWERPC64,
+    ARM,
+    ARM64;
 
     public static MachOCpuType from(int c) {
         switch (c) {
@@ -35,6 +39,10 @@ public enum MachOCpuType {
                 return X86_64;
             case 0x01000012:
                 return POWERPC64;
+            case 0x0000000C:
+                return ARM;
+            case 0x0100000C:
+                return ARM64;
         }
         throw new IllegalStateException("unknown CPU type");
     }
@@ -45,6 +53,10 @@ public enum MachOCpuType {
                 return 0x01000007;
             case POWERPC64:
                 return 0x01000012;
+            case ARM:
+                return 0x0000000C;
+            case ARM64:
+                return 0x0100000C;
         }
         throw new IllegalStateException("should not reach here");
     }

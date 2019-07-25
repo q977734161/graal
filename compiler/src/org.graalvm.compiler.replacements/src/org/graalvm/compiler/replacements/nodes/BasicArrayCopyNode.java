@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -81,15 +83,12 @@ public class BasicArrayCopyNode extends AbstractMemoryCheckpoint implements Virt
     public BasicArrayCopyNode(NodeClass<? extends AbstractMemoryCheckpoint> type, ValueNode src, ValueNode srcPos, ValueNode dest, ValueNode destPos, ValueNode length, JavaKind elementKind, int bci) {
         super(type, StampFactory.forKind(JavaKind.Void));
         this.bci = bci;
-        args = new NodeInputList<>(this, new ValueNode[]{src, srcPos, dest, destPos, length});
+        this.args = new NodeInputList<>(this, new ValueNode[]{src, srcPos, dest, destPos, length});
         this.elementKind = elementKind != JavaKind.Illegal ? elementKind : null;
     }
 
     public BasicArrayCopyNode(NodeClass<? extends AbstractMemoryCheckpoint> type, ValueNode src, ValueNode srcPos, ValueNode dest, ValueNode destPos, ValueNode length, JavaKind elementKind) {
-        super(type, StampFactory.forKind(JavaKind.Void));
-        this.bci = BytecodeFrame.INVALID_FRAMESTATE_BCI;
-        args = new NodeInputList<>(this, new ValueNode[]{src, srcPos, dest, destPos, length});
-        this.elementKind = elementKind != JavaKind.Illegal ? elementKind : null;
+        this(type, src, srcPos, dest, destPos, length, elementKind, BytecodeFrame.INVALID_FRAMESTATE_BCI);
     }
 
     public ValueNode getSource() {
@@ -234,7 +233,7 @@ public class BasicArrayCopyNode extends AbstractMemoryCheckpoint implements Virt
                         return;
                     }
                     for (int i = 0; i < len; i++) {
-                        LoadIndexedNode load = new LoadIndexedNode(graph().getAssumptions(), srcAlias, ConstantNode.forInt(i + srcPosInt, graph()), destComponentType.getJavaKind());
+                        LoadIndexedNode load = new LoadIndexedNode(graph().getAssumptions(), srcAlias, ConstantNode.forInt(i + srcPosInt, graph()), null, destComponentType.getJavaKind());
                         load.setNodeSourcePosition(getNodeSourcePosition());
                         tool.addNode(load);
                         tool.setVirtualEntry(destVirtual, destPosInt + i, load);

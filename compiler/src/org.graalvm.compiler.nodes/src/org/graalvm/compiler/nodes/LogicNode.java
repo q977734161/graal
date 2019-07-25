@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -89,6 +91,18 @@ public abstract class LogicNode extends FloatingNode implements IndirectCanonica
      * @param other the other condition.
      */
     public TriState implies(boolean thisNegated, LogicNode other) {
+        if (this == other) {
+            return TriState.get(!thisNegated);
+        }
+        if (other instanceof LogicNegationNode) {
+            return flip(this.implies(thisNegated, ((LogicNegationNode) other).getValue()));
+        }
         return TriState.UNKNOWN;
+    }
+
+    private static TriState flip(TriState triState) {
+        return triState.isUnknown()
+                        ? triState
+                        : TriState.get(!triState.toBoolean());
     }
 }

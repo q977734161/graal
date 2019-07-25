@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,7 +35,7 @@ public class TruffleInliningProfile {
     private final double frequency;
     private final int recursions;
 
-    private String failedReason;
+    private TruffleInliningPolicy.FailedReason failedReason;
     private int queryIndex = -1;
     private double score;
 
@@ -83,7 +85,7 @@ public class TruffleInliningProfile {
         return score;
     }
 
-    public String getFailedReason() {
+    public TruffleInliningPolicy.FailedReason getFailedReason() {
         return failedReason;
     }
 
@@ -95,7 +97,7 @@ public class TruffleInliningProfile {
         return queryIndex;
     }
 
-    public void setFailedReason(String reason) {
+    public void setFailedReason(TruffleInliningPolicy.FailedReason reason) {
         this.failedReason = reason;
     }
 
@@ -111,13 +113,21 @@ public class TruffleInliningProfile {
         return deepNodeCount;
     }
 
+    private String formatReason() {
+        if (failedReason == null) {
+            return null;
+        } else {
+            return failedReason.format(callNode.getCallTarget());
+        }
+    }
+
     public Map<String, Object> getDebugProperties() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("ASTSize", String.format("%5d/%5d", nodeCount, deepNodeCount));
         properties.put("frequency", String.format("%8.4f", getFrequency()));
         properties.put("score", String.format("%8.4f", getScore()));
         properties.put(String.format("index=%3d, force=%s, callSites=%2d", queryIndex, (isForced() ? "Y" : "N"), getCallSites()), "");
-        properties.put("reason", cached == null ? failedReason : failedReason + " (cached)");
+        properties.put("reason", cached == null ? formatReason() : formatReason() + " (cached)");
         return properties;
     }
 }

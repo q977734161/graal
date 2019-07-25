@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -53,6 +55,11 @@ public abstract class SizableInfo extends ElementInfo {
          */
         BYTEARRAY,
         /**
+         * Java object, can be stored in {@link com.oracle.svm.core.c.struct.PinnedObjectField} of
+         * {@link org.graalvm.nativeimage.c.struct.RawStructure} only.
+         */
+        OBJECT,
+        /**
          * Placeholder when type is not known or does not matter.
          */
         UNKNOWN,
@@ -81,20 +88,24 @@ public abstract class SizableInfo extends ElementInfo {
         }
     }
 
-    public ElementKind getKind() {
+    public final ElementKind getKind() {
         return kind;
     }
 
-    public PropertyInfo<Integer> getSizeInfo() {
+    public final PropertyInfo<Integer> getSizeInfo() {
         return sizeInfo;
     }
 
-    public PropertyInfo<SignednessValue> getSignednessInfo() {
+    public final PropertyInfo<SignednessValue> getSignednessInfo() {
         assert signednessInfo != null;
         return signednessInfo;
     }
 
-    public boolean isUnsigned() {
+    public final boolean isUnsigned() {
         return getKind() == ElementKind.POINTER || (getKind() == ElementKind.INTEGER && getSignednessInfo().getProperty() == SignednessValue.UNSIGNED);
+    }
+
+    public final boolean isObject() {
+        return getKind() == ElementKind.OBJECT;
     }
 }

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -47,7 +49,7 @@ import org.graalvm.compiler.options.OptionDescriptor;
 import org.graalvm.compiler.options.OptionDescriptors;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionsParser;
-import org.graalvm.compiler.test.GraalTest;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -80,7 +82,7 @@ public class OptionsVerifierTest {
 
         Classpath() throws IOException {
             List<String> names = new ArrayList<>(Arrays.asList(System.getProperty("java.class.path").split(File.pathSeparator)));
-            if (GraalTest.Java8OrEarlier) {
+            if (JavaVersionUtil.JAVA_SPEC <= 8) {
                 names.addAll(Arrays.asList(System.getProperty("sun.boot.class.path").split(File.pathSeparator)));
             } else {
                 names.addAll(Arrays.asList(System.getProperty("jdk.module.path").split(File.pathSeparator)));

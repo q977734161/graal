@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -55,11 +57,29 @@ public final class CEntryPointEnterNode extends FixedWithNextNode implements Low
     protected final EnterAction enterAction;
 
     @OptionalInput protected ValueNode parameter;
+    private final boolean ensureJavaThread;
 
-    public CEntryPointEnterNode(EnterAction enterAction, ValueNode parameter) {
+    public static CEntryPointEnterNode createIsolate(ValueNode parameters) {
+        return new CEntryPointEnterNode(EnterAction.CreateIsolate, parameters, false);
+    }
+
+    public static CEntryPointEnterNode attachThread(ValueNode isolate, boolean ensureJavaThread) {
+        return new CEntryPointEnterNode(EnterAction.AttachThread, isolate, ensureJavaThread);
+    }
+
+    public static CEntryPointEnterNode enter(ValueNode isolateThread) {
+        return new CEntryPointEnterNode(EnterAction.Enter, isolateThread, false);
+    }
+
+    public static CEntryPointEnterNode enterIsolate(ValueNode isolate) {
+        return new CEntryPointEnterNode(EnterAction.EnterIsolate, isolate, false);
+    }
+
+    protected CEntryPointEnterNode(EnterAction enterAction, ValueNode parameter, boolean ensureJavaThread) {
         super(TYPE, StampFactory.forKind(JavaKind.Int));
         this.enterAction = enterAction;
         this.parameter = parameter;
+        this.ensureJavaThread = ensureJavaThread;
     }
 
     public EnterAction getEnterAction() {
@@ -68,6 +88,10 @@ public final class CEntryPointEnterNode extends FixedWithNextNode implements Low
 
     public ValueNode getParameter() {
         return parameter;
+    }
+
+    public boolean getEnsureJavaThread() {
+        return ensureJavaThread;
     }
 
     @Override

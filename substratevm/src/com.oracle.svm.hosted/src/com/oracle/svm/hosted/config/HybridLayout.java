@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,7 @@ import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import org.graalvm.compiler.core.common.NumUtil;
 
 /**
  * Defines the layout for a hybrid class.
@@ -55,7 +58,6 @@ public class HybridLayout<T> {
     private final ObjectLayout layout;
     private final HostedField arrayField;
     private final HostedField bitsetField;
-    private final JavaKind arrayElementKind;
     private final int instanceSize;
 
     public HybridLayout(Class<T> hybridClass, ObjectLayout layout, HostedMetaAccess metaAccess) {
@@ -85,20 +87,19 @@ public class HybridLayout<T> {
         assert foundArrayField != null : "must have exactly one hybrid array field";
         arrayField = foundArrayField;
         bitsetField = foundBitsetField;
-        arrayElementKind = arrayField.getType().getComponentType().getStorageKind();
         instanceSize = hybridClass.getInstanceSize();
     }
 
-    public JavaKind getArrayElementKind() {
-        return arrayElementKind;
+    public JavaKind getArrayElementStorageKind() {
+        return arrayField.getType().getComponentType().getStorageKind();
     }
 
     public int getArrayBaseOffset() {
-        return ObjectLayout.roundUp(instanceSize, layout.sizeInBytes(arrayElementKind));
+        return NumUtil.roundUp(instanceSize, layout.sizeInBytes(getArrayElementStorageKind()));
     }
 
     public long getArrayElementOffset(int index) {
-        return getArrayBaseOffset() + index * layout.sizeInBytes(arrayElementKind);
+        return getArrayBaseOffset() + index * layout.sizeInBytes(getArrayElementStorageKind());
     }
 
     public long getTotalSize(int length) {

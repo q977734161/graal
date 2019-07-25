@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,15 +26,8 @@ package com.oracle.svm.core.jdk;
 
 import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Reset;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readHub;
-import static com.oracle.svm.core.snippets.KnownIntrinsics.unsafeCast;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URL;
@@ -40,32 +35,37 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 
-import jdk.vm.ci.meta.MetaAccessProvider;
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.core.common.SuppressFBWarnings;
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.compiler.word.ObjectAccess;
 import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CLibrary;
-import org.graalvm.nativeimage.c.function.CodePointer;
-import org.graalvm.word.Pointer;
+import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.impl.InternalPlatform;
+import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.MonitorSupport;
-import com.oracle.svm.core.UnsafeAccess;
+import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Delete;
@@ -76,17 +76,23 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.CustomFieldValueComputer
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.jni.JNIRuntimeAccess;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 @TargetClass(java.lang.Object.class)
 final class Target_java_lang_Object {
+
+    @Substitute
+    @TargetElement(name = "registerNatives")
+    private static void registerNativesSubst() {
+        /* We reimplemented all native methods, so nothing to do. */
+    }
 
     @Substitute
     @TargetElement(name = "getClass")
@@ -125,84 +131,6 @@ final class Target_java_lang_Object {
     }
 }
 
-@TargetClass(java.lang.ClassLoader.class)
-@Substitute
-@SuppressWarnings("static-method")
-final class Target_java_lang_ClassLoader {
-    /*
-     * Substituting the whole class allows us to have fields of declared type ClassLoader, but still
-     * get an error if anyone tries to access a field or call a method on it that we have not
-     * explicitly substituted below.
-     */
-
-    @Substitute
-    private InputStream getResourceAsStream(String name) {
-        return getSystemResourceAsStream(name);
-    }
-
-    @Substitute
-    private static InputStream getSystemResourceAsStream(String name) {
-        List<byte[]> arr = Resources.get(name);
-        return arr == null ? null : new ByteArrayInputStream(arr.get(0));
-    }
-
-    @Substitute
-    private URL getResource(String name) {
-        return getSystemResource(name);
-    }
-
-    @Substitute
-    private static URL getSystemResource(String name) {
-        List<byte[]> arr = Resources.get(name);
-        return arr == null ? null : Resources.createURL(name, new ByteArrayInputStream(arr.get(0)));
-    }
-
-    @Substitute
-    private Enumeration<URL> getResources(String name) {
-        return getSystemResources(name);
-    }
-
-    @Substitute
-    private static Enumeration<URL> getSystemResources(String name) {
-        List<byte[]> arr = Resources.get(name);
-        if (arr == null) {
-            return Collections.emptyEnumeration();
-        }
-        List<URL> res = new ArrayList<>(arr.size());
-        for (byte[] data : arr) {
-            res.add(Resources.createURL(name, new ByteArrayInputStream(data)));
-        }
-        return Collections.enumeration(res);
-    }
-
-    @Substitute
-    public static ClassLoader getSystemClassLoader() {
-        /*
-         * ClassLoader.getSystemClassLoader() is used as a parameter for Class.forName(String,
-         * boolean, ClassLoader) which is implemented as ClassForNameSupport.forName(name) and
-         * ignores the class loader.
-         */
-        return null;
-    }
-
-    @Substitute
-    @SuppressWarnings("unused")
-    static void loadLibrary(Class<?> fromClass, String name, boolean isAbsolute) {
-        NativeLibrarySupport.singleton().loadLibrary(name, isAbsolute);
-    }
-
-    @Substitute
-    private Class<?> loadClass(String name) throws ClassNotFoundException {
-        return ClassForNameSupport.forName(name);
-    }
-
-    @Substitute
-    @SuppressWarnings("unused")
-    static void checkClassLoaderPermission(ClassLoader cl, Class<?> caller) {
-    }
-
-}
-
 @TargetClass(className = "java.lang.ClassLoaderHelper")
 final class Target_java_lang_ClassLoaderHelper {
     @Alias
@@ -218,7 +146,11 @@ final class Target_java_lang_Enum {
          * The original implementation creates and caches a HashMap to make the lookup faster. For
          * simplicity, we do a linear search for now.
          */
-        for (Enum<?> e : unsafeCast(enumType, DynamicHub.class).getEnumConstantsShared()) {
+        Enum<?>[] enumConstants = DynamicHub.fromClass(enumType).getEnumConstantsShared();
+        if (enumConstants == null) {
+            throw new IllegalArgumentException(enumType.getName() + " is not an enum type");
+        }
+        for (Enum<?> e : enumConstants) {
             if (e.name().equals(name)) {
                 return e;
             }
@@ -236,7 +168,7 @@ final class Target_java_lang_String {
 
     @Substitute
     public String intern() {
-        String thisStr = unsafeCast(this, String.class);
+        String thisStr = SubstrateUtil.cast(this, String.class);
         return ImageSingletons.lookup(StringInternSupport.class).intern(thisStr);
     }
 }
@@ -249,7 +181,7 @@ final class Target_java_lang_Throwable {
     private Object backtrace;
 
     @Alias @RecomputeFieldValue(kind = Reset)//
-    private StackTraceElement[] stackTrace;
+    StackTraceElement[] stackTrace;
 
     @Alias String detailMessage;
 
@@ -266,15 +198,9 @@ final class Target_java_lang_Throwable {
     }
 
     @Substitute
-    @NeverInline("Prevent inlining in Truffle compilations")
+    @NeverInline("Starting a stack walk in the caller frame")
     private Object fillInStackTrace() {
-        Pointer sp = KnownIntrinsics.readCallerStackPointer();
-        CodePointer ip = KnownIntrinsics.readReturnAddress();
-
-        StackTraceBuilder stackTraceBuilder = new StackTraceBuilder();
-        JavaStackWalker.walkCurrentThread(sp, ip, stackTraceBuilder);
-        this.stackTrace = stackTraceBuilder.getTrace();
-
+        stackTrace = StackTraceUtils.getStackTrace(true, KnownIntrinsics.readCallerStackPointer());
         return this;
     }
 
@@ -288,6 +214,7 @@ final class Target_java_lang_Throwable {
     }
 
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     int getStackTraceDepth() {
         if (stackTrace != null) {
             return stackTrace.length;
@@ -296,6 +223,7 @@ final class Target_java_lang_Throwable {
     }
 
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     StackTraceElement getStackTraceElement(int index) {
         if (stackTrace == null) {
             throw new IndexOutOfBoundsException();
@@ -305,6 +233,7 @@ final class Target_java_lang_Throwable {
 }
 
 @TargetClass(java.lang.Runtime.class)
+@SuppressWarnings({"static-method"})
 final class Target_java_lang_Runtime {
 
     @Substitute
@@ -319,49 +248,26 @@ final class Target_java_lang_Runtime {
         load0(null, filename);
     }
 
+    @Substitute
+    public void runFinalization() {
+    }
+
+    @Substitute
+    @Platforms(InternalPlatform.PLATFORM_JNI.class)
+    private int availableProcessors() {
+        if (SubstrateOptions.MultiThreaded.getValue()) {
+            return Jvm.JVM_ActiveProcessorCount();
+        } else {
+            return 1;
+        }
+    }
+
     // Checkstyle: stop
     @Alias
     synchronized native void loadLibrary0(Class<?> fromClass, String libname);
 
     @Alias
     synchronized native void load0(Class<?> fromClass, String libname);
-    // Checkstyle: resume
-}
-
-/**
- * Provides replacement values for the {@link System#out}, {@link System#err}, and {@link System#in}
- * streams at run time. We want a fresh set of objects, so that any buffers filled during image
- * generation, as well as any redirection of the streams to new values, do not change the behavior
- * at run time.
- *
- * We use an {@link Feature.DuringSetupAccess#registerObjectReplacer object replacer} because the
- * streams can be cached in other instance and static fields in addition to the fields in
- * {@link System}. We do not know all these places, so we do now know where to place
- * {@link RecomputeFieldValue} annotations.
- */
-@AutomaticFeature
-class SystemFeature implements Feature {
-    private static final PrintStream newOut = new PrintStream(new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 128), true);
-    private static final PrintStream newErr = new PrintStream(new BufferedOutputStream(new FileOutputStream(FileDescriptor.err), 128), true);
-    private static final InputStream newIn = new BufferedInputStream(new FileInputStream(FileDescriptor.in));
-
-    @Override
-    public void duringSetup(DuringSetupAccess access) {
-        access.registerObjectReplacer(SystemFeature::replaceStreams);
-    }
-
-    // Checkstyle: stop
-    private static Object replaceStreams(Object object) {
-        if (object == System.out) {
-            return newOut;
-        } else if (object == System.err) {
-            return newErr;
-        } else if (object == System.in) {
-            return newIn;
-        } else {
-            return object;
-        }
-    }
     // Checkstyle: resume
 }
 
@@ -406,7 +312,7 @@ final class Target_java_lang_System {
         /* On the first invocation for an object create a new hash code. */
         hashCode = IdentityHashCodeSupport.generateHashCode();
 
-        if (!UnsafeAccess.UNSAFE.compareAndSwapInt(obj, hashCodeOffset, 0, hashCode)) {
+        if (!GraalUnsafeAccess.getUnsafe().compareAndSwapInt(obj, hashCodeOffset, 0, hashCode)) {
             /* We lost the race, so there now must be a hash code installed from another thread. */
             hashCode = ObjectAccess.readInt(obj, hashCodeOffsetWord);
         }
@@ -424,6 +330,11 @@ final class Target_java_lang_System {
     }
 
     @Substitute
+    private static void setProperties(Properties props) {
+        ImageSingletons.lookup(SystemPropertiesSupport.class).setProperties(props);
+    }
+
+    @Substitute
     public static String setProperty(String key, String value) {
         checkKey(key);
         return ImageSingletons.lookup(SystemPropertiesSupport.class).setProperty(key, value);
@@ -433,6 +344,12 @@ final class Target_java_lang_System {
     private static String getProperty(String key) {
         checkKey(key);
         return ImageSingletons.lookup(SystemPropertiesSupport.class).getProperty(key);
+    }
+
+    @Substitute
+    public static String clearProperty(String key) {
+        checkKey(key);
+        return ImageSingletons.lookup(SystemPropertiesSupport.class).clearProperty(key);
     }
 
     @Substitute
@@ -455,10 +372,28 @@ final class Target_java_lang_System {
         // Substituted because the original is caller-sensitive, which we don't support
         Runtime.getRuntime().load(filename);
     }
+
+    /*
+     * Note that there is no substitution for getSecurityManager, but instead getSecurityManager it
+     * is intrinsified in SubstrateGraphBuilderPlugins to always return null. This allows better
+     * constant folding of SecurityManager code already during static analysis.
+     */
+    @Substitute
+    private static void setSecurityManager(SecurityManager s) {
+        if (s != null) {
+            /*
+             * We deliberately treat this as a non-recoverable fatal error. We want to prevent bugs
+             * where an exception is silently ignored by an application and then necessary security
+             * checks are not in place.
+             */
+            throw VMError.shouldNotReachHere("Installing a SecurityManager is not yet supported");
+        }
+    }
+
 }
 
 @TargetClass(java.lang.StrictMath.class)
-@CLibrary("strictmath")
+@CLibrary(value = "strictmath", requireStatic = true)
 final class Target_java_lang_StrictMath {
     // Checkstyle: stop
 
@@ -589,6 +524,7 @@ final class Target_java_lang_ClassValue {
     }
 }
 
+@SuppressWarnings("deprecation")
 @TargetClass(java.lang.Compiler.class)
 final class Target_java_lang_Compiler {
     @Substitute
@@ -611,6 +547,20 @@ final class Target_java_lang_Compiler {
     }
 }
 
+final class IsSingleThreaded implements Predicate<Class<?>> {
+    @Override
+    public boolean test(Class<?> t) {
+        return !SubstrateOptions.MultiThreaded.getValue();
+    }
+}
+
+final class IsMultiThreaded implements Predicate<Class<?>> {
+    @Override
+    public boolean test(Class<?> t) {
+        return SubstrateOptions.MultiThreaded.getValue();
+    }
+}
+
 @TargetClass(className = "java.lang.ApplicationShutdownHooks")
 final class Target_java_lang_ApplicationShutdownHooks {
 
@@ -626,10 +576,13 @@ final class Target_java_lang_ApplicationShutdownHooks {
      * Instead of starting all the threads in {@link #hooks}, just run the {@link Runnable}s one
      * after another.
      *
-     * Run the hooks that were added via {@link RuntimeSupport#addShutdownHook(Runnable)}.
+     * We need this substitution in single-threaded mode, where we cannot start new threads but
+     * still want to support shutdown hooks. In multi-threaded mode, this substitution is not
+     * present, i.e., the original JDK code runs the shutdown hooks in separate threads.
      */
     @Substitute
-    static void runHooks() {
+    @TargetElement(name = "runHooks", onlyWith = IsSingleThreaded.class)
+    static void runHooksSingleThreaded() {
         /* Claim all the hooks. */
         final Collection<Thread> threads;
         /* Checkstyle: allow synchronization. */
@@ -654,10 +607,11 @@ final class Target_java_lang_ApplicationShutdownHooks {
                 ex.printStackTrace(Log.logStream());
             }
         }
-
-        /* Run all the hooks that were registered with RuntimeSupport. */
-        RuntimeSupport.getRuntimeSupport().executeShutdownHooks();
     }
+
+    @Alias
+    @TargetElement(name = "runHooks", onlyWith = IsMultiThreaded.class)
+    static native void runHooksMultiThreaded();
 
     /**
      * Interpose so that the first time someone adds an ApplicationShutdownHook, I set up a shutdown
@@ -707,7 +661,11 @@ class Util_java_lang_ApplicationShutdownHooks {
                                         new Runnable() {
                                             @Override
                                             public void run() {
-                                                Target_java_lang_ApplicationShutdownHooks.runHooks();
+                                                if (SubstrateOptions.MultiThreaded.getValue()) {
+                                                    Target_java_lang_ApplicationShutdownHooks.runHooksMultiThreaded();
+                                                } else {
+                                                    Target_java_lang_ApplicationShutdownHooks.runHooksSingleThreaded();
+                                                }
                                             }
                                         });
                     } catch (InternalError ie) {
@@ -730,47 +688,6 @@ class Util_java_lang_ApplicationShutdownHooks {
     }
 }
 
-@TargetClass(className = "java.lang.Shutdown")
-final class Target_java_lang_Shutdown {
-    /**
-     * Re-initialize the map of registered hooks, because any hooks registered during native image
-     * construction can not survive into the running image.
-     */
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias)//
-    static Runnable[] hooks = new Runnable[Util_java_lang_Shutdown.MAX_SYSTEM_HOOKS];
-
-    @Substitute
-    static void halt0(@SuppressWarnings("unused") int status) {
-        throw VMError.unsupportedFeature("java.lang.Shutdown.halt0(int)");
-    }
-
-    /* Wormhole for invoking java.lang.ref.Finalizer.runAllFinalizers */
-    @Substitute
-    static void runAllFinalizers() {
-        throw VMError.unsupportedFeature("java.lang.Shudown.runAllFinalizers()");
-    }
-
-    /**
-     * Invoked by the JNI DestroyJavaVM procedure when the last non-daemon thread has finished.
-     * Unlike the exit method, this method does not actually halt the VM.
-     */
-    @Alias
-    static native void shutdown();
-
-    @Alias
-    static native void add(int slot, boolean registerShutdownInProgress, Runnable hook);
-}
-
-/** Utility methods for Target_java_lang_Shutdown. */
-final class Util_java_lang_Shutdown {
-
-    /**
-     * Value *copied* from {@code java.lang.Shutdown.MAX_SYSTEM_HOOKS} so that the value can be used
-     * during image generation (@Alias values are only visible at run time).
-     */
-    static final int MAX_SYSTEM_HOOKS = 10;
-}
-
 @TargetClass(java.lang.Package.class)
 final class Target_java_lang_Package {
 
@@ -783,6 +700,7 @@ final class Target_java_lang_Package {
     }
 
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     static Package getPackage(Class<?> c) {
         if (c.isPrimitive() || c.isArray()) {
             /* Arrays and primitives don't have a package. */
@@ -796,15 +714,143 @@ final class Target_java_lang_Package {
             name = name.substring(0, i);
             Target_java_lang_Package pkg = new Target_java_lang_Package(name, null, null, null,
                             null, null, null, null, null);
-            return KnownIntrinsics.unsafeCast(pkg, Package.class);
+            return SubstrateUtil.cast(pkg, Package.class);
         } else {
             return null;
         }
     }
 }
 
+@TargetClass(className = "jdk.internal.loader.BootLoader", onlyWith = JDK11OrLater.class)
+final class Target_jdk_internal_loader_BootLoader {
+    @Substitute
+    static String[] getSystemPackageNames() {
+        return BootLoaderStaticUtils.packageNames.toArray(new String[BootLoaderStaticUtils.packageNames.size()]);
+    }
+
+    @Substitute
+    static Package getDefinedPackage(String name) {
+        if (BootLoaderStaticUtils.packageNames.contains(name.replace('.', '/'))) {
+            Target_java_lang_Package pkg = new Target_java_lang_Package(name, null, null, null,
+                            null, null, null, null, null);
+            return SubstrateUtil.cast(pkg, Package.class);
+        } else {
+            return null;
+        }
+    }
+}
+
+final class BootLoaderStaticUtils {
+    static final Set<String> packageNames;
+
+    static {
+        final Package[] packages = new Helper().getPackages();
+        Set<String> set = new HashSet<>();
+        for (Package pkg : packages) {
+            set.add(pkg.getName());
+        }
+        packageNames = set;
+    }
+
+    static final class Helper extends ClassLoader {
+        @Override
+        protected Package[] getPackages() {
+            return super.getPackages();
+        }
+    }
+}
+
+@AutomaticFeature
+class JavaLangSubstituteFeature11 implements Feature {
+    @Override
+    public void duringSetup(final DuringSetupAccess access) {
+        if (JavaVersionUtil.JAVA_SPEC >= 11) {
+            ImageSingletons.lookup(RuntimeClassInitializationSupport.class).initializeAtBuildTime(BootLoaderStaticUtils.class, "Needed for getPackage() to work");
+        }
+    }
+}
+
+@Platforms(InternalPlatform.PLATFORM_JNI.class)
+@AutomaticFeature
+class JavaLangSubstituteFeature implements Feature {
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        ImageSingletons.lookup(RuntimeClassInitializationSupport.class).rerunInitialization(access.findClassByName("java.io.RandomAccessFile"), "required for substitutions");
+        ImageSingletons.lookup(RuntimeClassInitializationSupport.class).rerunInitialization(access.findClassByName("java.lang.ProcessEnvironment"), "ensure runtime environment");
+    }
+
+    @Override
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        JNIRuntimeAccess.register(byte[].class); /* used by ProcessEnvironment.environ() */
+
+        try {
+            JNIRuntimeAccess.register(java.lang.String.class);
+            JNIRuntimeAccess.register(java.lang.System.class);
+            JNIRuntimeAccess.register(java.lang.System.class.getDeclaredMethod("getProperty", String.class));
+            JNIRuntimeAccess.register(java.nio.charset.Charset.class);
+            JNIRuntimeAccess.register(java.nio.charset.Charset.class.getDeclaredMethod("isSupported", String.class));
+            JNIRuntimeAccess.register(access.findClassByName("java.lang.String").getDeclaredConstructor(byte[].class, String.class));
+            JNIRuntimeAccess.register(access.findClassByName("java.lang.String").getDeclaredMethod("getBytes", String.class));
+            JNIRuntimeAccess.register(java.io.File.class);
+            JNIRuntimeAccess.register(java.io.File.class.getDeclaredField("path"));
+            JNIRuntimeAccess.register(java.io.FileOutputStream.class);
+            JNIRuntimeAccess.register(java.io.FileOutputStream.class.getDeclaredField("fd"));
+            JNIRuntimeAccess.register(java.io.FileInputStream.class);
+            JNIRuntimeAccess.register(java.io.FileInputStream.class.getDeclaredField("fd"));
+            JNIRuntimeAccess.register(java.io.FileDescriptor.class);
+            JNIRuntimeAccess.register(java.io.FileDescriptor.class.getDeclaredField("fd"));
+            if (JavaVersionUtil.JAVA_SPEC > 8) {
+                JNIRuntimeAccess.register(java.io.FileDescriptor.class.getDeclaredField("append"));
+            }
+            JNIRuntimeAccess.register(java.io.RandomAccessFile.class);
+            JNIRuntimeAccess.register(java.io.RandomAccessFile.class.getDeclaredField("fd"));
+            JNIRuntimeAccess.register(java.io.IOException.class);
+            JNIRuntimeAccess.register(java.io.IOException.class.getDeclaredConstructor(String.class));
+            if (JavaVersionUtil.JAVA_SPEC >= 11) {
+                JNIRuntimeAccess.register(java.util.zip.Inflater.class.getDeclaredField("inputConsumed"));
+                JNIRuntimeAccess.register(java.util.zip.Inflater.class.getDeclaredField("outputConsumed"));
+            }
+        } catch (NoSuchFieldException | NoSuchMethodException e) {
+            VMError.shouldNotReachHere("JavaLangSubstituteFeature: Error registering class or method: ", e);
+        }
+    }
+}
+
 /** Dummy class to have a class with the file's name. */
 public final class JavaLangSubstitutions {
+
+    public static class ClassLoaderSupport {
+        public Target_java_lang_ClassLoader systemClassLoader;
+
+        @Platforms(Platform.HOSTED_ONLY.class) public Map<ClassLoader, Target_java_lang_ClassLoader> classLoaders = Collections.synchronizedMap(new IdentityHashMap<>());
+
+        @Fold
+        public static ClassLoaderSupport getInstance() {
+            return ImageSingletons.lookup(ClassLoaderSupport.class);
+        }
+
+        public Target_java_lang_ClassLoader getOrCreate(ClassLoader classLoader) {
+            createClassLoaders(classLoader);
+            return classLoaders.get(classLoader);
+        }
+
+        public void createClassLoaders(ClassLoader loader) {
+            if (loader == null) {
+                return;
+            }
+            Map<ClassLoader, Target_java_lang_ClassLoader> loaders = ClassLoaderSupport.getInstance().classLoaders;
+            if (!loaders.containsKey(loader)) {
+                ClassLoader parent = loader.getParent();
+                if (parent != null) {
+                    createClassLoaders(parent);
+                    loaders.put(loader, new Target_java_lang_ClassLoader(loaders.get(parent)));
+                } else {
+                    loaders.put(loader, new Target_java_lang_ClassLoader());
+                }
+            }
+        }
+    }
+
     @Platforms(Platform.HOSTED_ONLY.class)//
     public static final class ClassValueSupport {
         final Map<ClassValue<?>, Map<Class<?>, Object>> values;

@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor.generator;
 
@@ -27,9 +45,15 @@ import static javax.lang.model.element.Modifier.PRIVATE;
 import static javax.lang.model.element.Modifier.STATIC;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
@@ -46,11 +70,14 @@ import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeAnnotationMirror;
 import com.oracle.truffle.dsl.processor.java.model.CodeAnnotationValue;
+import com.oracle.truffle.dsl.processor.java.model.CodeElement;
 import com.oracle.truffle.dsl.processor.java.model.CodeExecutableElement;
+import com.oracle.truffle.dsl.processor.java.model.CodeNames;
 import com.oracle.truffle.dsl.processor.java.model.CodeTree;
 import com.oracle.truffle.dsl.processor.java.model.CodeTreeBuilder;
 import com.oracle.truffle.dsl.processor.java.model.CodeTypeElement;
 import com.oracle.truffle.dsl.processor.java.model.CodeVariableElement;
+import com.oracle.truffle.dsl.processor.java.model.GeneratedElement;
 import com.oracle.truffle.dsl.processor.model.Template;
 import com.oracle.truffle.dsl.processor.model.TemplateMethod;
 
@@ -63,10 +90,48 @@ public class GeneratorUtils {
         return builder.build();
     }
 
-    static CodeExecutableElement createConstructorUsingFields(Set<Modifier> modifiers, CodeTypeElement clazz) {
+    public static CodeTree createTransferToInterpreter() {
+        ProcessorContext context = ProcessorContext.getInstance();
+        CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
+        builder.startStatement().startStaticCall(context.getType(CompilerDirectives.class), "transferToInterpreter").end().end();
+        return builder.build();
+    }
+
+    public static CodeExecutableElement createConstructorUsingFields(Set<Modifier> modifiers, CodeTypeElement clazz) {
         TypeElement superClass = fromTypeMirror(clazz.getSuperclass());
         ExecutableElement constructor = findConstructor(superClass);
         return createConstructorUsingFields(modifiers, clazz, constructor);
+    }
+
+    public static void mergeSupressWarnings(CodeElement<?> element, String... addWarnings) {
+        List<String> mergedWarnings = Arrays.asList(addWarnings);
+        AnnotationMirror currentWarnings = ElementUtils.findAnnotationMirror(element, SuppressWarnings.class);
+        if (currentWarnings != null) {
+            List<String> currentValues = ElementUtils.getAnnotationValueList(String.class, currentWarnings, "value");
+            if (currentValues != null && !currentValues.isEmpty()) {
+                Set<String> warnings = new LinkedHashSet<>(mergedWarnings);
+                warnings.addAll(currentValues);
+                mergedWarnings = warnings.stream().collect(Collectors.toList());
+            }
+        }
+        DeclaredType suppressWarnings = ProcessorContext.getInstance().getDeclaredType(SuppressWarnings.class);
+        CodeAnnotationMirror mirror = new CodeAnnotationMirror(suppressWarnings);
+        if (mergedWarnings.size() == 1) {
+            mirror.setElementValue(mirror.findExecutableElement("value"), new CodeAnnotationValue(mergedWarnings.iterator().next()));
+        } else {
+            List<AnnotationValue> values = new ArrayList<>();
+            for (String warning : mergedWarnings) {
+                values.add(new CodeAnnotationValue(warning));
+            }
+            mirror.setElementValue(mirror.findExecutableElement("value"), new CodeAnnotationValue(values));
+        }
+
+        if (currentWarnings != null) {
+            ((CodeElement<?>) element).getAnnotationMirrors().remove(currentWarnings);
+        }
+        if (!mergedWarnings.isEmpty()) {
+            ((CodeElement<?>) element).getAnnotationMirrors().add(mirror);
+        }
     }
 
     public static CodeExecutableElement createConstructorUsingFields(Set<Modifier> modifiers, CodeTypeElement clazz, ExecutableElement constructor) {
@@ -109,12 +174,31 @@ public class GeneratorUtils {
         }
     }
 
-    static CodeTypeElement createClass(Template sourceModel, TemplateMethod sourceMethod, Set<Modifier> modifiers, String simpleName, TypeMirror superType) {
+    public static CodeExecutableElement createSuperConstructor(TypeElement type, ExecutableElement element) {
+        if (element.getModifiers().contains(Modifier.PRIVATE)) {
+            return null;
+        }
+        CodeExecutableElement executable = CodeExecutableElement.clone(element);
+        executable.setReturnType(null);
+        executable.setSimpleName(CodeNames.of(type.getSimpleName().toString()));
+        CodeTreeBuilder b = executable.createBuilder();
+        b.startStatement();
+        b.startSuperCall();
+        for (VariableElement v : element.getParameters()) {
+            b.string(v.getSimpleName().toString());
+        }
+        b.end();
+        b.end();
+
+        return executable;
+    }
+
+    public static CodeTypeElement createClass(Template sourceModel, TemplateMethod sourceMethod, Set<Modifier> modifiers, String simpleName, TypeMirror superType) {
         TypeElement templateType = sourceModel.getTemplateType();
 
         ProcessorContext context = ProcessorContext.getInstance();
 
-        PackageElement pack = context.getEnvironment().getElementUtils().getPackageOf(templateType);
+        PackageElement pack = ElementUtils.findPackageElement(templateType);
         CodeTypeElement clazz = new CodeTypeElement(modifiers, ElementKind.CLASS, pack, simpleName);
         TypeMirror resolvedSuperType = superType;
         if (resolvedSuperType == null) {
@@ -123,13 +207,28 @@ public class GeneratorUtils {
         clazz.setSuperClass(resolvedSuperType);
 
         CodeAnnotationMirror generatedByAnnotation = new CodeAnnotationMirror((DeclaredType) context.getType(GeneratedBy.class));
-        generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("value"), new CodeAnnotationValue(templateType.asType()));
-        if (sourceMethod != null && sourceMethod.getMethod() != null) {
-            generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("methodName"), new CodeAnnotationValue(sourceMethod.createReferenceName()));
+        Element generatedByElement = templateType;
+        while (generatedByElement instanceof GeneratedElement) {
+            generatedByElement = generatedByElement.getEnclosingElement();
         }
-
-        clazz.addAnnotationMirror(generatedByAnnotation);
+        if (generatedByElement instanceof TypeElement) {
+            generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("value"), new CodeAnnotationValue(generatedByElement.asType()));
+            if (sourceMethod != null) {
+                generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("methodName"), new CodeAnnotationValue(ElementUtils.createReferenceName(sourceMethod.getMethod())));
+            }
+            clazz.addAnnotationMirror(generatedByAnnotation);
+        }
         return clazz;
+    }
+
+    public static void addGeneratedBy(ProcessorContext context, CodeTypeElement generatedType, TypeElement generatedByType) {
+        DeclaredType generatedBy = (DeclaredType) context.getType(GeneratedBy.class);
+        // only do this if generatedBy is on the classpath.
+        if (generatedBy != null) {
+            CodeAnnotationMirror generatedByAnnotation = new CodeAnnotationMirror(generatedBy);
+            generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("value"), new CodeAnnotationValue(generatedByType.asType()));
+            generatedType.addAnnotationMirror(generatedByAnnotation);
+        }
     }
 
     static List<ExecutableElement> findUserConstructors(TypeMirror nodeType) {
@@ -156,7 +255,7 @@ public class GeneratorUtils {
             return false;
         }
         VariableElement var = element.getParameters().get(0);
-        TypeElement enclosingType = ElementUtils.findNearestEnclosingType(var);
+        TypeElement enclosingType = ElementUtils.findNearestEnclosingType(var).orElseThrow(AssertionError::new);
         if (ElementUtils.typeEquals(var.asType(), enclosingType.asType())) {
             return true;
         }
@@ -172,6 +271,14 @@ public class GeneratorUtils {
             }
         }
         return false;
+    }
+
+    public static CodeExecutableElement override(Class<?> type, String methodName) {
+        ExecutableElement method = ElementUtils.findMethod(type, methodName);
+        if (method == null) {
+            return null;
+        }
+        return CodeExecutableElement.clone(method);
     }
 
 }

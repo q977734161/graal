@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,31 +24,35 @@
  */
 package com.oracle.svm.hosted;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.function.Consumer;
 
+import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.options.Option;
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
+import com.oracle.svm.core.option.APIOption;
 import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.IsInConfigurationAccessImpl;
+import com.oracle.svm.util.ReflectionUtil;
+import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
 
 /**
  * Handles the registration and iterations of {@link Feature features}.
  */
+@SuppressWarnings("deprecation")
 public class FeatureHandler {
 
     public static class Options {
-        @Option(help = "Comma-separate list of fully qualified Feature implementation classes")//
-        public static final HostedOptionKey<String> Features = new HostedOptionKey<>("");
+        @APIOption(name = "features") //
+        @Option(help = "A comma-separated list of fully qualified Feature implementation classes")//
+        public static final HostedOptionKey<String[]> Features = new HostedOptionKey<>(null);
     }
 
     private final ArrayList<Feature> featureInstances = new ArrayList<>();
@@ -66,21 +72,18 @@ public class FeatureHandler {
         }
     }
 
-    public void registerFeatures(ImageClassLoader loader) {
-        IsInConfigurationAccessImpl access = new IsInConfigurationAccessImpl(this, loader);
+    public void registerFeatures(ImageClassLoader loader, DebugContext debug) {
+        IsInConfigurationAccessImpl access = new IsInConfigurationAccessImpl(this, loader, debug);
 
-        for (Class<?> automaticFeature : loader.findAnnotatedClasses(AutomaticFeature.class)) {
+        for (Class<?> automaticFeature : loader.findAnnotatedClasses(AutomaticFeature.class, true)) {
             registerFeature(automaticFeature, access);
         }
 
-        String[] featureNames = Options.Features.getValue().split(",");
-        for (String featureName : featureNames) {
-            if (!featureName.isEmpty()) {
-                try {
-                    registerFeature(Class.forName(featureName, true, loader.getClassLoader()), access);
-                } catch (ClassNotFoundException e) {
-                    throw UserError.abort("feature " + featureName + " class not found on the classpath. Ensure that the name is correct and that the class is on the classpath.");
-                }
+        for (String featureName : OptionUtils.flatten(",", Options.Features.getValue())) {
+            try {
+                registerFeature(Class.forName(featureName, true, loader.getClassLoader()), access);
+            } catch (ClassNotFoundException e) {
+                throw UserError.abort("feature " + featureName + " class not found on the classpath. Ensure that the name is correct and that the class is on the classpath.");
             }
         }
     }
@@ -107,14 +110,13 @@ public class FeatureHandler {
 
         Feature feature;
         try {
-            Constructor<?> constructor = featureClass.getDeclaredConstructor();
-            constructor.setAccessible(true);
-            feature = (Feature) constructor.newInstance();
-            if (!feature.isInConfiguration(access)) {
-                return;
-            }
-        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException ex) {
-            throw VMError.shouldNotReachHere(ex);
+            feature = (Feature) ReflectionUtil.newInstance(featureClass);
+        } catch (ReflectionUtilError ex) {
+            throw UserError.abort("Error instantiating Feature class " + featureClass.getTypeName() + ". Ensure the class is not abstract and has a no-argument constructor.", ex.getCause());
+        }
+
+        if (!feature.isInConfiguration(access)) {
+            return;
         }
 
         /*

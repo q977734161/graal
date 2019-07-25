@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,26 +27,27 @@ package com.oracle.svm.core.thread;
 import java.util.Collections;
 import java.util.List;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
-import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
+import com.oracle.svm.core.thread.Safepoint.SafepointRequestValues;
 import com.oracle.svm.core.util.VMError;
 
 /** A multiplex of VMOperation queues. */
 public final class VMOperationControl {
 
     /** Is this thread the owner of the VMOperation lock. */
-    private static final FastThreadLocalInt isLockOwner = FastThreadLocalFactory.createInt();
+    private static IsolateThread lockOwner = null;
 
     /**
      * The lists of pending VMOperations of various kinds.
@@ -94,6 +97,7 @@ public final class VMOperationControl {
         }
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     VMOperation getInProgress() {
         return inProgress;
     }
@@ -132,7 +136,12 @@ public final class VMOperationControl {
                  * that we can restore it below after releasing the lock again.
                  */
                 callbackTime = System.nanoTime();
-                callbackValue = Safepoint.getSafepointRequested(CEntryPointContext.getCurrentIsolateThread());
+                callbackValue = Safepoint.getSafepointRequested(CurrentIsolate.getCurrentThread());
+                /*
+                 * Reset the counter so that we do not run into a callback immediately while
+                 * acquiring the lock.
+                 */
+                Safepoint.setSafepointRequested(CurrentIsolate.getCurrentThread(), SafepointRequestValues.RESET);
             }
 
             getVMOperationControl().acquireLock();
@@ -237,19 +246,19 @@ public final class VMOperationControl {
 
     @Uninterruptible(reason = "Called from Uninterruptible code", mayBeInlined = true)
     protected static boolean isLockOwner() {
-        return isLockOwner.get() == 1;
+        return lockOwner == CurrentIsolate.getCurrentThread();
     }
 
     /** Note that this thread is the owner of the VMOperation lock. */
     private static void setLockOwner() {
-        assert (!isLockOwner()) : "VMOperationControl.setOwner, but already owner.";
-        isLockOwner.set(1);
+        assert lockOwner.isNull() : "VMOperationControl.setOwner, but already owner.";
+        lockOwner = CurrentIsolate.getCurrentThread();
     }
 
     /** Note that this thread is not the owner of the VMOperation lock. */
     private static void unsetLockOwner() {
         assert isLockOwner() : "VMOperationControl.unsetOwner, but not owner.";
-        isLockOwner.set(0);
+        lockOwner = WordFactory.nullPointer();
     }
 
     /** Check if it is okay for this thread to block. */

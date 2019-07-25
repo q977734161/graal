@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,16 +49,15 @@ import com.oracle.truffle.api.dsl.TypeCheck;
 import com.oracle.truffle.api.dsl.TypeSystem;
 import com.oracle.truffle.sl.SLLanguage;
 import com.oracle.truffle.sl.runtime.SLBigNumber;
-import com.oracle.truffle.sl.runtime.SLFunction;
 import com.oracle.truffle.sl.runtime.SLNull;
 
 /**
  * The type system of SL, as explained in {@link SLLanguage}. Based on the {@link TypeSystem}
  * annotation, the Truffle DSL generates the subclass {@link SLTypesGen} with type test and type
- * conversion methods for all types. In this class, we only cover types where the automatically
+ * conversion methods for some types. In this class, we only cover types where the automatically
  * generated ones would not be sufficient.
  */
-@TypeSystem({long.class, SLBigNumber.class, boolean.class, String.class, SLFunction.class, SLNull.class})
+@TypeSystem({long.class, boolean.class})
 public abstract class SLTypes {
 
     /**

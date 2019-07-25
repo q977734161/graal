@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,7 +55,7 @@ import static com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
  * the priority of the alternatives: if matching with an earlier alternative is possible, that match
  * result is preferred to those from later alternatives.
  */
-public class Group extends Term implements RegexASTVisitorIterable {
+public final class Group extends Term implements RegexASTVisitorIterable {
 
     private final ArrayList<Sequence> alternatives = new ArrayList<>();
     private short visitorIterationIndex = 0;
@@ -265,8 +265,8 @@ public class Group extends Term implements RegexASTVisitorIterable {
 
     /**
      * Returns the {@link SourceSection} corresponding to this group's opening bracket and modifier
-     * symbols (like "?:", "?=", ...), or <code>null</code> if this group has no corresponding
-     * source (this is the case for groups inserted by the parser when expanding quantifiers etc.).
+     * symbols (like "?:", "?=", ...), or {@code null} if this group has no corresponding source
+     * (this is the case for groups inserted by the parser when expanding quantifiers etc.).
      */
     public SourceSection getSourceSectionBegin() {
         return sourceSectionBegin;
@@ -278,8 +278,8 @@ public class Group extends Term implements RegexASTVisitorIterable {
 
     /**
      * Returns the {@link SourceSection} corresponding to this group's closing bracket, or
-     * <code>null</code> if this group has no corresponding source (this is the case for groups
-     * inserted by the parser when expanding quantifiers etc.).
+     * {@code null} if this group has no corresponding source (this is the case for groups inserted
+     * by the parser when expanding quantifiers etc.).
      */
     public SourceSection getSourceSectionEnd() {
         return sourceSectionEnd;

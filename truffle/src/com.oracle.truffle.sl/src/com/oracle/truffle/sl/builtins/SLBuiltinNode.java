@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,7 +46,6 @@ import com.oracle.truffle.api.dsl.UnsupportedSpecializationException;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.sl.SLException;
-import com.oracle.truffle.sl.SLLanguage;
 import com.oracle.truffle.sl.nodes.SLExpressionNode;
 import com.oracle.truffle.sl.runtime.SLContext;
 import com.oracle.truffle.sl.runtime.SLFunctionRegistry;
@@ -62,10 +61,6 @@ import com.oracle.truffle.sl.runtime.SLFunctionRegistry;
 @NodeChild(value = "arguments", type = SLExpressionNode[].class)
 @GenerateNodeFactory
 public abstract class SLBuiltinNode extends SLExpressionNode {
-
-    public final SLContext getContext() {
-        return getRootNode().getLanguage(SLLanguage.class).getContextReference().get();
-    }
 
     @Override
     public final Object executeGeneric(VirtualFrame frame) {

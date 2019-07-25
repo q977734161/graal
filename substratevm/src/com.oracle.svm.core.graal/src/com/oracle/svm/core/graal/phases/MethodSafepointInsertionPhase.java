@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,6 +29,7 @@ import org.graalvm.compiler.nodes.SafepointNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.phases.Phase;
 import org.graalvm.nativeimage.c.function.CFunction;
+import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.meta.SharedMethod;
@@ -53,7 +56,7 @@ public class MethodSafepointInsertionPhase extends Phase {
              */
             return;
         }
-        if (graph.method().getAnnotation(CFunction.class) != null) {
+        if (graph.method().getAnnotation(CFunction.class) != null || graph.method().getAnnotation(InvokeCFunctionPointer.class) != null) {
             /*
              * If a method transfers from Java to C, then the return transition (if any) contains
              * the safepoint test and one is not needed at the return of the transferring method.

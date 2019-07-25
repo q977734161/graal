@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,16 +25,18 @@
 package com.oracle.truffle.regex.tregex.nfa;
 
 import com.oracle.truffle.regex.tregex.automaton.StateTransitionCanonicalizer;
+import com.oracle.truffle.regex.tregex.automaton.TransitionBuilder;
 
-public class ASTTransitionCanonicalizer extends StateTransitionCanonicalizer<ASTTransitionSet, ASTTransitionSetBuilder> {
+public class ASTTransitionCanonicalizer extends StateTransitionCanonicalizer<ASTTransitionSet, TransitionBuilder<ASTTransitionSet>> {
 
     @Override
-    protected boolean isSameTargetMergeAllowed(ASTTransitionSetBuilder a, ASTTransitionSetBuilder b) {
+    protected boolean isSameTargetMergeAllowed(TransitionBuilder<ASTTransitionSet> a, TransitionBuilder<ASTTransitionSet> b) {
         return true;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
-    protected ASTTransitionSetBuilder[] createResultArray(int size) {
-        return new ASTTransitionSetBuilder[size];
+    protected TransitionBuilder<ASTTransitionSet>[] createResultArray(int size) {
+        return new TransitionBuilder[size];
     }
 }

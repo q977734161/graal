@@ -27,51 +27,174 @@
 
 import mx
 import mx_vm
+import mx_subst
+import mx_unittest
+
+import functools
 from mx_gate import Task
 
-import re
-import subprocess
-from os.path import join
+from os import environ
+from os.path import join, exists, dirname
+from tempfile import NamedTemporaryFile
+from contextlib import contextmanager
 
 _suite = mx.suite('vm')
-
+env_tests = []
 
 class VmGateTasks:
-    graal = 'graal'
-    graal_js = 'graal-js'
+    compiler = 'compiler'
+    substratevm = 'substratevm'
+    sulong = 'sulong'
+    graal_js_all = 'graal-js'
+    graal_js_smoke = 'graal-js-smoke'
+    graal_js_tests = 'graal-js-tests'
+    graal_js_tests_compiled = 'graal-js-tests-compiled'
+    graal_nodejs = 'graal-nodejs'
+    truffleruby = 'truffleruby'
+    ruby = 'ruby'
+    python = 'python'
+    fastr = 'fastr'
+    graalpython = 'graalpython'
+    integration = 'integration'
+    tools = 'tools'
+    libgraal = 'libgraal'
 
 
-_openjdk_version_regex = re.compile(r'openjdk version \"[0-9_.]+\"\nOpenJDK Runtime Environment \(build [0-9a-z_\-.]+\)\nGraalVM (?P<graalvm_version>[0-9a-z_\-.]+) \(build [0-9a-z\-.]+, mixed mode\)')
-_anyjdk_version_regex = re.compile(r'(openjdk|java) version \"[0-9_.]+\"\n(OpenJDK|Java\(TM\) SE) Runtime Environment \(build [0-9a-z_\-.]+\)\nGraalVM (?P<graalvm_version>[0-9a-z_\-.]+) \(build [0-9a-z\-.]+, mixed mode\)')
+def gate_body(args, tasks):
+    with Task('Vm: Basic GraalVM Tests', tasks, tags=[VmGateTasks.compiler]) as t:
+        if t and mx_vm.has_component('GraalVM compiler'):
+            # 1. the build must be a GraalVM
+            # 2. the build must be JVMCI-enabled since the 'GraalVM compiler' component is registered
+            mx_vm.check_versions(mx_vm.graalvm_output(), graalvm_version_regex=mx_vm.graalvm_version_regex, expect_graalvm=True, check_jvmci=True)
 
-
-def gate(args, tasks):
-    with Task('Vm: Basic GraalVM Tests', tasks, tags=[VmGateTasks.graal]) as t:
+    with Task('Vm: GraalVM dist names', tasks, tags=[VmGateTasks.integration]) as t:
         if t:
-            _java = join(mx_vm.graalvm_output(), 'bin', 'java')
+            for suite, env_file_name, graalvm_dist_name in env_tests:
+                out = mx.LinesOutputCapture()
+                mx.run_mx(['--no-warning', '--env', env_file_name, 'graalvm-dist-name'], suite, out=out, err=out, env={})
+                mx.log("Checking that the env file '{}' in suite '{}' produces a GraalVM distribution named '{}'".format(env_file_name, suite.name, graalvm_dist_name))
+                if len(out.lines) != 1 or out.lines[0] != graalvm_dist_name:
+                    mx.abort("Unexpected GraalVM dist name for env file '{}' in suite '{}'.\nExpected: '{}', actual: '{}'.\nDid you forget to update the registration of the GraalVM config?".format(env_file_name, suite.name, graalvm_dist_name, '\n'.join(out.lines)))
 
-            _out = mx.OutputCapture()
-            if mx.run([_java, '-XX:+JVMCIPrintProperties'], nonZeroIsFatal=False, out=_out, err=_out):
-                mx.log_error(_out.data)
-                mx.abort('The GraalVM image is not built with a JVMCI-enabled JDK, it misses `-XX:+JVMCIPrintProperties`.')
+    if mx_vm.has_component('LibGraal'):
+        libgraal_location = mx_vm.get_native_image_locations('LibGraal', 'jvmcicompiler')
+        if libgraal_location is None:
+            mx.warn("Skipping libgraal tests: no library enabled in the LibGraal component")
+        else:
+            extra_vm_arguments = ['-XX:+UseJVMCICompiler', '-XX:+UseJVMCINativeLibrary', '-XX:JVMCILibPath=' + dirname(libgraal_location)]
+            if args.extra_vm_argument:
+                extra_vm_arguments += args.extra_vm_argument
+            import mx_compiler
 
-            _out = subprocess.check_output([_java, '-version'], stderr=subprocess.STDOUT)
-            if args.strict_mode:
-                # A full open-source build should be built with an open-source JDK
-                _version_regex = _openjdk_version_regex
-            else:
-                # Allow Oracle JDK in non-strict mode as it is common on developer machines
-                _version_regex = _anyjdk_version_regex
-            match = _version_regex.match(_out)
-            if match is None:
-                if args.strict_mode and _anyjdk_version_regex.match(_out):
-                    mx.abort("In --strict-mode, GraalVM must be built with OpenJDK")
-                else:
-                    mx.abort('Unexpected version string:\n{}Does not match:\n{}'.format(_out, _version_regex.pattern))
-            elif match.group('graalvm_version') != _suite.release_version():
-                mx.abort("Wrong GraalVM version in -version string: got '{}', expected '{}'".format(match.group('graalvm_version'), _suite.release_version()))
+            # run avrora on the GraalVM binary itself
+            with Task('LibGraal Compiler:GraalVM DaCapo-avrora', tasks, tags=[VmGateTasks.libgraal]) as t:
+                if t:
+                    mx.run([join(mx_vm.graalvm_home(), 'bin', 'java'), '-XX:+UseJVMCICompiler', '-XX:+UseJVMCINativeLibrary', '-jar', mx.library('DACAPO').get_path(True), 'avrora'])
 
-    if mx_vm.has_component('js'):
-        with Task('Vm: Graal.js tests', tasks, tags=[VmGateTasks.graal_js]) as t:
-            if t:
-                pass
+            with Task('LibGraal Compiler:CTW', tasks, tags=[VmGateTasks.libgraal]) as t:
+                if t:
+                    mx_compiler.ctw([
+                            '-DCompileTheWorld.Config=Inline=false CompilationFailureAction=ExitVM', '-esa', '-XX:+EnableJVMCI',
+                            '-DCompileTheWorld.MultiThreaded=true', '-Dgraal.InlineDuringParsing=false', '-Dgraal.TrackNodeSourcePosition=true',
+                            '-DCompileTheWorld.Verbose=false', '-XX:ReservedCodeCacheSize=300m',
+                        ], extra_vm_arguments)
+
+            mx_compiler.compiler_gate_benchmark_runner(tasks, extra_vm_arguments, prefix='LibGraal Compiler:')
+
+            with Task('LibGraal Truffle:unittest', tasks, tags=[VmGateTasks.libgraal]) as t:
+                if t:
+                    def _unittest_config_participant(config):
+                        vmArgs, mainClass, mainClassArgs = config
+                        def is_truffle_fallback(arg):
+                            fallback_args = [
+                                "-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime",
+                                "-Dgraalvm.ForcePolyglotInvalid=true"
+                            ]
+                            return arg in fallback_args
+                        newVmArgs = [arg for arg in vmArgs if not is_truffle_fallback(arg)]
+                        return (newVmArgs, mainClass, mainClassArgs)
+                    mx_unittest.add_config_participant(_unittest_config_participant)
+                    excluded_tests = environ.get("TEST_LIBGRAAL_EXCLUDE")
+                    if excluded_tests:
+                        with NamedTemporaryFile(prefix='blacklist.', mode='w', delete=False) as fp:
+                            fp.file.writelines([l + '\n' for l in excluded_tests.split()])
+                            unittest_args = ["--blacklist", fp.name]
+                    else:
+                        unittest_args = []
+                    unittest_args = unittest_args + ["--enable-timing", "--verbose"]
+                    mx_unittest.unittest(unittest_args + extra_vm_arguments + ["-Dgraal.TruffleCompileImmediately=true", "-Dgraal.TruffleBackgroundCompilation=false", "truffle"])
+    else:
+        mx.warn("Skipping libgraal tests: component not enabled")
+
+    gate_substratevm(tasks)
+    gate_sulong(tasks)
+    gate_ruby(tasks)
+    gate_python(tasks)
+
+def graalvm_svm():
+    """
+    Gives access to image building withing the GraalVM release. Requires dynamic import of substratevm.
+    """
+    native_image_cmd = join(mx_vm.graalvm_output(), 'bin', 'native-image')
+    svm = mx.suite('substratevm')
+    if not exists(native_image_cmd) or not svm:
+        mx.abort("Image building not accessible in GraalVM {}. Build GraalVM with native-image support".format(mx_vm.graalvm_dist_name()))
+    @contextmanager
+    def native_image_context(common_args=None, hosted_assertions=True):
+        with svm.extensions.native_image_context(common_args, hosted_assertions, native_image_cmd=native_image_cmd) as native_image:
+            yield native_image
+    return native_image_context, svm.extensions
+
+def gate_substratevm(tasks):
+    with Task('Run Truffle host interop tests on SVM', tasks, tags=[VmGateTasks.substratevm]) as t:
+        if t:
+            tests = ['ValueHostInteropTest', 'ValueHostConversionTest']
+            truffle_no_compilation = ['--initialize-at-build-time', '--macro:truffle',
+                                      '-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime']
+            truffle_dir = mx.suite('truffle').dir
+            args = ['--build-args'] + truffle_no_compilation + [
+                '-H:Features=com.oracle.truffle.api.test.polyglot.RegisterTestClassesForReflectionFeature',
+                '-H:ReflectionConfigurationFiles=' + truffle_dir + '/src/com.oracle.truffle.api.test/src/com/oracle/truffle/api/test/polyglot/reflection.json',
+                '-H:DynamicProxyConfigurationFiles=' + truffle_dir + '/src/com.oracle.truffle.api.test/src/com/oracle/truffle/api/test/polyglot/proxys.json',
+                '--'
+            ] + tests
+
+            native_image_context, svm = graalvm_svm()
+            with native_image_context(svm.IMAGE_ASSERTION_FLAGS) as native_image:
+                svm._native_unittest(native_image, args)
+
+def gate_sulong(tasks):
+    with Task('Run SulongSuite tests as native-image', tasks, tags=[VmGateTasks.sulong]) as t:
+        if t:
+            lli = join(mx_vm.graalvm_output(), 'bin', 'lli')
+            sulong = mx.suite('sulong')
+            sulong.extensions.testLLVMImage(lli, libPath=False, unittestArgs=['--enable-timing'])
+
+    with Task('Run Sulong interop tests as native-image', tasks, tags=[VmGateTasks.sulong]) as t:
+        if t:
+            sulong = mx.suite('sulong')
+            native_image_context, svm = graalvm_svm()
+            with native_image_context(svm.IMAGE_ASSERTION_FLAGS) as native_image:
+                # TODO Use mx_vm.get_final_graalvm_distribution().find_single_source_location to rewire SULONG_HOME
+                sulong_libs = join(mx_vm.graalvm_output(), 'jre', 'languages', 'llvm')
+                def distribution_paths(dname):
+                    path_substitutions = {
+                        'SULONG_HOME': sulong_libs
+                    }
+                    return path_substitutions.get(dname, mx._get_dependency_path(dname))
+                mx_subst.path_substitutions.register_with_arg('path', distribution_paths)
+                sulong.extensions.runLLVMUnittests(functools.partial(svm._native_unittest, native_image))
+
+def gate_ruby(tasks):
+    with Task('Ruby', tasks, tags=[VmGateTasks.ruby]) as t:
+        if t:
+            ruby = join(mx_vm.graalvm_output(), 'jre', 'languages', 'ruby', 'bin', 'truffleruby')
+            truffleruby_suite = mx.suite('truffleruby')
+            truffleruby_suite.extensions.ruby_testdownstream_aot([ruby, 'spec', 'release'])
+
+def gate_python(tasks):
+    with Task('Python', tasks, tags=[VmGateTasks.python]) as t:
+        if t:
+            python_svm_image_path = join(mx_vm.graalvm_output(), 'bin', 'graalpython')
+            python_suite = mx.suite("graalpython")
+            python_suite.extensions.run_python_unittests(python_svm_image_path)

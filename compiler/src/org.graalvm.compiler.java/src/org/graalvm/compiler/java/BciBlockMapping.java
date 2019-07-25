@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,6 +26,7 @@ package org.graalvm.compiler.java;
 
 import static org.graalvm.compiler.bytecode.Bytecodes.AALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.AASTORE;
+import static org.graalvm.compiler.bytecode.Bytecodes.ANEWARRAY;
 import static org.graalvm.compiler.bytecode.Bytecodes.ARETURN;
 import static org.graalvm.compiler.bytecode.Bytecodes.ARRAYLENGTH;
 import static org.graalvm.compiler.bytecode.Bytecodes.ATHROW;
@@ -31,6 +34,7 @@ import static org.graalvm.compiler.bytecode.Bytecodes.BALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.BASTORE;
 import static org.graalvm.compiler.bytecode.Bytecodes.CALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.CASTORE;
+import static org.graalvm.compiler.bytecode.Bytecodes.CHECKCAST;
 import static org.graalvm.compiler.bytecode.Bytecodes.DALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.DASTORE;
 import static org.graalvm.compiler.bytecode.Bytecodes.DRETURN;
@@ -43,6 +47,7 @@ import static org.graalvm.compiler.bytecode.Bytecodes.GOTO;
 import static org.graalvm.compiler.bytecode.Bytecodes.GOTO_W;
 import static org.graalvm.compiler.bytecode.Bytecodes.IALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.IASTORE;
+import static org.graalvm.compiler.bytecode.Bytecodes.IDIV;
 import static org.graalvm.compiler.bytecode.Bytecodes.IFEQ;
 import static org.graalvm.compiler.bytecode.Bytecodes.IFGE;
 import static org.graalvm.compiler.bytecode.Bytecodes.IFGT;
@@ -64,13 +69,21 @@ import static org.graalvm.compiler.bytecode.Bytecodes.INVOKEINTERFACE;
 import static org.graalvm.compiler.bytecode.Bytecodes.INVOKESPECIAL;
 import static org.graalvm.compiler.bytecode.Bytecodes.INVOKESTATIC;
 import static org.graalvm.compiler.bytecode.Bytecodes.INVOKEVIRTUAL;
+import static org.graalvm.compiler.bytecode.Bytecodes.IREM;
 import static org.graalvm.compiler.bytecode.Bytecodes.IRETURN;
 import static org.graalvm.compiler.bytecode.Bytecodes.JSR;
 import static org.graalvm.compiler.bytecode.Bytecodes.JSR_W;
 import static org.graalvm.compiler.bytecode.Bytecodes.LALOAD;
 import static org.graalvm.compiler.bytecode.Bytecodes.LASTORE;
+import static org.graalvm.compiler.bytecode.Bytecodes.LDC;
+import static org.graalvm.compiler.bytecode.Bytecodes.LDC2_W;
+import static org.graalvm.compiler.bytecode.Bytecodes.LDC_W;
+import static org.graalvm.compiler.bytecode.Bytecodes.LDIV;
 import static org.graalvm.compiler.bytecode.Bytecodes.LOOKUPSWITCH;
+import static org.graalvm.compiler.bytecode.Bytecodes.LREM;
 import static org.graalvm.compiler.bytecode.Bytecodes.LRETURN;
+import static org.graalvm.compiler.bytecode.Bytecodes.MULTIANEWARRAY;
+import static org.graalvm.compiler.bytecode.Bytecodes.NEW;
 import static org.graalvm.compiler.bytecode.Bytecodes.PUTFIELD;
 import static org.graalvm.compiler.bytecode.Bytecodes.PUTSTATIC;
 import static org.graalvm.compiler.bytecode.Bytecodes.RET;
@@ -80,6 +93,7 @@ import static org.graalvm.compiler.bytecode.Bytecodes.SASTORE;
 import static org.graalvm.compiler.bytecode.Bytecodes.TABLESWITCH;
 import static org.graalvm.compiler.core.common.GraalOptions.SupportJsrBytecodes;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -104,7 +118,7 @@ import jdk.vm.ci.meta.ExceptionHandler;
 
 /**
  * Builds a mapping between bytecodes and basic blocks and builds a conservative control flow graph
- * (CFG). It makes one linear passes over the bytecodes to build the CFG where it detects block
+ * (CFG). It makes one linear pass over the bytecodes to build the CFG where it detects block
  * headers and connects them.
  * <p>
  * It also creates exception dispatch blocks for exception handling. These blocks are between a
@@ -464,6 +478,18 @@ public final class BciBlockMapping {
         }
     }
 
+    private static final class TraversalStep {
+        private BciBlock block;
+        private int currentSuccessorIndex;
+        private long loops;
+
+        private TraversalStep(BciBlock block) {
+            this.block = block;
+            this.currentSuccessorIndex = 0;
+            this.loops = 0;
+        }
+    }
+
     /**
      * The blocks found in this method, in reverse postorder.
      */
@@ -650,6 +676,10 @@ public final class BciBlockMapping {
                     }
                     break;
                 }
+                case IDIV:
+                case IREM:
+                case LDIV:
+                case LREM:
                 case IASTORE:
                 case LASTORE:
                 case FASTORE:
@@ -667,10 +697,23 @@ public final class BciBlockMapping {
                 case CALOAD:
                 case SALOAD:
                 case ARRAYLENGTH:
+                case CHECKCAST:
+                case NEW:
+                case ANEWARRAY:
+                case MULTIANEWARRAY:
                 case PUTSTATIC:
                 case GETSTATIC:
                 case PUTFIELD:
-                case GETFIELD: {
+                case GETFIELD:
+                case LDC:
+                case LDC_W:
+                case LDC2_W: {
+                    /*
+                     * All bytecodes that can trigger lazy class initialization via a
+                     * ClassInitializationPlugin (allocations, static field access) must be listed
+                     * because the class initializer is allowed to throw an exception, which
+                     * requires proper exception handling.
+                     */
                     ExceptionDispatchBlock handler = handleExceptions(blockMap, bci);
                     if (handler != null) {
                         current = null;
@@ -827,7 +870,7 @@ public final class BciBlockMapping {
                 b.visited = false;
             }
 
-            long loop = fixLoopBits(blockMap, blockMap[0]);
+            long loop = fixLoopBits(blockMap[0]);
 
             if (loop != 0) {
                 // There is a path from a loop end to the method entry that does not pass the loop
@@ -870,8 +913,7 @@ public final class BciBlockMapping {
         assert next == newBlocks.length - 1;
 
         // Add unwind block.
-        int deoptBci = code.getMethod().isSynchronized() ? BytecodeFrame.UNWIND_BCI : BytecodeFrame.AFTER_EXCEPTION_BCI;
-        ExceptionDispatchBlock unwindBlock = new ExceptionDispatchBlock(deoptBci);
+        ExceptionDispatchBlock unwindBlock = new ExceptionDispatchBlock(BytecodeFrame.AFTER_EXCEPTION_BCI);
         unwindBlock.setId(newBlocks.length - 1);
         newBlocks[newBlocks.length - 1] = unwindBlock;
 
@@ -1000,78 +1042,107 @@ public final class BciBlockMapping {
     }
 
     /**
-     * Depth-first traversal of the control flow graph. The flag {@linkplain BciBlock#visited} is
-     * used to visit every block only once. The flag {@linkplain BciBlock#active} is used to detect
-     * cycles (backward edges).
+     * Non-recursive depth-first traversal of the control flow graph. The flag
+     * {@linkplain BciBlock#visited} is used to visit every block only once. The flag
+     * {@linkplain BciBlock#active} is used to detect cycles (backward edges)
      */
-    private long computeBlockOrder(BciBlock block) {
-        if (block.visited) {
-            if (block.active) {
-                // Reached block via backward branch.
-                makeLoopHeader(block);
-                // Return cached loop information for this block.
-                return block.loops;
-            } else if (block.isLoopHeader) {
-                return block.loops & ~(1L << block.loopId);
+    private long computeBlockOrder(BciBlock initialBlock) {
+        ArrayDeque<TraversalStep> workStack = new ArrayDeque<>();
+        workStack.push(new TraversalStep(initialBlock));
+        while (true) {
+            TraversalStep step = workStack.peek();
+            BciBlock block = step.block;
+            if (step.currentSuccessorIndex == 0) {
+                block.visited = true;
+                block.active = true;
             } else {
-                return block.loops;
+                BciBlock successor = block.getSuccessor(step.currentSuccessorIndex - 1);
+                if (successor.active) {
+                    // Reached block via backward branch.
+                    step.loops |= (1L << successor.loopId);
+                }
+            }
+            if (step.currentSuccessorIndex < block.successors.size()) {
+                BciBlock successor = block.getSuccessors().get(step.currentSuccessorIndex);
+                if (successor.visited) {
+                    if (successor.active) {
+                        // Reached block via backward branch.
+                        makeLoopHeader(successor);
+                        step.loops |= successor.loops;
+                    } else if (successor.isLoopHeader) {
+                        step.loops |= successor.loops & ~(1L << successor.loopId);
+                    } else {
+                        step.loops |= successor.loops;
+                    }
+                } else {
+                    workStack.push(new TraversalStep(successor));
+                }
+                step.currentSuccessorIndex++;
+            } else {
+                // We processed all the successors of this block.
+                block.loops = step.loops;
+                debug.log("computeBlockOrder(%s) -> %x", block, block.loops);
+
+                if (block.isLoopHeader) {
+                    step.loops &= ~(1L << block.loopId);
+                }
+
+                block.active = false;
+                blocksNotYetAssignedId--;
+                blocks[blocksNotYetAssignedId] = block;
+
+                workStack.pop();
+                if (!workStack.isEmpty()) {
+                    workStack.peek().loops |= step.loops;
+                } else {
+                    return step.loops;
+                }
             }
         }
-
-        block.visited = true;
-        block.active = true;
-
-        long loops = 0;
-        for (BciBlock successor : block.getSuccessors()) {
-            // Recursively process successors.
-            loops |= computeBlockOrder(successor);
-            if (successor.active) {
-                // Reached block via backward branch.
-                loops |= (1L << successor.loopId);
-            }
-        }
-
-        block.loops = loops;
-        debug.log("computeBlockOrder(%s) -> %x", block, block.loops);
-
-        if (block.isLoopHeader) {
-            loops &= ~(1L << block.loopId);
-        }
-
-        block.active = false;
-        blocksNotYetAssignedId--;
-        blocks[blocksNotYetAssignedId] = block;
-
-        return loops;
     }
 
-    private long fixLoopBits(BciBlock[] blockMap, BciBlock block) {
-        if (block.visited) {
-            // Return cached loop information for this block.
-            if (block.isLoopHeader) {
-                return block.loops & ~(1L << block.loopId);
+    private long fixLoopBits(BciBlock initialBlock) {
+        ArrayDeque<TraversalStep> workStack = new ArrayDeque<>();
+        workStack.push(new TraversalStep(initialBlock));
+        while (true) {
+            TraversalStep step = workStack.peek();
+            BciBlock block = step.block;
+            if (step.currentSuccessorIndex == 0) {
+                block.visited = true;
+                step.loops = block.loops;
+            }
+            if (step.currentSuccessorIndex < block.getSuccessors().size()) {
+                BciBlock successor = block.getSuccessors().get(step.currentSuccessorIndex);
+                if (successor.visited) {
+                    // Return cached loop information for this block.
+                    if (successor.isLoopHeader) {
+                        step.loops |= successor.loops & ~(1L << successor.loopId);
+                    } else {
+                        step.loops |= successor.loops;
+                    }
+                } else {
+                    workStack.push(new TraversalStep(successor));
+                }
+                step.currentSuccessorIndex++;
             } else {
-                return block.loops;
+                if (block.loops != step.loops) {
+                    loopChanges = true;
+                    block.loops = step.loops;
+                    debug.log("fixLoopBits0(%s) -> %x", block, block.loops);
+                }
+
+                if (block.isLoopHeader) {
+                    step.loops &= ~(1L << block.loopId);
+                }
+
+                workStack.pop();
+                if (!workStack.isEmpty()) {
+                    workStack.peek().loops |= step.loops;
+                } else {
+                    return step.loops;
+                }
             }
         }
-
-        block.visited = true;
-        long loops = block.loops;
-        for (BciBlock successor : block.getSuccessors()) {
-            // Recursively process successors.
-            loops |= fixLoopBits(blockMap, successor);
-        }
-        if (block.loops != loops) {
-            loopChanges = true;
-            block.loops = loops;
-            debug.log("fixLoopBits0(%s) -> %x", block, block.loops);
-        }
-
-        if (block.isLoopHeader) {
-            loops &= ~(1L << block.loopId);
-        }
-
-        return loops;
     }
 
     public static BciBlockMapping create(BytecodeStream stream, Bytecode code, OptionValues options, DebugContext debug) {

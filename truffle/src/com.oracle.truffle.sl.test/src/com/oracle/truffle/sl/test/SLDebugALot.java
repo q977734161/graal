@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -92,7 +92,7 @@ public class SLDebugALot {
 
     @Test
     public void test() {
-        try (Engine engine = Engine.newBuilder().out(out).err(err).option("debugalot", "true").build()) {
+        try (Engine engine = Engine.newBuilder().out(out).err(err).allowExperimentalOptions(true).option("debugalot", "true").build()) {
             try (Context context = Context.newBuilder().engine(engine).build()) {
                 context.eval(slCode);
             }

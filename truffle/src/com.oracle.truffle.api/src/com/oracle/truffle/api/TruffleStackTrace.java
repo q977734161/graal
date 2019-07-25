@@ -1,32 +1,50 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+
+import org.graalvm.polyglot.PolyglotException;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.Frame;
@@ -38,10 +56,27 @@ import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.nodes.Node;
 
 /**
- * @see TruffleStackTraceElement To lookup the stack trace.
+ * Represents a guest language stack trace.
+ *
+ * A TruffleStackTrace is automatically added when a {@link Throwable} passes through a
+ * {@link CallTarget call target}. {@link ControlFlowException} and {@link PolyglotException} do not
+ * get a TruffleStackTrace. Other {@link Throwable} are added a TruffleStackTrace, as long as there
+ * is a {@code null} {@link Throwable#getCause() cause} available to insert the TruffleStackTrace.
+ * <p>
+ * A guest language stack trace element is automatically added by the Truffle runtime every time the
+ * {@link Throwable} passes through a {@link CallTarget call target}. This is incremental and
+ * therefore efficient if the exception is later caught in the same compilation unit.
+ * <p>
+ * Note that if the Throwable is caught, its stack trace should be filled eagerly with
+ * {@link #fillIn(Throwable)}, unless it can be guaranteed to be re-thrown in the same
+ * {@link CallTarget call target}, or that the stack trace will not be used.
+ *
+ * @see #getStackTrace(Throwable) getStackTrace(Throwable) to retrieve the guest language stack
+ *      trace from a {@link Throwable}.
+ * @since 19.0
  */
 @SuppressWarnings("serial")
-final class TruffleStackTrace extends Exception {
+public final class TruffleStackTrace extends Exception {
     private static final TruffleStackTrace EMPTY = new TruffleStackTrace(Collections.emptyList(), 0);
 
     private List<TruffleStackTraceElement> frames;
@@ -69,6 +104,9 @@ final class TruffleStackTrace extends Exception {
         }
     }
 
+    /**
+     * @since 19.0
+     */
     @SuppressWarnings("sync-override")
     @Override
     public Throwable fillInStackTrace() {
@@ -90,14 +128,28 @@ final class TruffleStackTrace extends Exception {
         }
     }
 
+    /**
+     * @since 19.0
+     */
     @Override
     public String toString() {
         return "Attached Guest Language Frames (" + frames.size() + ")";
     }
 
+    /**
+     * Returns the guest language frames that are stored in this throwable or <code>null</code> if
+     * no guest language frames can ever be stored in this throwable. This method fills in the
+     * stacktrace by calling {@link #fillIn(Throwable)}, so it is not necessary to call
+     * {@link #fillIn(Throwable)} before. The returned list is not modifiable. The number of stack
+     * trace elements that are filled in can be customized by implementing
+     * {@link TruffleException#getStackTraceElementLimit()}.
+     *
+     * @param throwable the throwable instance to look for guest language frames
+     * @since 19.0
+     */
     @TruffleBoundary
-    static List<TruffleStackTraceElement> find(Throwable t) {
-        TruffleStackTrace stack = fillIn(t);
+    public static List<TruffleStackTraceElement> getStackTrace(Throwable throwable) {
+        TruffleStackTrace stack = fillIn(throwable);
         if (stack != null) {
             return stack.frames;
         }
@@ -148,15 +200,25 @@ final class TruffleStackTrace extends Exception {
         }
     }
 
+    /**
+     * Fills in the guest language stack frames from the current frames on the stack. If the stack
+     * was already filled before then this method has no effect. The implementation attaches a
+     * lightweight exception object to the last location in the {@link Throwable#getCause() cause}
+     * chain of the exception. The number stack trace elements that are filled in can be customized
+     * by implementing {@link TruffleException#getStackTraceElementLimit()}.
+     *
+     * @param throwable the Throwable to fill
+     * @since 19.0
+     */
     @TruffleBoundary
-    static TruffleStackTrace fillIn(Throwable t) {
-        if (t instanceof ControlFlowException) {
+    public static TruffleStackTrace fillIn(Throwable throwable) {
+        if (throwable instanceof ControlFlowException) {
             return EMPTY;
         }
 
-        LazyStackTrace lazy = findImpl(t);
+        LazyStackTrace lazy = findImpl(throwable);
         if (lazy == null) {
-            Throwable insertCause = findInsertCause(t);
+            Throwable insertCause = findInsertCause(throwable);
             if (insertCause == null) {
                 return null;
             }
@@ -169,8 +231,8 @@ final class TruffleStackTrace extends Exception {
 
         int stackFrameLimit;
         Node topCallSite;
-        if (t instanceof TruffleException) {
-            TruffleException te = (TruffleException) t;
+        if (throwable instanceof TruffleException) {
+            TruffleException te = (TruffleException) throwable;
             topCallSite = te.getLocation();
             stackFrameLimit = te.getStackTraceElementLimit();
         } else {
@@ -263,6 +325,11 @@ final class TruffleStackTrace extends Exception {
     static void addStackFrameInfo(Node callNode, Throwable t, RootCallTarget root, Frame currentFrame) {
         if (t instanceof ControlFlowException) {
             // control flow exceptions should never have to get a stack trace.
+            return;
+        }
+        if (t instanceof PolyglotException) {
+            // Normally, polyglot exceptions should not even end up here, with the exception of
+            // those thrown by Value call targets. In any case, we do not want to attach a cause.
             return;
         }
         if (!(t instanceof TruffleException) || ((TruffleException) t).isInternalError()) {

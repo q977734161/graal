@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,13 +24,13 @@
  */
 package com.oracle.svm.junit;
 
-import com.oracle.svm.core.annotate.Substitute;
-import com.oracle.svm.core.annotate.TargetClass;
 import org.hamcrest.core.Every;
 import org.hamcrest.core.IsCollectionContaining;
-import org.hamcrest.internal.ReflectiveTypeFinder;
 
-@TargetClass(value = ReflectiveTypeFinder.class, onlyWith = JUnitFeature.IsEnabled.class)
+import com.oracle.svm.core.annotate.Substitute;
+import com.oracle.svm.core.annotate.TargetClass;
+
+@TargetClass(className = "org.hamcrest.internal.ReflectiveTypeFinder", onlyWith = JUnitFeature.IsEnabled.class)
 public final class Target_org_hamcrest_internal_ReflectiveTypeFinder {
 
     @Substitute

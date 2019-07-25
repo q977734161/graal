@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,13 +24,15 @@
  */
 package com.oracle.svm.core.hub;
 
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.UnknownObjectField;
+import com.oracle.svm.core.c.NonmovableArray;
+import com.oracle.svm.core.c.NonmovableArrays;
 
 public final class DynamicHubSupport {
 
@@ -39,25 +43,19 @@ public final class DynamicHubSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void setData(byte[] referenceMapEncoding) {
-        this.referenceMapEncoding = referenceMapEncoding;
+    public void setData(NonmovableArray<Byte> referenceMapEncoding) {
+        this.referenceMapEncoding = NonmovableArrays.getHostedArray(referenceMapEncoding);
     }
 
-    public static byte[] getReferenceMapEncoding() {
-        return ImageSingletons.lookup(DynamicHubSupport.class).referenceMapEncoding;
+    public static NonmovableArray<Byte> getReferenceMapEncoding() {
+        return NonmovableArrays.fromImageHeap(ImageSingletons.lookup(DynamicHubSupport.class).referenceMapEncoding);
     }
 }
 
 @AutomaticFeature
 class DynamicHubFeature implements Feature {
-
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         ImageSingletons.add(DynamicHubSupport.class, new DynamicHubSupport());
-    }
-
-    @Override
-    public void afterCompilation(AfterCompilationAccess config) {
-        config.registerAsImmutable(DynamicHubSupport.getReferenceMapEncoding());
     }
 }

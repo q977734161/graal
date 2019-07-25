@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,16 +24,10 @@
  */
 package org.graalvm.compiler.truffle.common;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleCompilationExceptionsAreFatal;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TrufflePerformanceWarningsAreFatal;
+import static org.graalvm.compiler.truffle.common.TruffleCompilerRuntimeInstance.truffleCompilerRuntime;
 
 import java.util.Map;
 import java.util.function.Consumer;
-
-import org.graalvm.compiler.api.runtime.GraalRuntime;
-import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin.InlineInfo;
-import org.graalvm.compiler.nodes.graphbuilderconf.LoopExplosionPlugin;
-import org.graalvm.compiler.options.OptionValues;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -51,31 +47,24 @@ public interface TruffleCompilerRuntime {
      * Gets the singleton runtime instance if it is available other returns {@code null}.
      */
     static TruffleCompilerRuntime getRuntimeIfAvailable() {
-        if (TruffleRuntimeInstance.INSTANCE instanceof TruffleCompilerRuntime) {
-            return TruffleCompilerRuntimeInstance.INSTANCE;
-        }
-        return null;
+        return truffleCompilerRuntime;
     }
 
     /**
      * Gets the singleton runtime instance.
+     *
+     * @throws IllegalStateException if the singleton instance has not been initialized
      */
     static TruffleCompilerRuntime getRuntime() {
-        return TruffleCompilerRuntimeInstance.INSTANCE;
-    }
-
-    /**
-     * Determines whether an exception during a Truffle compilation should result in calling
-     * {@link System#exit(int)}.
-     */
-    static boolean areTruffleCompilationExceptionsFatal() {
-        /*
-         * Automatically enable TruffleCompilationExceptionsAreFatal when asserts are enabled but
-         * respect TruffleCompilationExceptionsAreFatal if it's been explicitly set.
-         */
-        boolean truffleCompilationExceptionsAreFatal = TruffleCompilerOptions.getValue(TruffleCompilationExceptionsAreFatal);
-        assert TruffleCompilationExceptionsAreFatal.hasBeenSet(TruffleCompilerOptions.getOptions()) || (truffleCompilationExceptionsAreFatal = true) == true;
-        return truffleCompilationExceptionsAreFatal || TruffleCompilerOptions.getValue(TrufflePerformanceWarningsAreFatal);
+        if (truffleCompilerRuntime != null) {
+            return truffleCompilerRuntime;
+        }
+        Object truffleRuntime = TruffleCompilerRuntimeInstance.TRUFFLE_RUNTIME;
+        if (truffleRuntime != null) {
+            throw new InternalError(String.format("Truffle runtime %s (loader: %s) is not a %s (loader: %s)", truffleRuntime, truffleRuntime.getClass().getClassLoader(),
+                            TruffleCompilerRuntime.class.getName(), TruffleCompilerRuntime.class.getClassLoader()));
+        }
+        throw new IllegalStateException("TruffleCompilerRuntime singleton not initialized");
     }
 
     /**
@@ -138,6 +127,93 @@ public interface TruffleCompilerRuntime {
     }
 
     /**
+     * Controls behavior of {@code ExplodeLoop} annotation.
+     *
+     */
+    enum LoopExplosionKind {
+        /**
+         * No loop explosion.
+         */
+        NONE,
+        /**
+         * Fully unroll all loops. The loops must have a known finite number of iterations. If a
+         * loop has multiple loop ends, they are merged so that the subsequent loop iteration is
+         * processed only once. For example, a loop with 4 iterations and 2 loop ends leads to
+         * 1+1+1+1 = 4 copies of the loop body.
+         *
+         * @since 0.15
+         */
+        FULL_UNROLL,
+        /**
+         * Fully explode all loops. The loops must have a known finite number of iterations. If a
+         * loop has multiple loop ends, they are not merged so that subsequent loop iterations are
+         * processed multiple times. For example, a loop with 4 iterations and 2 loop ends leads to
+         * 1+2+4+8 = 15 copies of the loop body.
+         *
+         * @since 0.15
+         */
+        FULL_EXPLODE,
+        /**
+         * Like {@link #FULL_EXPLODE}, but in addition explosion does not stop at loop exits. Code
+         * after the loop is duplicated for every loop exit of every loop iteration. For example, a
+         * loop with 4 iterations and 2 loop exits leads to 4 * 2 = 8 copies of the code after the
+         * loop.
+         *
+         * @since 0.15
+         */
+        FULL_EXPLODE_UNTIL_RETURN,
+        /**
+         * like {@link #FULL_EXPLODE}, but copies of the loop body that have the exact same state
+         * (all local variables have the same value) are merged. This reduces the number of copies
+         * necessary, but can introduce loops again. This kind is useful for bytecode interpreter
+         * loops.
+         *
+         * @since 0.15
+         */
+        MERGE_EXPLODE
+    }
+
+    enum InlineKind {
+        /**
+         * Denotes a call site that must can be inlined.
+         */
+        INLINE(true),
+        /**
+         * Denotes a call site that must not be inlined and should be implemented by a node that
+         * does not speculate on the call not raising an exception.
+         */
+        DO_NOT_INLINE_WITH_EXCEPTION(false),
+
+        /**
+         * Denotes a call site must not be inlined and can be implemented by a node that speculates
+         * the call will not throw an exception.
+         */
+        DO_NOT_INLINE_NO_EXCEPTION(false),
+
+        /**
+         * Denotes a call site must not be inlined and the execution should be transferred to
+         * interpreter in case of an exception.
+         */
+        DO_NOT_INLINE_DEOPTIMIZE_ON_EXCEPTION(false),
+
+        /**
+         * Denotes a call site must not be inlined and the execution should be speculatively
+         * transferred to interpreter in case of an exception, unless the speculation has failed.
+         */
+        DO_NOT_INLINE_WITH_SPECULATIVE_EXCEPTION(false);
+
+        private final boolean allowsInlining;
+
+        InlineKind(final boolean allowsInlining) {
+            this.allowsInlining = allowsInlining;
+        }
+
+        public boolean allowsInlining() {
+            return allowsInlining;
+        }
+    }
+
+    /**
      * Gets an object describing how a read of {@code field} can be constant folded based on Truffle
      * annotations.
      *
@@ -149,7 +225,7 @@ public interface TruffleCompilerRuntime {
     /**
      * Queries how loops in {@code method} with constant number of invocations should be unrolled.
      */
-    LoopExplosionPlugin.LoopExplosionKind getLoopExplosionKind(ResolvedJavaMethod method);
+    LoopExplosionKind getLoopExplosionKind(ResolvedJavaMethod method);
 
     /**
      * Gets the primary {@link TruffleCompiler} instance associated with this runtime, creating it
@@ -158,22 +234,19 @@ public interface TruffleCompilerRuntime {
     TruffleCompiler getTruffleCompiler();
 
     /**
-     * Gets a new {@link TruffleCompiler} instance.
+     * Gets a plan for inlining in terms of a Truffle AST call graph.
      *
-     * @throws UnsupportedOperationException if this runtime does not support creating
-     *             {@link TruffleCompiler} instances apart from the one returned by
-     *             {@link #getTruffleCompiler()}
+     * @return the requested plan or {@code null} a plan cannot be created in the calling context
      */
-    TruffleCompiler newTruffleCompiler();
+    TruffleInliningPlan createInliningPlan(CompilableTruffleAST compilable, TruffleCompilationTask task);
 
     /**
-     * Gets a plan for inlining in terms of a Truffle AST call graph.
+     * Gets the {@link CompilableTruffleAST} represented by {@code constant}.
+     *
+     * @return {@code null} if {@code constant} does not represent a {@link CompilableTruffleAST} or
+     *         it cannot be converted to a {@link CompilableTruffleAST} in the calling context
      */
-    TruffleInliningPlan createInliningPlan(CompilableTruffleAST compilable);
-
     CompilableTruffleAST asCompilableTruffleAST(JavaConstant constant);
-
-    GraalRuntime getGraalRuntime();
 
     /**
      * Gets the compiler constant representing the target of {@code callNode}.
@@ -289,9 +362,28 @@ public interface TruffleCompilerRuntime {
     ResolvedJavaType resolveType(MetaAccessProvider metaAccess, String className, boolean required);
 
     /**
-     * Gets the initial option values for this runtime.
+     * Gets the option values for this runtime as a map from option name to option value.
      */
-    OptionValues getInitialOptions();
+    Map<String, Object> getOptions();
+
+    /**
+     * Gets the option values for this runtime in an instance of {@code type}.
+     *
+     * @throws IllegalArgumentException if this runtime does not support {@code type}
+     */
+    default <T> T getOptions(Class<T> type) {
+        throw new IllegalArgumentException(getClass().getName() + " can not return option values of type " + type.getName());
+    }
+
+    /**
+     * Convert option values in name/value pairs to an instance of {@code type}.
+     *
+     * @param map input option values as {@link String} names to values
+     * @throws IllegalArgumentException if this runtime does not support {@code type}
+     */
+    default <T> T convertOptions(Class<T> type, Map<String, Object> map) {
+        throw new IllegalArgumentException(getClass().getName() + " can not return option values of type " + type.getName());
+    }
 
     /**
      * Gets an object describing whether and how a method can be inlined based on Truffle
@@ -300,7 +392,7 @@ public interface TruffleCompilerRuntime {
      * @param original candidate for inlining
      * @param duringPartialEvaluation whether the inlining context is partial evaluation
      */
-    InlineInfo getInlineInfo(ResolvedJavaMethod original, boolean duringPartialEvaluation);
+    InlineKind getInlineKind(ResolvedJavaMethod original, boolean duringPartialEvaluation);
 
     /**
      * Determines if {@code type} is a value type. Reference comparisons (==) between value type

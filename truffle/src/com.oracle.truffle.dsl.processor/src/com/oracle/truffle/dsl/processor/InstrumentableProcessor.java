@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor;
 
@@ -50,7 +68,6 @@ import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic.Kind;
 
-import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper.IncomingConverter;
@@ -156,7 +173,6 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                             emitError(element, String.format("Classes annotated with @%s must extend %s.", GenerateWrapper.class.getSimpleName(), Node.class.getSimpleName()));
                             continue;
                         }
-
                     }
 
                     AnnotationMirror generateWrapperMirror = ElementUtils.findAnnotationMirror(element.getAnnotationMirrors(), context.getType(GenerateWrapper.class));
@@ -170,9 +186,8 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                         continue;
                     }
                     DeclaredType overrideType = (DeclaredType) context.getType(Override.class);
-                    DeclaredType unusedType = (DeclaredType) context.getType(SuppressWarnings.class);
                     unit.accept(new GenerateOverrideVisitor(overrideType), null);
-                    unit.accept(new FixWarningsVisitor(context.getEnvironment(), unusedType, overrideType), null);
+                    unit.accept(new FixWarningsVisitor(element, overrideType), null);
                     unit.accept(new CodeWriter(context.getEnvironment(), element), null);
                 } catch (Throwable e) {
                     // never throw annotation processor exceptions to the compiler
@@ -243,9 +258,8 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                     continue;
                 }
                 DeclaredType overrideType = (DeclaredType) context.getType(Override.class);
-                DeclaredType unusedType = (DeclaredType) context.getType(SuppressWarnings.class);
                 unit.accept(new GenerateOverrideVisitor(overrideType), null);
-                unit.accept(new FixWarningsVisitor(context.getEnvironment(), unusedType, overrideType), null);
+                unit.accept(new FixWarningsVisitor(element, overrideType), null);
                 unit.accept(new CodeWriter(context.getEnvironment(), element), null);
             } catch (Throwable e) {
                 // never throw annotation processor exceptions to the compiler
@@ -299,7 +313,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         TypeMirror factoryType = context.reloadType(context.getType(com.oracle.truffle.api.instrumentation.InstrumentableFactory.class));
         factory.getImplements().add(new CodeTypeMirror.DeclaredCodeTypeMirror(ElementUtils.fromTypeMirror(factoryType), Arrays.asList(sourceType.asType())));
 
-        addGeneratedBy(context, factory, sourceType);
+        GeneratorUtils.addGeneratedBy(context, factory, sourceType);
 
         TypeMirror returnType = context.getType(com.oracle.truffle.api.instrumentation.InstrumentableFactory.WrapperNode.class);
         CodeExecutableElement createMethod = new CodeExecutableElement(ElementUtils.modifiers(Modifier.PUBLIC), returnType, "createWrapper");
@@ -334,6 +348,16 @@ public final class InstrumentableProcessor extends AbstractProcessor {
 
     private static String createWrapperClassName(TypeElement sourceType) {
         return sourceType.getSimpleName().toString() + CLASS_SUFFIX;
+    }
+
+    private static boolean hasUnexpectedResult(ProcessorContext context, ExecutableElement element) {
+        TypeMirror unexpectedResult = context.getType(UnexpectedResultException.class);
+        for (TypeMirror thrownType : element.getThrownTypes()) {
+            if (ElementUtils.typeEquals(thrownType, unexpectedResult)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @SuppressWarnings("deprecation")
@@ -427,7 +451,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             wrapperType.getImplements().add(context.getType(com.oracle.truffle.api.instrumentation.InstrumentableFactory.WrapperNode.class));
         }
 
-        addGeneratedBy(context, wrapperType, sourceType);
+        GeneratorUtils.addGeneratedBy(context, wrapperType, sourceType);
 
         wrapperType.add(createNodeChild(context, sourceType.asType(), FIELD_DELEGATE));
         wrapperType.add(createNodeChild(context, context.getType(ProbeNode.class), FIELD_PROBE));
@@ -461,28 +485,32 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         List<ExecutableElement> wrappedMethods = new ArrayList<>();
         List<ExecutableElement> wrappedExecuteMethods = new ArrayList<>();
         List<? extends Element> elementList = context.getEnvironment().getElementUtils().getAllMembers(sourceType);
+
+        ExecutableElement genericExecuteDelegate = null;
         for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
-            Set<Modifier> modifiers = method.getModifiers();
-            if (modifiers.contains(Modifier.FINAL)) {
-                continue;
-            }
-            Modifier visibility = ElementUtils.getVisibility(modifiers);
-            if (visibility == Modifier.PRIVATE) {
-                continue;
-            }
-
-            String methodName = method.getSimpleName().toString();
-
-            if (methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
+            if (isExecuteMethod(method) && isOverridable(method)) {
                 VariableElement firstParam = method.getParameters().isEmpty() ? null : method.getParameters().get(0);
                 if (topLevelClass && (firstParam == null || !ElementUtils.isAssignable(firstParam.asType(), context.getType(VirtualFrame.class)))) {
                     emitError(e, String.format("Wrapped execute method %s must have VirtualFrame as first parameter.", method.getSimpleName().toString()));
                     return null;
                 }
+                if (ElementUtils.isObject(method.getReturnType()) && method.getParameters().size() == 1 && genericExecuteDelegate == null) {
+                    genericExecuteDelegate = method;
+                }
+            }
+        }
+
+        for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
+            if (!isOverridable(method)) {
+                continue;
+            }
+
+            String methodName = method.getSimpleName().toString();
+            if (methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
                 wrappedExecuteMethods.add(method);
             } else {
-                if (modifiers.contains(Modifier.ABSTRACT) && !methodName.equals("getSourceSection") //
-                                && !methodName.equals(METHOD_GET_NODE_COST)) {
+                if (method.getModifiers().contains(Modifier.ABSTRACT) && !methodName.equals("getSourceSection") //
+                                && !methodName.equals(METHOD_GET_NODE_COST) && !hasUnexpectedResult(context, method)) {
                     wrappedMethods.add(method);
                 }
             }
@@ -529,8 +557,9 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             }
         });
 
-        for (ExecutableElement executeMethod : wrappedExecuteMethods) {
-            CodeExecutableElement wrappedExecute = CodeExecutableElement.clone(processingEnv, executeMethod);
+        for (ExecutableElement method : wrappedExecuteMethods) {
+            ExecutableElement executeMethod = method;
+            CodeExecutableElement wrappedExecute = CodeExecutableElement.clone(executeMethod);
             wrappedExecute.getModifiers().remove(Modifier.ABSTRACT);
             wrappedExecute.getAnnotationMirrors().clear();
 
@@ -544,9 +573,15 @@ public final class InstrumentableProcessor extends AbstractProcessor {
 
             CodeTreeBuilder builder = wrappedExecute.createBuilder();
             TypeMirror returnTypeMirror = executeMethod.getReturnType();
-            boolean returnVoid = ElementUtils.isVoid(returnTypeMirror);
+            boolean executeReturnsVoid = ElementUtils.isVoid(returnTypeMirror);
+            if (executeReturnsVoid && genericExecuteDelegate != null && executeMethod.getParameters().size() == genericExecuteDelegate.getParameters().size()) {
+                executeMethod = genericExecuteDelegate;
+                returnTypeMirror = genericExecuteDelegate.getReturnType();
+                executeReturnsVoid = false;
+            }
+
             String returnName;
-            if (!returnVoid) {
+            if (!executeReturnsVoid) {
                 returnName = "returnValue";
                 builder.declaration(returnTypeMirror, returnName, (CodeTree) null);
             } else {
@@ -555,6 +590,11 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.startFor().startGroup().string(";;").end().end().startBlock();
             builder.declaration("boolean", VAR_RETURN_CALLED, "false");
             builder.startTryBlock();
+            boolean hasUnexpectedResult = hasUnexpectedResult(context, wrappedExecute);
+            if (hasUnexpectedResult) {
+                builder.startTryBlock();
+            }
+
             builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_ENTER).string(frameParameterName).end().end();
 
             CodeTreeBuilder callDelegate = builder.create();
@@ -563,7 +603,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                 callDelegate.string(parameter.getSimpleName().toString());
             }
             callDelegate.end();
-            if (returnVoid) {
+            if (executeReturnsVoid) {
                 builder.statement(callDelegate.build());
             } else {
                 builder.startStatement().string(returnName).string(" = ").tree(callDelegate.build()).end();
@@ -572,7 +612,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.startStatement().string(VAR_RETURN_CALLED).string(" = true").end();
 
             builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName);
-            if (outgoingConverterMethod == null || returnVoid) {
+            if (outgoingConverterMethod == null || executeReturnsVoid) {
                 builder.string(returnName);
             } else {
                 builder.tree(createCallConverter(outgoingConverterMethod, frameParameterName, CodeTreeBuilder.singleString(returnName)));
@@ -580,17 +620,17 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.end().end();
 
             builder.statement("break");
-            if (wrappedExecute.getThrownTypes().contains(context.getType(UnexpectedResultException.class))) {
+            if (hasUnexpectedResult) {
                 builder.end().startCatchBlock(context.getType(UnexpectedResultException.class), "e");
                 builder.startStatement().string(VAR_RETURN_CALLED).string(" = true").end();
                 builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName);
-                if (outgoingConverterMethod == null || returnVoid) {
+                if (outgoingConverterMethod == null || executeReturnsVoid) {
                     builder.string("e.getResult()");
                 } else {
                     builder.tree(createCallConverter(outgoingConverterMethod, frameParameterName, CodeTreeBuilder.singleString("e.getResult()")));
                 }
                 builder.end().end();
-                builder.startThrow().string("e").end();
+                builder.startThrow().string("e").end().end();
             }
             builder.end().startCatchBlock(context.getType(Throwable.class), "t");
             CodeTreeBuilder callExOrUnwind = builder.create();
@@ -599,14 +639,14 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.startIf().string("result == ").string(CONSTANT_REENTER).end();
             builder.startBlock();
             builder.statement("continue");
-            if (returnVoid) {
+            if (ElementUtils.isVoid(wrappedExecute.getReturnType())) {
                 builder.end().startElseIf();
                 builder.string("result != null").end();
                 builder.startBlock();
                 builder.statement("break");
             } else {
                 boolean objectReturnType = "java.lang.Object".equals(ElementUtils.getQualifiedName(returnTypeMirror)) && returnTypeMirror.getKind() != TypeKind.ARRAY;
-                boolean throwsUnexpectedResult = wrappedExecute.getThrownTypes().contains(context.getType(UnexpectedResultException.class));
+                boolean throwsUnexpectedResult = hasUnexpectedResult(context, wrappedExecute);
                 if (objectReturnType || !throwsUnexpectedResult) {
                     builder.end().startElseIf();
                     builder.string("result != null").end();
@@ -654,7 +694,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.end();
             builder.startThrow().string("t").end();
             builder.end(2);
-            if (!returnVoid) {
+            if (!ElementUtils.isVoid(wrappedExecute.getReturnType())) {
                 builder.startReturn().string(returnName).end();
             }
 
@@ -662,7 +702,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         }
 
         for (ExecutableElement delegateMethod : wrappedMethods) {
-            CodeExecutableElement generatedMethod = CodeExecutableElement.clone(processingEnv, delegateMethod);
+            CodeExecutableElement generatedMethod = CodeExecutableElement.clone(delegateMethod);
 
             generatedMethod.getModifiers().remove(Modifier.ABSTRACT);
 
@@ -681,6 +721,26 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         }
 
         return wrapperType;
+    }
+
+    private static boolean isExecuteMethod(ExecutableElement method) {
+        String methodName = method.getSimpleName().toString();
+        if (!methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isOverridable(ExecutableElement method) {
+        Set<Modifier> modifiers = method.getModifiers();
+        if (modifiers.contains(Modifier.FINAL)) {
+            return false;
+        }
+        Modifier visibility = ElementUtils.getVisibility(modifiers);
+        if (visibility == Modifier.PRIVATE) {
+            return false;
+        }
+        return true;
     }
 
     private static CodeTree createCallConverter(ExecutableElement converterMethod, String frameParameterName, CodeTree returnName) {
@@ -757,16 +817,6 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             return types.boxedClass((PrimitiveType) type).asType();
         } else {
             return type;
-        }
-    }
-
-    private static void addGeneratedBy(ProcessorContext context, CodeTypeElement generatedType, TypeElement generatedByType) {
-        DeclaredType generatedBy = (DeclaredType) context.getType(GeneratedBy.class);
-        // only do this if generatedBy is on the classpath.
-        if (generatedBy != null) {
-            CodeAnnotationMirror generatedByAnnotation = new CodeAnnotationMirror(generatedBy);
-            generatedByAnnotation.setElementValue(generatedByAnnotation.findExecutableElement("value"), new CodeAnnotationValue(generatedByType.asType()));
-            generatedType.addAnnotationMirror(generatedByAnnotation);
         }
     }
 

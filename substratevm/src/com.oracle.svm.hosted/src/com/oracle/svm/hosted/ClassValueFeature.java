@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,15 +24,17 @@
  */
 package com.oracle.svm.hosted;
 
-import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.jdk.JavaLangSubstitutions.ClassValueSupport;
-import com.oracle.svm.core.util.VMError;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import org.graalvm.nativeimage.Feature;
+
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.Feature;
+
+import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.jdk.JavaLangSubstitutions.ClassValueSupport;
+import com.oracle.svm.util.ReflectionUtil;
 
 @AutomaticFeature
 public final class ClassValueFeature implements Feature {
@@ -74,24 +78,14 @@ public final class ClassValueFeature implements Feature {
         }
     }
 
-    private static final java.lang.reflect.Field IDENTITY;
-    private static final java.lang.reflect.Field CLASS_VALUE_MAP;
-    static {
-        try {
-            IDENTITY = ClassValue.class.getDeclaredField("identity");
-            IDENTITY.setAccessible(true);
-            CLASS_VALUE_MAP = Class.class.getDeclaredField("classValueMap");
-            CLASS_VALUE_MAP.setAccessible(true);
-        } catch (NoSuchFieldException ex) {
-            throw VMError.shouldNotReachHere(ex);
-        }
-    }
+    private static final java.lang.reflect.Field IDENTITY = ReflectionUtil.lookupField(ClassValue.class, "identity");
+    private static final java.lang.reflect.Field CLASS_VALUE_MAP = ReflectionUtil.lookupField(Class.class, "classValueMap");
 
     private static boolean hasValue(ClassValue<?> v, Class<?> c) {
         try {
             Map<?, ?> map = (Map<?, ?>) CLASS_VALUE_MAP.get(c);
             final Object id = IDENTITY.get(v);
-            final boolean res = map.containsKey(id);
+            final boolean res = map != null && map.containsKey(id);
             return res;
         } catch (RuntimeException ex) {
             throw ex;

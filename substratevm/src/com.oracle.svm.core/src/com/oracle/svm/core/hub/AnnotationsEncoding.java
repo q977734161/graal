@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,9 +31,12 @@ public final class AnnotationsEncoding {
 
     private static final Annotation[] EMPTY_ANNOTATION_ARRAY = new Annotation[0];
 
-    public static Annotation[] getAnnotations(Object annotationsEncoding) {
+    public static Annotation[] decodeAnnotations(Object annotationsEncoding) {
         if (annotationsEncoding == null) {
             return EMPTY_ANNOTATION_ARRAY;
+        } else if (annotationsEncoding instanceof ArrayStoreException) {
+            /* JDK-7183985 was hit at image build time when the annotations were encoded. */
+            throw (ArrayStoreException) annotationsEncoding;
         } else if (annotationsEncoding instanceof Annotation[]) {
             return ((Annotation[]) annotationsEncoding).clone();
         } else {
@@ -40,10 +45,12 @@ public final class AnnotationsEncoding {
     }
 
     @SuppressWarnings("unchecked")
-    public static <T extends Annotation> T getAnnotation(Object annotationsEncoding, Class<T> annotationClass) {
+    public static <T extends Annotation> T decodeAnnotation(Object annotationsEncoding, Class<T> annotationClass) {
         Objects.requireNonNull(annotationClass);
 
-        if (annotationsEncoding instanceof Annotation[]) {
+        if (annotationsEncoding instanceof ArrayStoreException) {
+            throw (ArrayStoreException) annotationsEncoding;
+        } else if (annotationsEncoding instanceof Annotation[]) {
             for (Annotation annotation : (Annotation[]) annotationsEncoding) {
                 if (annotationClass.isInstance(annotation)) {
                     return (T) annotation;

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -41,7 +43,7 @@ import org.graalvm.compiler.nodes.extended.GuardingNode;
 
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
-import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 /**
  * A guard is a node that deoptimizes based on a conditional expression. Guards are not attached to
@@ -62,17 +64,17 @@ public class GuardNode extends FloatingAnchoredNode implements Canonicalizable, 
     @Input(Condition) protected LogicNode condition;
     protected DeoptimizationReason reason;
     protected DeoptimizationAction action;
-    protected JavaConstant speculation;
+    protected Speculation speculation;
     protected boolean negated;
     protected NodeSourcePosition noDeoptSuccessorPosition;
 
-    public GuardNode(LogicNode condition, AnchoringNode anchor, DeoptimizationReason reason, DeoptimizationAction action, boolean negated, JavaConstant speculation,
+    public GuardNode(LogicNode condition, AnchoringNode anchor, DeoptimizationReason reason, DeoptimizationAction action, boolean negated, Speculation speculation,
                     NodeSourcePosition noDeoptSuccessorPosition) {
         this(TYPE, condition, anchor, reason, action, negated, speculation, noDeoptSuccessorPosition);
     }
 
     protected GuardNode(NodeClass<? extends GuardNode> c, LogicNode condition, AnchoringNode anchor, DeoptimizationReason reason, DeoptimizationAction action, boolean negated,
-                    JavaConstant speculation, NodeSourcePosition noDeoptSuccessorPosition) {
+                    Speculation speculation, NodeSourcePosition noDeoptSuccessorPosition) {
         super(c, StampFactory.forVoid(), anchor);
         this.condition = condition;
         this.reason = reason;
@@ -113,11 +115,11 @@ public class GuardNode extends FloatingAnchoredNode implements Canonicalizable, 
     }
 
     @Override
-    public JavaConstant getSpeculation() {
+    public Speculation getSpeculation() {
         return speculation;
     }
 
-    public void setSpeculation(JavaConstant speculation) {
+    public void setSpeculation(Speculation speculation) {
         this.speculation = speculation;
     }
 

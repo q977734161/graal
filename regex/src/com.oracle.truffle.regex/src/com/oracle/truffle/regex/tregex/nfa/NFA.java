@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,7 +39,7 @@ import com.oracle.truffle.regex.util.CompilationFinalBitSet;
 import java.util.Arrays;
 import java.util.Collection;
 
-public class NFA implements StateIndex<NFAState>, JsonConvertible {
+public final class NFA implements StateIndex<NFAState>, JsonConvertible {
 
     private final RegexAST ast;
     private final NFAState dummyInitialState;
@@ -127,6 +127,25 @@ public class NFA implements StateIndex<NFAState>, JsonConvertible {
 
     public boolean isUnAnchoredEntry(NFAState state, boolean forward) {
         return forward ? transitionListContainsTarget(unAnchoredEntry, state) : reverseUnAnchoredEntry.getSource() == state;
+    }
+
+    public int getAnchoredEntryOffset(NFAState state, boolean forward) {
+        assert isAnchoredEntry(state, forward);
+        return forward ? transitionListIndexOfTarget(anchoredEntry, state) : 0;
+    }
+
+    public int getUnAnchoredEntryOffset(NFAState state, boolean forward) {
+        assert isUnAnchoredEntry(state, forward);
+        return forward ? transitionListIndexOfTarget(unAnchoredEntry, state) : 0;
+    }
+
+    private static int transitionListIndexOfTarget(NFAStateTransition[] transitions, NFAState target) {
+        for (int i = 0; i < transitions.length; i++) {
+            if (transitions[i].getTarget() == target) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static boolean transitionListContainsTarget(NFAStateTransition[] transitions, NFAState target) {

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,12 +24,16 @@
  */
 package com.oracle.svm.core.jdk;
 
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.UnsafeAccess;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.util.VMError;
+
+// Checkstyle: stop
+import sun.misc.Unsafe;
+// Checkstyle: resume
 
 /**
  * Annotated replacements to be called from uninterruptible code for methods whose source I do not
@@ -40,11 +46,12 @@ public class UninterruptibleUtils {
 
     public static class AtomicInteger {
 
+        private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
         private static final long VALUE_OFFSET;
 
         static {
             try {
-                VALUE_OFFSET = UnsafeAccess.UNSAFE.objectFieldOffset(AtomicInteger.class.getDeclaredField("value"));
+                VALUE_OFFSET = UNSAFE.objectFieldOffset(AtomicInteger.class.getDeclaredField("value"));
             } catch (Throwable ex) {
                 throw VMError.shouldNotReachHere(ex);
             }
@@ -56,39 +63,45 @@ public class UninterruptibleUtils {
             this.value = value;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public int get() {
             return value;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public void set(int newValue) {
             value = newValue;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public int incrementAndGet() {
-            return UnsafeAccess.UNSAFE.getAndAddInt(this, VALUE_OFFSET, 1) + 1;
+            return UNSAFE.getAndAddInt(this, VALUE_OFFSET, 1) + 1;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public int getAndDecrement() {
+            return UNSAFE.getAndAddInt(this, VALUE_OFFSET, -1);
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public int decrementAndGet() {
-            return UnsafeAccess.UNSAFE.getAndAddInt(this, VALUE_OFFSET, -1) - 1;
+            return UNSAFE.getAndAddInt(this, VALUE_OFFSET, -1) - 1;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public boolean compareAndSet(int expected, int update) {
-            return UnsafeAccess.UNSAFE.compareAndSwapInt(this, VALUE_OFFSET, expected, update);
+            return UNSAFE.compareAndSwapInt(this, VALUE_OFFSET, expected, update);
         }
     }
 
-    public static class AtomicPointer<T extends PointerBase> {
+    public static class AtomicLong {
 
+        private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
         private static final long VALUE_OFFSET;
 
         static {
             try {
-                VALUE_OFFSET = UnsafeAccess.UNSAFE.objectFieldOffset(AtomicPointer.class.getDeclaredField("value"));
+                VALUE_OFFSET = UNSAFE.objectFieldOffset(AtomicLong.class.getDeclaredField("value"));
             } catch (Throwable ex) {
                 throw VMError.shouldNotReachHere(ex);
             }
@@ -96,29 +109,80 @@ public class UninterruptibleUtils {
 
         private volatile long value;
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        public AtomicLong(long value) {
+            this.value = value;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public long get() {
+            return value;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public void set(long newValue) {
+            value = newValue;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public long incrementAndGet() {
+            return UNSAFE.getAndAddLong(this, VALUE_OFFSET, 1) + 1;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public long getAndDecrement() {
+            return UNSAFE.getAndAddLong(this, VALUE_OFFSET, -1);
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public long decrementAndGet() {
+            return UNSAFE.getAndAddLong(this, VALUE_OFFSET, -1) - 1;
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        public boolean compareAndSet(long expected, long update) {
+            return UNSAFE.compareAndSwapLong(this, VALUE_OFFSET, expected, update);
+        }
+    }
+
+    public static class AtomicPointer<T extends PointerBase> {
+
+        private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
+        private static final long VALUE_OFFSET;
+
+        static {
+            try {
+                VALUE_OFFSET = UNSAFE.objectFieldOffset(AtomicPointer.class.getDeclaredField("value"));
+            } catch (Throwable ex) {
+                throw VMError.shouldNotReachHere(ex);
+            }
+        }
+
+        private volatile long value;
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public T get() {
             return WordFactory.pointer(value);
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public void set(T newValue) {
             value = newValue.rawValue();
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public boolean compareAndSet(T expected, T update) {
-            return UnsafeAccess.UNSAFE.compareAndSwapLong(this, VALUE_OFFSET, expected.rawValue(), update.rawValue());
+            return UNSAFE.compareAndSwapLong(this, VALUE_OFFSET, expected.rawValue(), update.rawValue());
         }
     }
 
     public static class AtomicReference<T> {
 
+        private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
         private static final long VALUE_OFFSET;
 
         static {
             try {
-                VALUE_OFFSET = UnsafeAccess.UNSAFE.objectFieldOffset(AtomicReference.class.getDeclaredField("value"));
+                VALUE_OFFSET = UNSAFE.objectFieldOffset(AtomicReference.class.getDeclaredField("value"));
             } catch (Throwable ex) {
                 throw VMError.shouldNotReachHere(ex);
             }
@@ -126,45 +190,54 @@ public class UninterruptibleUtils {
 
         private volatile T value;
 
+        public AtomicReference() {
+        }
+
         public AtomicReference(T value) {
             this.value = value;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public T get() {
             return value;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public void set(T newValue) {
             value = newValue;
         }
 
-        @Uninterruptible(reason = "Uninterruptible inline expansion")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public boolean compareAndSet(T expected, T update) {
-            return UnsafeAccess.UNSAFE.compareAndSwapObject(this, VALUE_OFFSET, expected, update);
+            return UNSAFE.compareAndSwapObject(this, VALUE_OFFSET, expected, update);
+        }
+
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @SuppressWarnings("unchecked")
+        public final T getAndSet(T newValue) {
+            return (T) UNSAFE.getAndSetObject(this, VALUE_OFFSET, newValue);
         }
     }
 
     /** Methods like the ones from {@link java.lang.Math} but annotated as uninterruptible. */
     public static class Math {
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static int min(int a, int b) {
             return (a <= b) ? a : b;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static int max(int a, int b) {
             return (a >= b) ? a : b;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static long max(long a, long b) {
             return (a >= b) ? a : b;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static long abs(long a) {
             return (a < 0) ? -a : a;
         }
@@ -172,7 +245,7 @@ public class UninterruptibleUtils {
 
     public static class Long {
         /** Uninterruptible version of {@link java.lang.Long#numberOfLeadingZeros(long)}. */
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         // Checkstyle: stop
         public static int numberOfLeadingZeros(long i) {
             // @formatter:off
@@ -196,7 +269,7 @@ public class UninterruptibleUtils {
     public static class Integer {
         // Checkstyle: stop
         /** Uninterruptible version of {@link java.lang.Integer#numberOfLeadingZeros(int)}. */
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         @SuppressWarnings("all")
         public static int numberOfLeadingZeros(int i) {
             // @formatter:off
@@ -214,7 +287,7 @@ public class UninterruptibleUtils {
         }
 
         /** Uninterruptible version of {@link java.lang.Integer#highestOneBit(int)}. */
-        @Uninterruptible(reason = "Called from uninterruptible code.")
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         @SuppressWarnings("all")
         public static int highestOneBit(int i) {
             // @formatter:off

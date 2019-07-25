@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,7 +27,6 @@ package com.oracle.svm.core.jdk;
 // Checkstyle: allow reflection
 
 import java.io.FileDescriptor;
-import java.net.InetAddress;
 import java.nio.channels.spi.SelectorProvider;
 
 import com.oracle.svm.core.annotate.Alias;
@@ -95,21 +96,6 @@ final class Target_sun_nio_ch_Net {
     @Substitute
     static void setInterface6(FileDescriptor fd, int index) {
         throw VMError.unsupportedFeature("Unimplemented:  sun.nio.ch.Net.setInterface6(FileDescriptor, int)");
-    }
-}
-
-@SuppressWarnings({"unused", "static-method"})
-@TargetClass(className = "sun.nio.ch.DatagramChannelImpl")
-final class Target_sun_nio_ch_DatagramChannelImpl {
-
-    @Substitute
-    private int receive0(FileDescriptor fd, long address, int len, boolean connected) {
-        throw VMError.unsupportedFeature("Unimplemented: sun.nio.ch.DatagramChannelImpl.receive0(FileDescriptor, long, int, boolean)");
-    }
-
-    @Substitute
-    private int send0(boolean preferIPv6, FileDescriptor fd, long address, int len, InetAddress addr, int port) {
-        throw VMError.unsupportedFeature("Unimplemented: sun.nio.ch.DatagramChannelImpl.send0(boolean, FileDescriptor, long, int, InetAddress, int)");
     }
 }
 

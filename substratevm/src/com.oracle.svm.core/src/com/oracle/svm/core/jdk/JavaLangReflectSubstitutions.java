@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,12 +27,10 @@ package com.oracle.svm.core.jdk;
 // Checkstyle: allow reflection
 
 import java.lang.reflect.Array;
-import java.lang.reflect.InvocationHandler;
 
 import org.graalvm.compiler.word.BarrieredAccess;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.config.ConfigurationValues;
@@ -38,24 +38,6 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.VMError;
-
-@TargetClass(java.lang.reflect.Proxy.class)
-final class Target_java_lang_reflect_Proxy {
-
-    /*
-     * We cannot mark the whole Proxy class as @Delete, since the JDK implements annotation
-     * interfaces via proxies. SVM uses its own mechanism for annotations, without using the
-     * InvocationHandler field "h". All other usages of Proxy must be disallowed, so we mark the
-     * field "h" as deleted.
-     */
-    @Delete private InvocationHandler h;
-
-    @Delete private static Target_java_lang_reflect_WeakCache proxyClassCache;
-}
-
-@TargetClass(className = "java.lang.reflect.WeakCache")
-final class Target_java_lang_reflect_WeakCache {
-}
 
 @TargetClass(java.lang.reflect.Array.class)
 final class Target_java_lang_reflect_Array {
@@ -420,15 +402,15 @@ final class Util_java_lang_reflect_Array {
 
     static Object createMultiArrayAtIndex(int index, DynamicHub arrayHub, int[] dimensions) {
         final int length = dimensions[index];
-        final Object result = Array.newInstance(arrayHub.getComponentHub().asClass(), length);
+        final Object result = Array.newInstance(DynamicHub.toClass(arrayHub.getComponentHub()), length);
 
         final int nextIndex = index + 1;
         if (nextIndex < dimensions.length && length > 0) {
             DynamicHub subArrayHub = arrayHub.getComponentHub();
 
             UnsignedWord offset = LayoutEncoding.getArrayBaseOffset(arrayHub.getLayoutEncoding());
-            UnsignedWord size = LayoutEncoding.getArraySize(arrayHub.getLayoutEncoding(), length);
-            while (offset.belowThan(size)) {
+            UnsignedWord endOffset = LayoutEncoding.getArrayElementOffset(arrayHub.getLayoutEncoding(), length);
+            while (offset.belowThan(endOffset)) {
                 Object subArray = createMultiArrayAtIndex(nextIndex, subArrayHub, dimensions);
                 // Each subArray could create a cross-generational reference.
                 BarrieredAccess.writeObject(result, offset, subArray);

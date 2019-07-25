@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,9 +37,13 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins.Registratio
 import org.graalvm.compiler.nodes.memory.HeapAccess.BarrierType;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.IsolateThread;
+import org.graalvm.util.GuardedAnnotationAccess;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.ForceFixedRegisterReads;
+import com.oracle.svm.core.c.NonmovableArray;
+import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.graal.nodes.ReadRegisterFixedNode;
 import com.oracle.svm.core.graal.nodes.ReadRegisterFloatingNode;
@@ -47,7 +53,7 @@ import com.oracle.svm.core.graal.thread.LoadVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.StoreVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.VMThreadLocalMTObjectReferenceWalker;
 import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.heap.ReferenceMapEncoder;
+import com.oracle.svm.core.heap.InstanceReferenceMapEncoder;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.threadlocal.FastThreadLocal;
@@ -97,7 +103,7 @@ public class VMThreadMTFeature implements GraalFeature {
      * access memory that we manage ourselfs.
      */
     @Override
-    public void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean hosted) {
+    public void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean analysis, boolean hosted) {
         for (Class<? extends FastThreadLocal> threadLocalClass : VMThreadLocalInfo.THREAD_LOCAL_CLASSES) {
             Registration r = new Registration(invocationPlugins, threadLocalClass);
             Class<?> valueClass = VMThreadLocalInfo.getValueClass(threadLocalClass);
@@ -188,7 +194,15 @@ public class VMThreadMTFeature implements GraalFeature {
          * must not directly reference a fixed register).
          */
         boolean isDeoptTarget = b.getMethod() instanceof SharedMethod && ((SharedMethod) b.getMethod()).isDeoptTarget();
-        if (isDeoptTarget || usedForAddress) {
+
+        /*
+         * Due to the fact that the LLVM backend handles reading the thread pointer in entry point
+         * methods as a stack slot load instead of a direct register access, a ReadRegisterFixedNode
+         * should be emitted in those cases so that the register read doesn't get hoisted above
+         * where the thread pointer gets stored in the stack slot.
+         */
+        boolean forceFixedReads = GuardedAnnotationAccess.isAnnotationPresent(b.getMethod(), ForceFixedRegisterReads.class);
+        if (isDeoptTarget || usedForAddress || forceFixedReads) {
             return b.add(ReadRegisterFixedNode.forIsolateThread());
         } else {
             return b.add(ReadRegisterFloatingNode.forIsolateThread());
@@ -257,20 +271,25 @@ public class VMThreadMTFeature implements GraalFeature {
             assert nextOffset % Math.min(8, info.sizeInBytes) == 0 : "alignment mismatch: " + info.sizeInBytes + ", " + nextOffset;
 
             if (info.isObject) {
-                referenceMap.markReferenceAtIndex(nextOffset / info.sizeInBytes);
+                referenceMap.markReferenceAtOffset(nextOffset, true);
             }
             info.offset = nextOffset;
             nextOffset += info.sizeInBytes;
         }
         VMError.guarantee(threadLocalAtOffsetZero == null || threadLocalCollector.getInfo(threadLocalAtOffsetZero).offset == 0);
 
-        ReferenceMapEncoder encoder = new ReferenceMapEncoder();
+        InstanceReferenceMapEncoder encoder = new InstanceReferenceMapEncoder();
         encoder.add(referenceMap);
-        objectReferenceWalker.vmThreadReferenceMapEncoding = encoder.encodeAll(null);
+        NonmovableArray<Byte> referenceMapEncoding = encoder.encodeAll();
+        objectReferenceWalker.vmThreadReferenceMapEncoding = NonmovableArrays.getHostedArray(referenceMapEncoding);
         objectReferenceWalker.vmThreadReferenceMapIndex = encoder.lookupEncoding(referenceMap);
         objectReferenceWalker.vmThreadSize = nextOffset;
 
         /* Remember the final sorted list. */
         VMThreadLocalInfos.setInfos(sortedThreadLocalInfos);
+    }
+
+    public int offsetOf(FastThreadLocal threadLocal) {
+        return threadLocalCollector.getInfo(threadLocal).offset;
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -293,6 +295,10 @@ public class Socket {
 
     @CConstant
     public static native int AF_UNSPEC();
+
+    @CConstant
+    @Platforms(Platform.DARWIN.class)
+    public static native int AF_LINK();
 
     @CConstant
     public static native int AF_LOCAL();
@@ -765,6 +771,10 @@ public class Socket {
     public static native long SIOCGIFBRDADDR();
 
     @CConstant
+    @Platforms(Platform.LINUX.class)
+    public static native int SIOCGIFHWADDR();
+
+    @CConstant
     public static native long SIOCGIFNETMASK();
 
     @CConstant
@@ -833,9 +843,8 @@ public class Socket {
     @Platforms(Platform.LINUX.class)
     public static native int SO_BSDCOMPAT();
 
-    // [not present on old Linux systems]
-    // @CConstant
-    // public static native int SO_REUSEPORT();
+    @CConstant
+    public static native int SO_REUSEPORT();
 
     @CConstant
     @Platforms(Platform.LINUX.class)

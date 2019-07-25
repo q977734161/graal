@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,6 +27,7 @@ package com.oracle.svm.hosted.thread;
 import java.util.List;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
@@ -87,7 +90,7 @@ public class VMThreadSTFeature implements GraalFeature {
      * ignored.
      */
     @Override
-    public void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean hosted) {
+    public void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, InvocationPlugins invocationPlugins, boolean analysis, boolean hosted) {
         for (Class<? extends FastThreadLocal> threadLocalClass : VMThreadLocalInfo.THREAD_LOCAL_CLASSES) {
             Registration r = new Registration(invocationPlugins, threadLocalClass);
             Class<?> valueClass = VMThreadLocalInfo.getValueClass(threadLocalClass);
@@ -171,14 +174,14 @@ public class VMThreadSTFeature implements GraalFeature {
     private boolean handleGet(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
         VMThreadLocalInfo info = threadLocalCollector.findInfo(b, receiver.get());
         VMThreadLocalSTHolderNode holder = b.add(new VMThreadLocalSTHolderNode(info));
-        b.addPush(targetMethod.getSignature().getReturnKind(), new LoadVMThreadLocalNode(b.getMetaAccess(), info, holder, BarrierType.PRECISE));
+        b.addPush(targetMethod.getSignature().getReturnKind(), new LoadVMThreadLocalNode(b.getMetaAccess(), info, holder, BarrierType.ARRAY));
         return true;
     }
 
     private boolean handleSet(GraphBuilderContext b, Receiver receiver, ValueNode valueNode) {
         VMThreadLocalInfo info = threadLocalCollector.findInfo(b, receiver.get());
         VMThreadLocalSTHolderNode holder = b.add(new VMThreadLocalSTHolderNode(info));
-        b.add(new StoreVMThreadLocalNode(info, holder, valueNode, BarrierType.PRECISE));
+        b.add(new StoreVMThreadLocalNode(info, holder, valueNode, BarrierType.ARRAY));
         return true;
     }
 
@@ -215,11 +218,11 @@ public class VMThreadSTFeature implements GraalFeature {
         int nextPrimitive = 0;
         for (VMThreadLocalInfo info : sortedThreadLocalInfos) {
             if (info.isObject) {
-                info.offset = layout.getArrayElementOffset(JavaKind.Object, nextObject);
+                info.offset = NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Object, nextObject));
                 nextObject += 1;
             } else {
                 assert nextPrimitive % Math.min(8, info.sizeInBytes) == 0 : "alignment mismatch: " + info.sizeInBytes + ", " + nextPrimitive;
-                info.offset = layout.getArrayElementOffset(JavaKind.Byte, nextPrimitive);
+                info.offset = NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Byte, nextPrimitive));
                 nextPrimitive += info.sizeInBytes;
             }
         }

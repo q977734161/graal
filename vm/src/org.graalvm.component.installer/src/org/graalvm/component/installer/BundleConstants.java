@@ -32,8 +32,11 @@ public class BundleConstants {
     public static final String BUNDLE_NAME = "Bundle-Name";    // NOI18N
     public static final String BUNDLE_VERSION = "Bundle-Version"; // NOI18N
     public static final String BUNDLE_REQUIRED = "Bundle-RequireCapability"; // NOI18N
+    public static final String BUNDLE_PROVIDED = "Bundle-ProvideCapability"; // NOI18N
     public static final String GRAALVM_CAPABILITY = "org.graalvm"; // NOI18N
     public static final String BUNDLE_POLYGLOT_PART = "x-GraalVM-Polyglot-Part"; // NOI18N
+    public static final String BUNDLE_LICENSE_TYPE = "x-GraalVM-License-Type"; // NOI18N
+    public static final String BUNDLE_LICENSE_PATH = "x-GraalVM-License-Path"; // NOI18N
 
     /**
      * Extended optional attribute; marks directories, which should be removed completely without
@@ -41,11 +44,19 @@ public class BundleConstants {
      */
     public static final String BUNDLE_WORKDIRS = "x-GraalVM-Working-Directories"; // NOI18N
 
-    public static final String PATH_LICENSE = "LICENSE"; // NOI18N
-
     public static final String META_INF_PATH = "META-INF/"; // NOI18N
     public static final String META_INF_PERMISSIONS_PATH = "META-INF/permissions"; // NOI18N
     public static final String META_INF_SYMLINKS_PATH = "META-INF/symlinks"; // NOI18N
 
     public static final String GRAAL_COMPONENT_ID = GRAALVM_CAPABILITY; // NOI18N
+
+    /**
+     * Post-install message. In the future more x-GraalVM-Message might appear
+     */
+    public static final String BUNDLE_MESSAGE_POSTINST = "x-GraalVM-Message-PostInst"; // NOI18N
+
+    /**
+     * Version key in the release file.
+     */
+    public static final String GRAAL_VERSION = "graalvm_version"; // NOI18N
 }

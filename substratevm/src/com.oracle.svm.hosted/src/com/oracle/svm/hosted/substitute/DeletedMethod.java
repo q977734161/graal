@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.hosted.substitute;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
@@ -56,7 +59,25 @@ public class DeletedMethod extends CustomSubstitutionMethod {
         this.deleteAnnotation = deleteAnnotation;
     }
 
-    static final Method reportErrorMethod;
+    @Override
+    public Annotation[] getAnnotations() {
+        return AnnotatedField.appendAnnotationTo(original.getAnnotations(), deleteAnnotation);
+    }
+
+    @Override
+    public Annotation[] getDeclaredAnnotations() {
+        return AnnotatedField.appendAnnotationTo(original.getDeclaredAnnotations(), deleteAnnotation);
+    }
+
+    @Override
+    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+        if (annotationClass.isInstance(deleteAnnotation)) {
+            return annotationClass.cast(deleteAnnotation);
+        }
+        return original.getAnnotation(annotationClass);
+    }
+
+    public static final Method reportErrorMethod;
 
     static {
         try {

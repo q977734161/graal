@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,20 +25,20 @@
 package org.graalvm.compiler.core.test;
 
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.loop.phases.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.nodes.ProxyNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.OptimisticOptimizations.Optimization;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.ConditionalEliminationPhase;
-import org.graalvm.compiler.phases.common.ConvertDeoptimizeToGuardPhase;
 import org.graalvm.compiler.phases.common.IterativeConditionalEliminationPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
 import org.graalvm.compiler.phases.schedule.SchedulePhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.junit.Assert;
 
 /**
@@ -66,7 +68,7 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
         DebugContext debug = graph.getDebug();
         debug.dump(DebugContext.BASIC_LEVEL, graph, "Graph");
-        PhaseContext context = new PhaseContext(getProviders());
+        CoreProviders context = getProviders();
         CanonicalizerPhase canonicalizer1 = new CanonicalizerPhase();
         CanonicalizerPhase canonicalizer = new CanonicalizerPhase();
         try (DebugContext.Scope scope = debug.scope("ConditionalEliminationTest", graph)) {
@@ -91,7 +93,7 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
         assertEquals(referenceGraph, graph);
     }
 
-    protected void prepareGraph(StructuredGraph graph, CanonicalizerPhase canonicalizer, PhaseContext context, boolean applyLowering) {
+    protected void prepareGraph(StructuredGraph graph, CanonicalizerPhase canonicalizer, CoreProviders context, boolean applyLowering) {
         if (applyLowering) {
             new ConvertDeoptimizeToGuardPhase().apply(graph, context);
             new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.HIGH_TIER).apply(graph, context);
@@ -103,7 +105,7 @@ public class ConditionalEliminationTestBase extends GraalCompilerTest {
 
     public void testProxies(String snippet, int expectedProxiesCreated) {
         StructuredGraph graph = parseEager(snippet, AllowAssumptions.YES);
-        PhaseContext context = new PhaseContext(getProviders());
+        CoreProviders context = getProviders();
         CanonicalizerPhase canonicalizer1 = new CanonicalizerPhase();
         canonicalizer1.disableSimplification();
         canonicalizer1.apply(graph, context);

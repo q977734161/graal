@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -21,6 +23,8 @@
  * questions.
  */
 package com.oracle.svm.hosted.meta;
+
+import org.graalvm.compiler.core.common.CompressEncoding;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.meta.SubstrateMemoryAccessProvider;
@@ -74,8 +78,9 @@ public class HostedMemoryAccessProvider implements SubstrateMemoryAccessProvider
     }
 
     @Override
-    public JavaConstant readNarrowObjectConstant(Constant base, long displacement) {
-        assert SubstrateOptions.UseHeapBaseRegister.getValue();
+    public JavaConstant readNarrowObjectConstant(Constant base, long displacement, CompressEncoding encoding) {
+        assert SubstrateOptions.SpawnIsolates.getValue();
+        // NOTE: the encoding parameter only applies at image runtime, not for hosted execution
         JavaConstant result = readObjectConstant(base, displacement);
         if (result == null) {
             return null;

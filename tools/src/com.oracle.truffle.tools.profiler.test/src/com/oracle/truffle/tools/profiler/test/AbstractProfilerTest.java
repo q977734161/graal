@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
+import org.junit.After;
 import org.junit.Before;
 
 import com.oracle.truffle.api.instrumentation.SourceSectionFilter;
@@ -77,8 +78,13 @@ public abstract class AbstractProfilerTest {
         context = Context.newBuilder().in(System.in).out(out).err(err).build();
     }
 
-    protected void execute(Source source) {
+    protected void eval(Source source) {
         context.eval(source);
+    }
+
+    @After
+    public void after() {
+        context.close();
     }
 
 }

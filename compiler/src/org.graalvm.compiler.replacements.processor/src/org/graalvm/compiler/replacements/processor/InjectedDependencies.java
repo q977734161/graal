@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -80,9 +82,12 @@ public class InjectedDependencies implements Iterable<Dependency> {
     public enum WellKnownDependency {
         CONSTANT_REFLECTION("b.getConstantReflection()", "jdk.vm.ci.meta.ConstantReflectionProvider"),
         META_ACCESS("b.getMetaAccess()", "jdk.vm.ci.meta.MetaAccessProvider"),
+        ASSUMPTIONS("b.getAssumptions()", "jdk.vm.ci.meta.Assumptions"),
+        OPTIONVALUES("b.getOptions()", "org.graalvm.compiler.options.OptionValues"),
         INJECTED_STAMP(new InjectedStampDependency()),
         SNIPPET_REFLECTION(new InjectedDependency("snippetReflection", "org.graalvm.compiler.api.replacements.SnippetReflectionProvider")),
         STAMP_PROVIDER("b.getStampProvider()", "org.graalvm.compiler.nodes.spi.StampProvider"),
+        INTRINSIC_CONTEXT("b.getIntrinsic()", "org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext"),
         STRUCTURED_GRAPH("b.getGraph()", "org.graalvm.compiler.nodes.StructuredGraph");
 
         private final String expr;

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,18 +24,14 @@
  */
 package com.oracle.svm.core.deopt;
 
-import java.util.Arrays;
-import java.util.List;
-
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 
-import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.annotate.UnknownPrimitiveField;
-import com.oracle.svm.core.util.CounterFeature;
 
 public class DeoptimizationSupport {
 
@@ -43,7 +41,19 @@ public class DeoptimizationSupport {
     public DeoptimizationSupport() {
     }
 
-    private static DeoptimizationSupport get() {
+    /**
+     * Returns true if the image build was configured with support for deoptimization. In most
+     * cases, that happens when support for runtime compilation using Graal is used. However, we
+     * also have a few low-level unit tests that test deoptimization in isolation, without Graal
+     * compilation.
+     */
+    @Fold
+    public static boolean enabled() {
+        return ImageSingletons.contains(DeoptimizationSupport.class);
+    }
+
+    @Fold
+    static DeoptimizationSupport get() {
         return ImageSingletons.lookup(DeoptimizationSupport.class);
     }
 
@@ -59,28 +69,8 @@ public class DeoptimizationSupport {
     /**
      * Returns a pointer to the code of {@link Deoptimizer#deoptStub}.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static CFunctionPointer getDeoptStubPointer() {
         return get().deoptStubPointer;
-    }
-}
-
-@AutomaticFeature
-class DeoptimizationFeature implements Feature {
-    @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return Arrays.asList(CounterFeature.class);
-    }
-
-    @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
-        /*
-         * We register the DeoptimizationSupport object even if deoptimization is not used for the
-         * current image. In that case, the deoptStubPointer just remains 0.
-         */
-        ImageSingletons.add(DeoptimizationSupport.class, new DeoptimizationSupport());
-        /*
-         * Counters for deoptimization.
-         */
-        ImageSingletons.add(DeoptimizationCounters.class, new DeoptimizationCounters());
     }
 }

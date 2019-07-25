@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,13 +25,14 @@
 package com.oracle.svm.core.genscavenge;
 
 import org.graalvm.compiler.api.replacements.Fold;
+import org.graalvm.compiler.replacements.nodes.AssertionNode;
 import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.SizeOf;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
@@ -60,11 +63,6 @@ import com.oracle.svm.core.util.UnsignedUtils;
  * <p>
  * Objects in a AlignedHeapChunk have to be promoted by copying from their current HeapChunk to a
  * destination HeapChunk.
- * <p>
- * An Object in an AlignedHeapChunk can be pinned, by pinning the whole AlignedHeapChunk, so that
- * promotion does not copy the objects in the AlignedHeapChunk, but moves the whole AlignedHeapChunk
- * from one Space to another, that is, without changing the addresses of any of the Objects in the
- * AlignedHeapChunk.
  *
  * An AlignedHeapChunk is laid out:
  *
@@ -254,25 +252,27 @@ public class AlignedHeapChunk extends HeapChunk {
      *
      * This has to be fast, because it is used by the post-write barrier.
      */
-    public static void dirtyCardForObjectOfAlignedHeapChunk(Object obj) {
-        final AlignedHeader chunk = getEnclosingAlignedHeapChunk(obj);
+    public static void dirtyCardForObjectOfAlignedHeapChunk(Object object, boolean verifyOnly) {
+        final Pointer objectPointer = Word.objectToUntrackedPointer(object);
+        final AlignedHeader chunk = getEnclosingAlignedHeapChunkFromPointer(objectPointer);
         final Pointer cardTableStart = getCardTableStart(chunk);
-        final UnsignedWord index = getObjectIndex(chunk, obj);
-        CardTable.dirtyEntryAtIndex(cardTableStart, index);
+        final UnsignedWord index = getObjectIndex(chunk, objectPointer);
+        if (verifyOnly) {
+            AssertionNode.assertion(false, CardTable.isDirtyEntryAtIndexUnchecked(cardTableStart, index), "card must be dirty");
+        } else {
+            CardTable.dirtyEntryAtIndex(cardTableStart, index);
+        }
     }
 
     /** Return the offset of an object within the objects part of a chunk. */
-    private static UnsignedWord getObjectOffset(AlignedHeader that, Object obj) {
+    private static UnsignedWord getObjectOffset(AlignedHeader that, Pointer objectPointer) {
         final Pointer objectsStart = getObjectsStart(that);
-        final Pointer objectPointer = Word.objectToUntrackedPointer(obj);
-        assert objectsStart.belowOrEqual(objectPointer);
-        assert objectPointer.belowOrEqual(that.getEnd());
         return objectPointer.subtract(objectsStart);
     }
 
     /** Return the index of an object within the tables of a chunk. */
-    private static UnsignedWord getObjectIndex(AlignedHeader that, Object obj) {
-        final UnsignedWord offset = getObjectOffset(that, obj);
+    private static UnsignedWord getObjectIndex(AlignedHeader that, Pointer objectPointer) {
+        final UnsignedWord offset = getObjectOffset(that, objectPointer);
         return CardTable.memoryOffsetToIndex(offset);
     }
 
@@ -376,12 +376,6 @@ public class AlignedHeapChunk extends HeapChunk {
             final Log verifyLog = HeapImpl.getHeapImpl().getHeapVerifierImpl().getWitnessLog().string("[AlignedHeapChunk.verify:");
             verifyLog.string("  identifier: ").hex(that).string("  superclass fails to verify]").newline();
         }
-        /* AlignedHeapChunks should not be pinned. */
-        if (result && that.getPinned()) {
-            result = false;
-            final Log verifyLog = HeapImpl.getHeapImpl().getHeapVerifierImpl().getWitnessLog().string("[AlignedHeapChunk.verify:");
-            verifyLog.string("  identifier: ").hex(that).string("  isPinned.]").newline();
-        }
         /* Verify the object headers. */
         if (result && !verifyHeaders(that)) {
             result = false;
@@ -446,7 +440,7 @@ public class AlignedHeapChunk extends HeapChunk {
 
     /** Walk the dirty Objects in this chunk, passing each to a Visitor. */
     static boolean walkDirtyObjectsOfAlignedHeapChunk(AlignedHeader that, ObjectVisitor visitor, boolean clean) {
-        final Log trace = Log.noopLog().string("[AlignedHeapChunk.walkDirtyObjects:");
+        final Log trace = Log.noopLog().string("[AlignedHeapChunk.walkDirtyObjectsOfAlignedHeapChunk:");
         trace.string("  that: ").hex(that).string("  clean: ").bool(clean);
         /* Iterate through the cards looking for dirty cards. */
         final Pointer cardTableStart = getCardTableStart(that);
@@ -583,6 +577,10 @@ public class AlignedHeapChunk extends HeapChunk {
 
 @AutomaticFeature
 class AlignedHeapChunkMemoryWalkerAccessFeature implements Feature {
+    @Override
+    public boolean isInConfiguration(IsInConfigurationAccess access) {
+        return HeapOptions.UseCardRememberedSetHeap.getValue();
+    }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {

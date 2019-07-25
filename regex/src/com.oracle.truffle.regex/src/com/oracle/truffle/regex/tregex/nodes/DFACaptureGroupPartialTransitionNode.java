@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package com.oracle.truffle.regex.tregex.nodes;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonArray;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
@@ -48,16 +49,18 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
     public static final byte[][] EMPTY_INDEX_CLEARS = {};
 
     private static final DFACaptureGroupPartialTransitionNode EMPTY_INSTANCE = new DFACaptureGroupPartialTransitionNode(
-                    EMPTY_REORDER_SWAPS, EMPTY_ARRAY_COPIES, EMPTY_INDEX_UPDATES, EMPTY_INDEX_CLEARS, (byte) 0);
+                    0, EMPTY_REORDER_SWAPS, EMPTY_ARRAY_COPIES, EMPTY_INDEX_UPDATES, EMPTY_INDEX_CLEARS, (byte) 0);
 
+    private final int id;
     @CompilationFinal(dimensions = 1) private final byte[] reorderSwaps;
     @CompilationFinal(dimensions = 1) private final byte[] arrayCopies;
     @CompilationFinal(dimensions = 2) private final byte[][] indexUpdates;
     @CompilationFinal(dimensions = 2) private final byte[][] indexClears;
     private final byte preReorderFinalStateResultIndex;
 
-    private DFACaptureGroupPartialTransitionNode(byte[] reorderSwaps, byte[] arrayCopies, byte[][] indexUpdates, byte[][] indexClears,
+    private DFACaptureGroupPartialTransitionNode(int id, byte[] reorderSwaps, byte[] arrayCopies, byte[][] indexUpdates, byte[][] indexClears,
                     byte preReorderFinalStateResultIndex) {
+        this.id = id;
         this.reorderSwaps = reorderSwaps;
         this.arrayCopies = arrayCopies;
         this.indexUpdates = indexUpdates;
@@ -68,14 +71,13 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
     /**
      * Creates a new {@link DFACaptureGroupPartialTransitionNode}. All numeric values stored in this
      * class refer to indices of the first or second dimension of
-     * {@link DFACaptureGroupTrackingData#results} and are stored as <code>byte</code> to save
-     * space. This is OK since the dimensions of {@link DFACaptureGroupTrackingData#results} are
-     * capped by
-     * {@link com.oracle.truffle.regex.tregex.TRegexOptions#TRegexMaxNumberOfNFAStatesInOneDFAState}
+     * {@link DFACaptureGroupTrackingData#results} and are stored as {@code byte} to save space.
+     * This is OK since the dimensions of {@link DFACaptureGroupTrackingData#results} are capped by
+     * {@link com.oracle.truffle.regex.tregex.TRegexOptions#TRegexMaxNumberOfNFAStatesInOneDFATransition}
      * (1st dimension) and
      * {@link com.oracle.truffle.regex.tregex.TRegexOptions#TRegexMaxNumberOfCaptureGroups}
-     * <code>* 2</code> (2nd dimension, times two because we need two array slots per capture group,
-     * one for the beginning and one for the end). <br>
+     * {@code * 2} (2nd dimension, times two because we need two array slots per capture group, one
+     * for the beginning and one for the end). <br>
      * Although we treat {@link DFACaptureGroupTrackingData#results} as a 2D-array here, it is
      * actually flattened into one dimension for performance. For that reason, we additionally have
      * {@link DFACaptureGroupTrackingData#currentResultOrder}, which stores the offset of every
@@ -92,69 +94,79 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
      *            array denote one swap operation.
      *            <p>
      *            Example: <br>
-     *            If
-     *            <code>currentResultOrder = DFACaptureGroupTrackingData#currentResultOrder</code>
-     *            and <code>reorderSwaps = [0, 1, 1, 2]</code>, then
-     *            <code>currentResultOrder[0]</code> will be swapped with
-     *            <code>currentResultOrder[1]</code>, and <code>currentResultOrder[1]</code> will be
-     *            swapped with <code>currentResultOrder[2]</code>, in that order.
+     *            If {@code currentResultOrder = DFACaptureGroupTrackingData#currentResultOrder} and
+     *            {@code reorderSwaps = [0, 1, 1, 2]}, then {@code currentResultOrder[0]} will be
+     *            swapped with {@code currentResultOrder[1]}, and {@code currentResultOrder[1]} will
+     *            be swapped with {@code currentResultOrder[2]}, in that order.
      *            </p>
      * @param arrayCopies copy rows of {@link DFACaptureGroupTrackingData#results} (1st dimension)
      *            as described in this array. Every two elements in this array denote one copy
      *            operation, where the first element is the source, and the second is the target.
      *            The copy operations will be applied <em>after</em> the reordering of
-     *            {@link DFACaptureGroupTrackingData#currentResultOrder} with
-     *            <code>reorderSwaps</code>.
+     *            {@link DFACaptureGroupTrackingData#currentResultOrder} with {@code reorderSwaps}.
      *            <p>
      *            Example: <br>
-     *            If <code>results = DFACaptureGroupTrackingData#results</code> and
-     *            <code>arrayCopies = [0, 1, 2, 3]</code>, then the contents of
-     *            <code>results[0]</code> will be copied into <code>results[1]</code>, and the
-     *            contents of <code>results[2]</code> will be copied into <code>results[3]</code>.
+     *            If {@code results = DFACaptureGroupTrackingData#results} and
+     *            {@code arrayCopies = [0, 1, 2, 3]}, then the contents of {@code results[0]} will
+     *            be copied into {@code results[1]}, and the contents of {@code results[2]} will be
+     *            copied into {@code results[3]}.
      *            </p>
      * @param indexUpdates denotes which index of which array in
      *            {@link DFACaptureGroupTrackingData#results} shall be updated to
-     *            <code>currentIndex</code> in {@link #apply(DFACaptureGroupTrackingData, int)},
-     *            {@link #applyPreFinalStateTransition(DFACaptureGroupTrackingData, boolean, int)}
-     *            and {@link #applyFinalStateTransition(DFACaptureGroupTrackingData, boolean, int)}.
-     *            In every row (1st dimension element) of this 2D array, the first value is the
+     *            {@code currentIndex} in
+     *            {@link #apply(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, int)},
+     *            {@link #applyPreFinalStateTransition(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, boolean, int)}
+     *            and
+     *            {@link #applyFinalStateTransition(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, boolean, int)}
+     *            . In every row (1st dimension element) of this 2D array, the first value is the
      *            index of one row in {@link DFACaptureGroupTrackingData#results}, all following
-     *            values are indices in that row that shall be set to <code>currentIndex</code>.
+     *            values are indices in that row that shall be set to {@code currentIndex}.
      *            <p>
      *            Example: <br>
-     *            If <code>results = DFACaptureGroupTrackingData#results</code> and
-     *            <code>indexUpdates = [[0, 1, 2], [3, 4]]</code>, then <code>results[0][1]</code>,
-     *            <code>results[0][2]</code> and <code>results[3][4]</code> will be set to
-     *            <code>currentIndex</code>.
+     *            If {@code results = DFACaptureGroupTrackingData#results} and
+     *            {@code indexUpdates = [[0, 1, 2], [3, 4]]}, then {@code results[0][1]},
+     *            {@code results[0][2]} and {@code results[3][4]} will be set to
+     *            {@code currentIndex}.
      *            </p>
      * @param indexClears denotes which index of which array in
-     *            {@link DFACaptureGroupTrackingData#results} shall be updated to <code>0</code> in
-     *            {@link #apply(DFACaptureGroupTrackingData, int)},
-     *            {@link #applyPreFinalStateTransition(DFACaptureGroupTrackingData, boolean, int)}
-     *            and {@link #applyFinalStateTransition(DFACaptureGroupTrackingData, boolean, int)},
-     *            analogous to <code>indexUpdates</code>.
+     *            {@link DFACaptureGroupTrackingData#results} shall be updated to {@code 0} in
+     *            {@link #apply(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, int)},
+     *            {@link #applyPreFinalStateTransition(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, boolean, int)}
+     *            and
+     *            {@link #applyFinalStateTransition(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, boolean, int)}
+     *            , analogous to {@code indexUpdates}.
      * @param preReorderFinalStateResultIndex denotes the row (1st dimension element) of
      *            {@link DFACaptureGroupTrackingData#results} that corresponds to the NFA final
-     *            state <em>before</em> the reordering given by <code>reorderSwaps</code> is
-     *            applied. This is needed in
-     *            {@link #applyPreFinalStateTransition(DFACaptureGroupTrackingData, boolean, int)}
-     *            when {@link TRegexDFAExecutorNode#isSearching()} is <code>true</code>, because in
-     *            that case we need to be able to apply copy the current result corresponding to the
-     *            NFA final state without doing any reordering.
+     *            state <em>before</em> the reordering given by {@code reorderSwaps} is applied.
+     *            This is needed in
+     *            {@link #applyPreFinalStateTransition(TRegexDFAExecutorNode, DFACaptureGroupTrackingData, boolean, int)}
+     *            when {@link TRegexDFAExecutorNode#isSearching()} is {@code true}, because in that
+     *            case we need to be able to apply copy the current result corresponding to the NFA
+     *            final state without doing any reordering.
      * @return a new {@link DFACaptureGroupPartialTransitionNode}, or a static empty instance if all
      *         arguments are empty or zero.
      */
-    public static DFACaptureGroupPartialTransitionNode create(byte[] reorderSwaps, byte[] arrayCopies, byte[][] indexUpdates, byte[][] indexClears,
+    public static DFACaptureGroupPartialTransitionNode create(
+                    DFAGenerator dfaGen,
+                    byte[] reorderSwaps,
+                    byte[] arrayCopies,
+                    byte[][] indexUpdates,
+                    byte[][] indexClears,
                     byte preReorderFinalStateResultIndex) {
         assert (reorderSwaps.length & 1) == 0 : "reorderSwaps must have an even number of elements";
         if (reorderSwaps.length == 0 && arrayCopies.length == 0 && indexUpdates.length == 0 && indexClears.length == 0 && preReorderFinalStateResultIndex == 0) {
-            return createEmpty();
+            return getEmptyInstance();
         }
-        return new DFACaptureGroupPartialTransitionNode(reorderSwaps, arrayCopies, indexUpdates, indexClears, preReorderFinalStateResultIndex);
+        return new DFACaptureGroupPartialTransitionNode(dfaGen.getCgPartialTransitionIDCounter().inc(),
+                        reorderSwaps, arrayCopies, indexUpdates, indexClears, preReorderFinalStateResultIndex);
     }
 
-    public static DFACaptureGroupPartialTransitionNode createEmpty() {
+    public static DFACaptureGroupPartialTransitionNode getEmptyInstance() {
         return EMPTY_INSTANCE;
+    }
+
+    public int getId() {
+        return id;
     }
 
     public boolean doesReorderResults() {
@@ -165,7 +177,10 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
         return arrayCopies;
     }
 
-    public void apply(DFACaptureGroupTrackingData d, final int currentIndex) {
+    public void apply(TRegexDFAExecutorNode executor, DFACaptureGroupTrackingData d, final int currentIndex) {
+        if (executor.recordExecution()) {
+            executor.getDebugRecorder().recordCGPartialTransition(currentIndex, id);
+        }
         CompilerAsserts.partialEvaluationConstant(this);
         applyReorder(d.currentResultOrder);
         applyArrayCopy(d.results, d.currentResultOrder, d.currentResult.length);
@@ -173,21 +188,27 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
         applyIndexClear(d.results, d.currentResultOrder);
     }
 
-    public void applyPreFinalStateTransition(DFACaptureGroupTrackingData d, boolean searching, final int currentIndex) {
+    public void applyPreFinalStateTransition(TRegexDFAExecutorNode executor, DFACaptureGroupTrackingData d, boolean searching, final int currentIndex) {
         CompilerAsserts.partialEvaluationConstant(this);
         if (!searching) {
-            apply(d, currentIndex);
+            apply(executor, d, currentIndex);
             return;
         }
+        if (executor.recordExecution()) {
+            executor.getDebugRecorder().recordCGPartialTransition(currentIndex, id);
+        }
         d.exportResult(preReorderFinalStateResultIndex);
-        applyFinalStateTransition(d, true, currentIndex);
+        applyFinalStateTransition(executor, d, true, currentIndex);
     }
 
-    public void applyFinalStateTransition(DFACaptureGroupTrackingData d, boolean searching, int currentIndex) {
+    public void applyFinalStateTransition(TRegexDFAExecutorNode executor, DFACaptureGroupTrackingData d, boolean searching, int currentIndex) {
         CompilerAsserts.partialEvaluationConstant(this);
         if (!searching) {
-            apply(d, currentIndex);
+            apply(executor, d, currentIndex);
             return;
+        }
+        if (executor.recordExecution()) {
+            executor.getDebugRecorder().recordCGPartialTransition(currentIndex, id);
         }
         assert arrayCopies.length == 0;
         assert indexUpdates.length <= 1;
@@ -321,7 +342,7 @@ public final class DFACaptureGroupPartialTransitionNode extends Node implements 
     @TruffleBoundary
     @Override
     public JsonValue toJson() {
-        JsonObject json = Json.obj(Json.prop("reorderSwaps", Json.arrayUnsigned(reorderSwaps)));
+        JsonObject json = Json.obj(Json.prop("id", id), Json.prop("reorderSwaps", Json.arrayUnsigned(reorderSwaps)));
         JsonArray copies = Json.array();
         for (int i = 0; i < arrayCopies.length; i += 2) {
             final int source = Byte.toUnsignedInt(arrayCopies[i]);

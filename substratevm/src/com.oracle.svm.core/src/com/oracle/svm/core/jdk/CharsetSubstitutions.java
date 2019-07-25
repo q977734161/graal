@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,8 +37,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-
-import sun.misc.ASCIICaseInsensitiveComparator;
+import com.oracle.svm.core.annotate.TargetElement;
 
 @TargetClass(java.nio.charset.Charset.class)
 @SuppressWarnings({"unused"})
@@ -55,7 +56,7 @@ final class Target_java_nio_charset_Charset {
 
     @Substitute
     private static SortedMap<String, Charset> availableCharsets() {
-        TreeMap<String, Charset> result = new TreeMap<>(ASCIICaseInsensitiveComparator.CASE_INSENSITIVE_ORDER);
+        TreeMap<String, Charset> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         Map<String, Charset> charsets = ImageSingletons.lookup(LocalizationSupport.class).charsets;
         for (Charset charset : charsets.values()) {
             result.put(charset.name(), charset);
@@ -70,9 +71,7 @@ final class Target_java_nio_charset_Charset {
         }
 
         Map<String, Charset> charsets = ImageSingletons.lookup(LocalizationSupport.class).charsets;
-        String lowerCaseName = Target_sun_nio_cs_FastCharsetProvider.toLower(charsetName);
-
-        Charset result = charsets.get(lowerCaseName);
+        Charset result = charsets.get(charsetName.toLowerCase());
 
         if (result == null) {
             /* Only need to check the name if we didn't find a charset for it */
@@ -85,16 +84,10 @@ final class Target_java_nio_charset_Charset {
     private static native void checkName(String s);
 
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     private static boolean atBugLevel(String bl) {
         return false;
     }
-}
-
-@TargetClass(sun.nio.cs.FastCharsetProvider.class)
-final class Target_sun_nio_cs_FastCharsetProvider {
-
-    @Alias
-    protected static native String toLower(String s);
 }
 
 /** Dummy class to have a class with the file's name. */

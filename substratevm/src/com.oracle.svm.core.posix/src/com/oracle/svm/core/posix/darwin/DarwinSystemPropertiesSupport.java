@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,13 +24,15 @@
  */
 package com.oracle.svm.core.posix.darwin;
 
-import org.graalvm.nativeimage.Feature;
+import static com.oracle.svm.core.posix.headers.darwin.CoreFoundation.CFRetain;
+
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
@@ -37,8 +41,10 @@ import com.oracle.svm.core.jdk.SystemPropertiesSupport;
 import com.oracle.svm.core.posix.PosixSystemPropertiesSupport;
 import com.oracle.svm.core.posix.headers.Limits;
 import com.oracle.svm.core.posix.headers.Unistd;
+import com.oracle.svm.core.posix.headers.darwin.CoreFoundation;
+import com.oracle.svm.core.posix.headers.darwin.CoreFoundation.CFStringRef;
 
-@Platforms({Platform.DARWIN.class})
+@Platforms({InternalPlatform.DARWIN_AND_JNI.class})
 public class DarwinSystemPropertiesSupport extends PosixSystemPropertiesSupport {
 
     @Override
@@ -57,9 +63,43 @@ public class DarwinSystemPropertiesSupport extends PosixSystemPropertiesSupport 
             return "/var/tmp";
         }
     }
+
+    private static volatile String osVersionValue = null;
+
+    @Override
+    protected String osVersionValue() {
+        if (osVersionValue != null) {
+            return osVersionValue;
+        }
+
+        /* On OSX Java returns the ProductVersion instead of kernel release info. */
+        CoreFoundation.CFDictionaryRef dict = CoreFoundation._CFCopyServerVersionDictionary();
+        if (dict.isNull()) {
+            dict = CoreFoundation._CFCopySystemVersionDictionary();
+        }
+        if (dict.isNull()) {
+            return osVersionValue = "Unknown";
+        }
+        CoreFoundation.CFStringRef dictKeyRef = DarwinCoreFoundationUtils.toCFStringRef("MacOSXProductVersion");
+        CoreFoundation.CFStringRef dictValue = CoreFoundation.CFDictionaryGetValue(dict, dictKeyRef);
+        CoreFoundation.CFRelease(dictKeyRef);
+        if (dictValue.isNull()) {
+            dictKeyRef = DarwinCoreFoundationUtils.toCFStringRef("ProductVersion");
+            dictValue = CoreFoundation.CFDictionaryGetValue(dict, dictKeyRef);
+            CoreFoundation.CFRelease(dictKeyRef);
+        }
+        if (dictValue.isNonNull()) {
+            dictValue = (CFStringRef) CFRetain(dictValue);
+            osVersionValue = DarwinCoreFoundationUtils.fromCFStringRef(dictValue);
+            CoreFoundation.CFRelease(dictValue);
+        } else {
+            osVersionValue = "Unknown";
+        }
+        return osVersionValue;
+    }
 }
 
-@Platforms({Platform.DARWIN.class})
+@Platforms({InternalPlatform.DARWIN_AND_JNI.class})
 @AutomaticFeature
 class DarwinSystemPropertiesFeature implements Feature {
     @Override

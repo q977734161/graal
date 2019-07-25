@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -67,7 +69,7 @@ import org.graalvm.compiler.nodes.memory.MemoryPhiNode;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.phases.Phase;
-import org.graalvm.compiler.phases.common.util.HashSetNodeEventListener;
+import org.graalvm.compiler.phases.common.util.EconomicSetNodeEventListener;
 import org.graalvm.compiler.phases.graph.ReentrantNodeIterator;
 import org.graalvm.compiler.phases.graph.ReentrantNodeIterator.LoopInfo;
 import org.graalvm.compiler.phases.graph.ReentrantNodeIterator.NodeIteratorClosure;
@@ -219,7 +221,7 @@ public class FloatingReadPhase extends Phase {
             }
         }
 
-        HashSetNodeEventListener listener = new HashSetNodeEventListener(EnumSet.of(NODE_ADDED, ZERO_USAGES));
+        EconomicSetNodeEventListener listener = new EconomicSetNodeEventListener(EnumSet.of(NODE_ADDED, ZERO_USAGES));
         try (NodeEventScope nes = graph.trackNodeEvents(listener)) {
             ReentrantNodeIterator.apply(new FloatingReadClosure(modifiedInLoops, createFloatingReads, createMemoryMapNodes), graph.start(), new MemoryMapImpl(graph.start()));
         }
@@ -252,6 +254,8 @@ public class FloatingReadPhase extends Phase {
             for (MemoryMap state : states) {
                 MemoryNode last = state.getLastLocationAccess(key);
                 if (isPhi) {
+                    // Fortify: Suppress Null Deference false positive (`isPhi == true` implies
+                    // `merged != null`)
                     ((MemoryPhiNode) merged).addInput(ValueNodeUtil.asNode(last));
                 } else {
                     if (merged == last) {
@@ -306,7 +310,7 @@ public class FloatingReadPhase extends Phase {
                 processAccess((MemoryAccess) node, state);
             }
 
-            if (createFloatingReads & node instanceof FloatableAccessNode) {
+            if (createFloatingReads && node instanceof FloatableAccessNode) {
                 processFloatable((FloatableAccessNode) node, state);
             } else if (node instanceof MemoryCheckpoint.Single) {
                 processCheckpoint((MemoryCheckpoint.Single) node, state);
@@ -377,7 +381,8 @@ public class FloatingReadPhase extends Phase {
                 assert accessNode.getNullCheck() == false;
                 MemoryNode lastLocationAccess = state.getLastLocationAccess(locationIdentity);
                 try (DebugCloseable position = accessNode.withNodeSourcePosition()) {
-                    FloatingAccessNode floatingNode = accessNode.asFloatingNode(lastLocationAccess);
+                    FloatingAccessNode floatingNode = accessNode.asFloatingNode();
+                    assert floatingNode.getLastLocationAccess() == lastLocationAccess;
                     graph.replaceFixedWithFloating(accessNode, floatingNode);
                 }
             }

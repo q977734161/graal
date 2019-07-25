@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -63,12 +65,15 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.configure.ConfigurationFiles;
 import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.util.json.JSONParser;
+import com.oracle.svm.core.util.json.JSONParserException;
 import com.oracle.svm.hosted.ImageClassLoader;
-import com.oracle.svm.hosted.json.JSONParser;
-import com.oracle.svm.hosted.json.JSONParserException;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 
@@ -79,52 +84,46 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 public class DeclarativeSubstitutionProcessor extends AnnotationSubstitutionProcessor {
 
     public static class Options {
-        @Option(help = "Comma-separated list of file names with declarative substitutions", type = OptionType.User)//
-        public static final HostedOptionKey<String> SubstitutionFiles = new HostedOptionKey<>("");
 
         @Option(help = "Comma-separated list of resource file names with declarative substitutions", type = OptionType.User)//
-        public static final HostedOptionKey<String> SubstitutionResources = new HostedOptionKey<>("");
+        public static final HostedOptionKey<String[]> SubstitutionResources = new HostedOptionKey<>(null);
     }
 
     private final Map<Class<?>, ClassDescriptor> classDescriptors;
     private final Map<Executable, MethodDescriptor> methodDescriptors;
     private final Map<Field, FieldDescriptor> fieldDescriptors;
 
-    public DeclarativeSubstitutionProcessor(ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess) {
-        super(imageClassLoader, metaAccess);
+    public DeclarativeSubstitutionProcessor(ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess, ClassInitializationSupport classInitializationSupport) {
+        super(imageClassLoader, metaAccess, classInitializationSupport);
 
         classDescriptors = new HashMap<>();
         methodDescriptors = new HashMap<>();
         fieldDescriptors = new HashMap<>();
 
-        for (String substitutionFileName : Options.SubstitutionFiles.getValue().split(",")) {
+        for (String substitutionFileName : OptionUtils.flatten(",", ConfigurationFiles.Options.SubstitutionFiles.getValue())) {
             try {
-                if (!substitutionFileName.isEmpty()) {
-                    loadFile(new FileReader(substitutionFileName));
-                }
+                loadFile(new FileReader(substitutionFileName));
             } catch (FileNotFoundException ex) {
                 throw UserError.abort("Substitution file " + substitutionFileName + " not found.");
             } catch (IOException | JSONParserException ex) {
                 throw UserError.abort("Could not parse substitution file " + substitutionFileName + ": " + ex.getMessage());
             }
         }
-        for (String substitutionResourceName : Options.SubstitutionResources.getValue().split(",")) {
-            if (!substitutionResourceName.isEmpty()) {
-                try {
-                    InputStream substitutionStream = imageClassLoader.findResourceAsStreamByName(substitutionResourceName);
-                    if (substitutionStream == null) {
-                        throw UserError.abort("Substitution resource not found: " + substitutionResourceName);
-                    }
-                    loadFile(new InputStreamReader(substitutionStream));
-                } catch (IOException | JSONParserException ex) {
-                    throw UserError.abort("Could not parse substitution resource " + substitutionResourceName + ": " + ex.getMessage());
+        for (String substitutionResourceName : OptionUtils.flatten(",", Options.SubstitutionResources.getValue())) {
+            try {
+                InputStream substitutionStream = imageClassLoader.findResourceAsStreamByName(substitutionResourceName);
+                if (substitutionStream == null) {
+                    throw UserError.abort("Substitution resource not found: " + substitutionResourceName);
                 }
+                loadFile(new InputStreamReader(substitutionStream));
+            } catch (IOException | JSONParserException ex) {
+                throw UserError.abort("Could not parse substitution resource " + substitutionResourceName + ": " + ex.getMessage());
             }
         }
     }
 
     private void loadFile(Reader reader) throws IOException {
-        Set<Class<?>> annotatedClasses = new HashSet<>(imageClassLoader.findAnnotatedClasses(TargetClass.class));
+        Set<Class<?>> annotatedClasses = new HashSet<>(imageClassLoader.findAnnotatedClasses(TargetClass.class, false));
 
         JSONParser parser = new JSONParser(reader);
         @SuppressWarnings("unchecked")
@@ -445,8 +444,8 @@ class ClassDescriptor extends PlatformsDescriptor {
         }
 
         @Override
-        public String innerClass() {
-            return "";
+        public String[] innerClass() {
+            return new String[0];
         }
 
         /*
@@ -456,7 +455,7 @@ class ClassDescriptor extends PlatformsDescriptor {
          */
         @Override
         public Class<? extends BooleanSupplier>[] onlyWith() {
-            return (Class<? extends BooleanSupplier>[]) new Class<?>[]{DEFAULT_TARGETCLASS_PREDICATE};
+            return (Class<? extends BooleanSupplier>[]) new Class<?>[]{TargetClass.AlwaysIncluded.class};
         }
     }
 }
@@ -482,7 +481,7 @@ class ElementDescriptor extends PlatformsDescriptor {
 
         @Override
         public Class<? extends Predicate<Class<?>>>[] onlyWith() {
-            return (Class<? extends Predicate<Class<?>>>[]) new Class<?>[]{TargetElement.AlwaysIncluded.class};
+            return (Class<? extends Predicate<Class<?>>>[]) new Class<?>[]{TargetClass.AlwaysIncluded.class};
         }
     }
 }

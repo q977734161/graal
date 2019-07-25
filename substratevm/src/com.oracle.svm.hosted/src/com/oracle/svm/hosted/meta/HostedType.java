@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,6 +32,7 @@ import java.util.BitSet;
 
 import org.graalvm.word.WordBase;
 
+import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaType;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -43,7 +46,7 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public abstract class HostedType implements SharedType, WrappedJavaType, Comparable<HostedType> {
+public abstract class HostedType implements SharedType, WrappedJavaType, Comparable<HostedType>, OriginalClassProvider {
 
     protected final HostedUniverse universe;
     protected final AnalysisType wrapped;
@@ -216,13 +219,12 @@ public abstract class HostedType implements SharedType, WrappedJavaType, Compara
 
     @Override
     public final boolean isInitialized() {
-        assert wrapped.isInitialized();
-        return true;
+        return wrapped.isInitialized();
     }
 
     @Override
     public void initialize() {
-        assert wrapped.isInitialized();
+        wrapped.initialize();
     }
 
     @Override
@@ -413,8 +415,11 @@ public abstract class HostedType implements SharedType, WrappedJavaType, Compara
 
     @Override
     public boolean isLinked() {
-        assert wrapped.isLinked();
-        return true;
+        /*
+         * If the wrapped type is referencing some missing types verification may fail and the type
+         * will not be linked.
+         */
+        return wrapped.isLinked();
     }
 
     @Override
@@ -429,6 +434,11 @@ public abstract class HostedType implements SharedType, WrappedJavaType, Compara
 
     public void setEnclosingType(HostedType enclosingType) {
         this.enclosingType = enclosingType;
+    }
+
+    @Override
+    public Class<?> getJavaClass() {
+        return OriginalClassProvider.getJavaClass(universe.getSnippetReflection(), wrapped);
     }
 
     @Override

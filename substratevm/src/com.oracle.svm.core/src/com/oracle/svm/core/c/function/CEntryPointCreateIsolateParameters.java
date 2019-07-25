@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,13 +24,25 @@
  */
 package com.oracle.svm.core.c.function;
 
+import org.graalvm.nativeimage.c.struct.CField;
 import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.UnsignedWord;
 
 /**
  * Parameters for the creation of an isolate.
  */
 @CStruct("graal_create_isolate_params_t")
 public interface CEntryPointCreateIsolateParameters extends PointerBase {
-    // for future use
+    @CField("version")
+    int version();
+
+    @CField("version")
+    void setVersion(int version);
+
+    @CField("reserved_address_space_size")
+    UnsignedWord reservedSpaceSize();
+
+    @CField("reserved_address_space_size")
+    void setReservedSpaceSize(UnsignedWord reservedSpaceSize);
 }

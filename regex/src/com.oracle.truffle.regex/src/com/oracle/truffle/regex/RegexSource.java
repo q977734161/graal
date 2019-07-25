@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,28 +34,32 @@ import com.oracle.truffle.regex.tregex.util.json.JsonValue;
 public final class RegexSource implements JsonConvertible {
 
     private final String pattern;
-    private final RegexFlags flags;
+    private final String flags;
     private Source source;
     private boolean hashComputed = false;
     private int cachedHash;
 
-    public RegexSource(String pattern, RegexFlags flags) {
+    public RegexSource(String pattern, String flags) {
         this.pattern = pattern;
         this.flags = flags;
+    }
+
+    public RegexSource(String pattern) {
+        this(pattern, "");
     }
 
     public String getPattern() {
         return pattern;
     }
 
-    public RegexFlags getFlags() {
+    public String getFlags() {
         return flags;
     }
 
     public Source getSource() {
         if (source == null) {
             String text = toString();
-            source = Source.newBuilder(text).name(text).mimeType(RegexLanguage.MIME_TYPE).language(RegexLanguage.ID).build();
+            source = Source.newBuilder(RegexLanguage.ID, text, text).internal(true).name(text).mimeType(RegexLanguage.MIME_TYPE).build();
         }
         return source;
     }
@@ -100,7 +104,7 @@ public final class RegexSource implements JsonConvertible {
                 i++;
             }
         }
-        if (!flags.isNone()) {
+        if (!flags.isEmpty()) {
             sb.append('_').append(flags);
         }
         return sb.toString();

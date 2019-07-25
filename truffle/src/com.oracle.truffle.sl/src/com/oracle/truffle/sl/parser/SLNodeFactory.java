@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,24 +46,20 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.antlr.v4.runtime.Parser;
 import org.antlr.v4.runtime.Token;
 
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlot;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.sl.SLLanguage;
-import com.oracle.truffle.sl.nodes.SLBinaryNode;
 import com.oracle.truffle.sl.nodes.SLExpressionNode;
 import com.oracle.truffle.sl.nodes.SLRootNode;
 import com.oracle.truffle.sl.nodes.SLStatementNode;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyNode;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyNodeGen;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyNode;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyNodeGen;
-import com.oracle.truffle.sl.nodes.call.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBlockNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBreakNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLContinueNode;
@@ -77,6 +73,7 @@ import com.oracle.truffle.sl.nodes.expression.SLBigIntegerLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLDivNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLEqualNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLFunctionLiteralNode;
+import com.oracle.truffle.sl.nodes.expression.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.expression.SLLessOrEqualNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLLessThanNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLLogicalAndNode;
@@ -85,14 +82,18 @@ import com.oracle.truffle.sl.nodes.expression.SLLogicalOrNode;
 import com.oracle.truffle.sl.nodes.expression.SLLongLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLMulNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLParenExpressionNode;
+import com.oracle.truffle.sl.nodes.expression.SLReadPropertyNode;
+import com.oracle.truffle.sl.nodes.expression.SLReadPropertyNodeGen;
 import com.oracle.truffle.sl.nodes.expression.SLStringLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLSubNodeGen;
-import com.oracle.truffle.sl.nodes.expression.SLUnboxNodeGen;
+import com.oracle.truffle.sl.nodes.expression.SLWritePropertyNode;
+import com.oracle.truffle.sl.nodes.expression.SLWritePropertyNodeGen;
 import com.oracle.truffle.sl.nodes.local.SLReadArgumentNode;
 import com.oracle.truffle.sl.nodes.local.SLReadLocalVariableNode;
 import com.oracle.truffle.sl.nodes.local.SLReadLocalVariableNodeGen;
 import com.oracle.truffle.sl.nodes.local.SLWriteLocalVariableNode;
 import com.oracle.truffle.sl.nodes.local.SLWriteLocalVariableNodeGen;
+import com.oracle.truffle.sl.nodes.util.SLUnboxNodeGen;
 
 /**
  * Helper class used by the SL {@link Parser} to create nodes. The code is factored out of the
@@ -167,7 +168,7 @@ public class SLNodeFactory {
          * specialized.
          */
         final SLReadArgumentNode readArg = new SLReadArgumentNode(parameterCount);
-        SLExpressionNode assignment = createAssignment(createStringLiteral(nameToken, false), readArg);
+        SLExpressionNode assignment = createAssignment(createStringLiteral(nameToken, false), readArg, parameterCount);
         methodNodes.add(assignment);
         parameterCount++;
     }
@@ -345,18 +346,8 @@ public class SLNodeFactory {
         if (leftNode == null || rightNode == null) {
             return null;
         }
-        final SLExpressionNode leftUnboxed;
-        if (leftNode instanceof SLBinaryNode) {  // SLBinaryNode never returns boxed value
-            leftUnboxed = leftNode;
-        } else {
-            leftUnboxed = SLUnboxNodeGen.create(leftNode);
-        }
-        final SLExpressionNode rightUnboxed;
-        if (rightNode instanceof SLBinaryNode) {  // SLBinaryNode never returns boxed value
-            rightUnboxed = rightNode;
-        } else {
-            rightUnboxed = SLUnboxNodeGen.create(rightNode);
-        }
+        final SLExpressionNode leftUnboxed = SLUnboxNodeGen.create(leftNode);
+        final SLExpressionNode rightUnboxed = SLUnboxNodeGen.create(rightNode);
 
         final SLExpressionNode result;
         switch (opToken.getText()) {
@@ -403,6 +394,7 @@ public class SLNodeFactory {
         int start = leftNode.getSourceCharIndex();
         int length = rightNode.getSourceEndIndex() - start;
         result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }
@@ -426,6 +418,7 @@ public class SLNodeFactory {
         final int startPos = functionNode.getSourceCharIndex();
         final int endPos = finalToken.getStartIndex() + finalToken.getText().length();
         result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -438,12 +431,27 @@ public class SLNodeFactory {
      * @return An SLExpressionNode for the given parameters. null if nameNode or valueNode is null.
      */
     public SLExpressionNode createAssignment(SLExpressionNode nameNode, SLExpressionNode valueNode) {
+        return createAssignment(nameNode, valueNode, null);
+    }
+
+    /**
+     * Returns an {@link SLWriteLocalVariableNode} for the given parameters.
+     *
+     * @param nameNode The name of the variable being assigned
+     * @param valueNode The value to be assigned
+     * @param argumentIndex null or index of the argument the assignment is assigning
+     * @return An SLExpressionNode for the given parameters. null if nameNode or valueNode is null.
+     */
+    public SLExpressionNode createAssignment(SLExpressionNode nameNode, SLExpressionNode valueNode, Integer argumentIndex) {
         if (nameNode == null || valueNode == null) {
             return null;
         }
 
         String name = ((SLStringLiteralNode) nameNode).executeGeneric(null);
-        FrameSlot frameSlot = frameDescriptor.findOrAddFrameSlot(name);
+        FrameSlot frameSlot = frameDescriptor.findOrAddFrameSlot(
+                        name,
+                        argumentIndex,
+                        FrameSlotKind.Illegal);
         lexicalScope.locals.put(name, frameSlot);
         final SLExpressionNode result = SLWriteLocalVariableNodeGen.create(valueNode, frameSlot);
 
@@ -452,6 +460,7 @@ public class SLNodeFactory {
             final int length = valueNode.getSourceEndIndex() - start;
             result.setSourceSection(start, length);
         }
+        result.addExpressionTag();
 
         return result;
     }
@@ -485,6 +494,7 @@ public class SLNodeFactory {
             result = new SLFunctionLiteralNode(language, name);
         }
         result.setSourceSection(nameNode.getSourceCharIndex(), nameNode.getSourceLength());
+        result.addExpressionTag();
         return result;
     }
 
@@ -498,6 +508,7 @@ public class SLNodeFactory {
 
         final SLStringLiteralNode result = new SLStringLiteralNode(literal.intern());
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -511,6 +522,7 @@ public class SLNodeFactory {
             result = new SLBigIntegerLiteralNode(new BigInteger(literalToken.getText()));
         }
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -542,6 +554,7 @@ public class SLNodeFactory {
         final int startPos = receiverNode.getSourceCharIndex();
         final int endPos = nameNode.getSourceEndIndex();
         result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -565,6 +578,7 @@ public class SLNodeFactory {
         final int start = receiverNode.getSourceCharIndex();
         final int length = valueNode.getSourceEndIndex() - start;
         result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }

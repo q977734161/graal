@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,9 @@
  */
 package org.graalvm.compiler.truffle.runtime;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleFunctionInlining;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleInliningMaxCallerSize;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleMaximumRecursiveInlining;
 import static org.graalvm.compiler.truffle.runtime.OptimizedCallTarget.runtime;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -37,9 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.graph.SourceLanguagePosition;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.common.TruffleInliningPlan;
 
 import com.oracle.truffle.api.CallTarget;
@@ -50,7 +47,6 @@ import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.source.SourceSection;
 
-import java.net.URI;
 import jdk.vm.ci.meta.JavaConstant;
 
 public class TruffleInlining implements Iterable<TruffleInliningDecision>, TruffleInliningPlan {
@@ -67,7 +63,7 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
     }
 
     private static List<TruffleInliningDecision> createDecisions(OptimizedCallTarget sourceTarget, TruffleInliningPolicy policy, CompilerOptions options) {
-        if (!TruffleCompilerOptions.getValue(TruffleFunctionInlining)) {
+        if (!sourceTarget.getOptionValue(PolyglotCompilerOptions.Inlining) || sourceTarget.getOptionValue(PolyglotCompilerOptions.Mode) == PolyglotCompilerOptions.EngineModeEnum.LATENCY) {
             return Collections.emptyList();
         }
         int[] visitedNodes = {0};
@@ -137,9 +133,9 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
         int recursions = countRecursions(callStack);
         int deepNodeCount = nodeCount;
 
-        if (visitedNodes[0] < (100 * TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize)) &&
+        if (visitedNodes[0] < (100 * currentTarget.getOptionValue(PolyglotCompilerOptions.InliningNodeBudget)) &&
                         callStack.size() < 15 &&
-                        recursions <= TruffleCompilerOptions.getValue(TruffleMaximumRecursiveInlining)) {
+                        recursions <= currentTarget.getOptionValue(PolyglotCompilerOptions.InliningRecursionDepth)) {
             /*
              * We make a preliminary optimistic inlining decision with best possible characteristics
              * to avoid the exploration of unnecessary paths in the inlining tree.
@@ -166,14 +162,16 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
     }
 
     private static double calculateFrequency(OptimizedCallTarget target, OptimizedDirectCallNode ocn) {
-        return (double) Math.max(1, ocn.getCallCount()) / (double) Math.max(1, target.getCompilationProfile().getInterpreterCallCount());
+        return (double) Math.max(1, ocn.getCallCount()) / (double) Math.max(1, target.getCompilationProfile().getCallCount());
     }
 
     private static int countRecursions(List<OptimizedCallTarget> stack) {
         int count = 0;
         OptimizedCallTarget top = stack.get(stack.size() - 1);
         for (int i = 0; i < stack.size() - 1; i++) {
-            if (stack.get(i) == top) {
+            final OptimizedCallTarget frameTarget = stack.get(i);
+            if (frameTarget == top || frameTarget == top.getSourceCallTarget() || top == frameTarget.getSourceCallTarget() ||
+                            (frameTarget.getSourceCallTarget() != null && top.getSourceCallTarget() != null && frameTarget.getSourceCallTarget() == top.getSourceCallTarget())) {
                 count++;
             }
         }
@@ -238,12 +236,11 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
 
     @Override
     public Decision findDecision(JavaConstant callNodeConstant) {
-        SnippetReflectionProvider snippetReflection = runtime().getGraalRuntime().getRequiredCapability(SnippetReflectionProvider.class);
-        OptimizedDirectCallNode callNode = snippetReflection.asObject(OptimizedDirectCallNode.class, callNodeConstant);
+        OptimizedDirectCallNode callNode = runtime().asObject(OptimizedDirectCallNode.class, callNodeConstant);
         return findByCall(callNode);
     }
 
-    static class TruffleSourceLanguagePosition implements SourceLanguagePosition {
+    static class TruffleSourceLanguagePosition implements org.graalvm.compiler.truffle.common.TruffleSourceLanguagePosition {
 
         private final SourceSection sourceSection;
 
@@ -252,7 +249,7 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
         }
 
         @Override
-        public String toShortString() {
+        public String getDescription() {
             return sourceSection.getSource().getURI() + " " + sourceSection.getStartLine() + ":" + sourceSection.getStartColumn();
         }
 
@@ -283,9 +280,8 @@ public class TruffleInlining implements Iterable<TruffleInliningDecision>, Truff
     }
 
     @Override
-    public SourceLanguagePosition getPosition(JavaConstant node) {
-        SnippetReflectionProvider snippetReflection = runtime().getGraalRuntime().getRequiredCapability(SnippetReflectionProvider.class);
-        Node truffleNode = snippetReflection.asObject(Node.class, node);
+    public org.graalvm.compiler.truffle.common.TruffleSourceLanguagePosition getPosition(JavaConstant node) {
+        Node truffleNode = runtime().asObject(Node.class, node);
         if (truffleNode == null) {
             return null;
         }

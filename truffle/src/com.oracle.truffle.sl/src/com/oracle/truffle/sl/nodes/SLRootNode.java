@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -82,7 +82,7 @@ public class SLRootNode extends RootNode {
 
     @Override
     public Object execute(VirtualFrame frame) {
-        assert getLanguage(SLLanguage.class).getContextReference().get() != null;
+        assert lookupContextReference(SLLanguage.class).get() != null;
         return bodyNode.executeGeneric(frame);
     }
 

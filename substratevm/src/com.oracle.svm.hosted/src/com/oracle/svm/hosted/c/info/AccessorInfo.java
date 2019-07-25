@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,14 +25,21 @@
 package com.oracle.svm.hosted.c.info;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
-public class AccessorInfo extends ElementInfo {
+public final class AccessorInfo extends ElementInfo {
 
     public enum AccessorKind {
-        GETTER,
-        SETTER,
-        ADDRESS,
-        OFFSET
+        GETTER("get"),
+        SETTER("set"),
+        OFFSET("offsetOf"),
+        ADDRESS("addressOf");
+
+        private final String prefix;
+
+        AccessorKind(String prefix) {
+            this.prefix = prefix;
+        }
     }
 
     private final ResolvedJavaMethod annotatedMethod;
@@ -52,6 +61,10 @@ public class AccessorInfo extends ElementInfo {
         return accessorKind;
     }
 
+    String getAccessorPrefix() {
+        return accessorKind.prefix;
+    }
+
     public boolean isIndexed() {
         return isIndexed;
     }
@@ -64,7 +77,7 @@ public class AccessorInfo extends ElementInfo {
         return hasUniqueLocationIdentity;
     }
 
-    public int baseParameterNumber(boolean withReceiver) {
+    public static int baseParameterNumber(boolean withReceiver) {
         assert withReceiver;
         /* Convention: the accessed pointer is the receiver of the accessor method. */
         return 0;
@@ -93,12 +106,32 @@ public class AccessorInfo extends ElementInfo {
     }
 
     @Override
-    public Object getAnnotatedElement() {
+    public ResolvedJavaMethod getAnnotatedElement() {
         return annotatedMethod;
     }
 
     @Override
     public void accept(InfoTreeVisitor visitor) {
         visitor.visitAccessorInfo(this);
+    }
+
+    public ResolvedJavaType getReturnType() {
+        return getReturnType(annotatedMethod);
+    }
+
+    public ResolvedJavaType getParameterType(int index) {
+        return getParameterType(annotatedMethod, index);
+    }
+
+    public ResolvedJavaType getValueParameterType() {
+        return getParameterType(valueParameterNumber(false));
+    }
+
+    public static ResolvedJavaType getReturnType(ResolvedJavaMethod method) {
+        return (ResolvedJavaType) method.getSignature().getReturnType(method.getDeclaringClass());
+    }
+
+    public static ResolvedJavaType getParameterType(ResolvedJavaMethod method, int index) {
+        return (ResolvedJavaType) method.getSignature().getParameterType(index, method.getDeclaringClass());
     }
 }

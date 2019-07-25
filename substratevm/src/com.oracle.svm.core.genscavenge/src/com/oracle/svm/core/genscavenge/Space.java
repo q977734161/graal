@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,6 +41,7 @@ import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.core.util.VMError;
 
 /**
  * A Space is a collection of HeapChunks.
@@ -123,6 +126,13 @@ public class Space {
         this.isYoungSpace = isYoungSpace;
     }
 
+    /** Return all allocated virtual memory chunks to HeapChunkProvider. */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public final void tearDown() {
+        HeapChunkProvider.freeAlignedChunkList(getFirstAlignedHeapChunk());
+        HeapChunkProvider.freeUnalignedChunkList(getFirstUnalignedHeapChunk());
+    }
+
     final boolean isYoungSpace() {
         return isYoungSpace;
     }
@@ -187,25 +197,29 @@ public class Space {
 
     /** Report some statistics about this Space. */
     public Log report(Log log, boolean traceHeapChunks) {
-        log.string("[").string(getName()).string(":");
+        log.string("[").string(getName()).string(":").indent(true);
         getAccounting().report(log);
         if (traceHeapChunks) {
             if (getFirstAlignedHeapChunk().isNonNull()) {
-                log.newline().string("  ").string("  aligned chunks:");
+                log.newline().string("aligned chunks:").redent(true);
                 for (AlignedHeapChunk.AlignedHeader aChunk = getFirstAlignedHeapChunk(); aChunk.isNonNull(); aChunk = aChunk.getNext()) {
                     /* TODO: Print out the HeapChunk identifier. */
-                    log.string("  ").hex(aChunk).string(" (").hex(AlignedHeapChunk.getAlignedHeapChunkStart(aChunk)).string("-").hex(aChunk.getTop()).string(")");
+                    log.newline().hex(aChunk)
+                                    .string(" (").hex(AlignedHeapChunk.getAlignedHeapChunkStart(aChunk)).string("-").hex(aChunk.getTop()).string(")");
                 }
+                log.redent(false);
             }
             if (getFirstUnalignedHeapChunk().isNonNull()) {
-                log.newline().string("  ").string("  unaligned chunks:");
+                log.newline().string("unaligned chunks:").redent(true);
                 for (UnalignedHeapChunk.UnalignedHeader uChunk = getFirstUnalignedHeapChunk(); uChunk.isNonNull(); uChunk = uChunk.getNext()) {
                     /* TODO: Print out the HeapChunk identifier. */
-                    log.string("  ").hex(uChunk);
+                    log.newline().hex(uChunk)
+                                    .string(" (").hex(UnalignedHeapChunk.getUnalignedHeapChunkStart(uChunk)).string("-").hex(uChunk.getTop()).string(")");
                 }
+                log.redent(false);
             }
         }
-        log.string("]");
+        log.redent(false).string("]");
         return log;
     }
 
@@ -617,10 +631,12 @@ public class Space {
         final Pointer copyMemory = allocateMemory(copySize);
         trace.string("  copyMemory: ").hex(copyMemory);
         if (copyMemory.isNull()) {
-            /* TODO: Promotion failure! */
-            final Log failureLog = Log.log().string("[!SpaceImpl.copyAlignedObject:");
-            failureLog.string("  failure to allocate ").unsigned(copySize).string(" bytes").string("!]").newline();
-            return null;
+            /* I am about to fail, but first log some things about the object. */
+            final Log failureLog = Log.log().string("[! SpaceImpl.copyAlignedObject:").indent(true);
+            failureLog.string("  failure to allocate ").unsigned(copySize).string(" bytes").newline();
+            ObjectHeaderImpl.getObjectHeaderImpl().objectHeaderToLog(originalObj, failureLog);
+            failureLog.string(" !]").indent(false);
+            throw VMError.shouldNotReachHere("Promotion failure");
         }
         /* - Copy the Object. */
         final Pointer originalMemory = Word.objectToUntrackedPointer(originalObj);
@@ -827,8 +843,9 @@ public class Space {
         }
 
         public void report(Log reportLog) {
-            reportLog.string(" aligned: ").unsigned(alignedChunkBytes).string("/").unsigned(alignedCount);
-            reportLog.string(" unaligned: ").unsigned(unalignedChunkBytes).string("/").unsigned(unalignedCount);
+            reportLog.string("aligned: ").unsigned(alignedChunkBytes).string("/").unsigned(alignedCount);
+            reportLog.string(" ");
+            reportLog.string("unaligned: ").unsigned(unalignedChunkBytes).string("/").unsigned(unalignedCount);
         }
 
         void noteAlignedHeapChunk(UnsignedWord size) {

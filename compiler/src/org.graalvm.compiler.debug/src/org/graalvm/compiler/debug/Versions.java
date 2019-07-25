@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,11 +32,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import jdk.vm.ci.services.Services;
+
 /** Avoid using directly. Only public for the needs of unit testing. */
 public final class Versions {
     static final Versions VERSIONS;
     static {
-        String home = System.getProperty("java.home");
+        String home = Services.getSavedProperties().get("java.home");
         VERSIONS = new Versions(home == null ? null : new File(home).toPath());
     }
 

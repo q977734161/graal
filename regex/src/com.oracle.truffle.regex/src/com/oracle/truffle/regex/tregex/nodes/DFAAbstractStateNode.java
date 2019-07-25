@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,7 @@
  */
 package com.oracle.truffle.regex.tregex.nodes;
 
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.regex.tregex.nodesplitter.DFANodeSplit;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
@@ -34,7 +33,7 @@ public abstract class DFAAbstractStateNode extends Node implements JsonConvertib
 
     static final int FS_RESULT_NO_SUCCESSOR = -1;
 
-    @CompilerDirectives.CompilationFinal(dimensions = 1) protected final short[] successors;
+    @CompilationFinal(dimensions = 1) protected final short[] successors;
 
     DFAAbstractStateNode(short[] successors) {
         this.successors = successors;
@@ -52,18 +51,19 @@ public abstract class DFAAbstractStateNode extends Node implements JsonConvertib
 
     public abstract short getId();
 
-    public short[] getSuccessors() {
+    public final short[] getSuccessors() {
         return successors;
     }
 
     /**
      * Calculates this state's successor and returns its ID ({@link DFAStateNode#getId()}) via
-     * {@link TRegexDFAExecutorNode#setSuccessorIndex(VirtualFrame, int)}. This return value is
-     * called "successor index" and may either be an index of the successors array (between 0 and
-     * <code>{@link #getSuccessors()}.length</code>) or {@link #FS_RESULT_NO_SUCCESSOR}.
-     * 
-     * @param frame a virtual frame as described by {@link TRegexDFAExecutorProperties}.
+     * {@link TRegexDFAExecutorLocals#setSuccessorIndex(int)}. This return value is called
+     * "successor index" and may either be an index of the successors array (between 0 and
+     * {@link #getSuccessors()}{@code .length}) or {@link #FS_RESULT_NO_SUCCESSOR}.
+     *
+     * @param locals a virtual frame as described by {@link TRegexDFAExecutorProperties}.
      * @param executor this node's parent {@link TRegexDFAExecutorNode}.
+     * @param compactString
      */
-    public abstract void executeFindSuccessor(VirtualFrame frame, TRegexDFAExecutorNode executor);
+    public abstract void executeFindSuccessor(TRegexDFAExecutorLocals locals, TRegexDFAExecutorNode executor, boolean compactString);
 }

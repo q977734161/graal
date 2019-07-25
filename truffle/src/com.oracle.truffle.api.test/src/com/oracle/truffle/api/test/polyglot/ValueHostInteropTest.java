@@ -2,23 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
@@ -27,6 +45,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThat;
@@ -41,7 +60,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -51,21 +69,21 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.hamcrest.CoreMatchers;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.KeyInfo;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
@@ -99,15 +117,15 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     @Test
     public void testRecursiveListMarshalling() {
-        List<GregorianCalendar> testList = Arrays.asList(new GregorianCalendar());
+        List<Data> testList = Arrays.asList(new Data());
         Value testListValue = context.asValue(testList);
         assertTrue(testListValue.isHostObject());
 
-        Value calendarValue = testListValue.getArrayElement(0);
-        assertTrue(calendarValue.isHostObject());
+        Value data = testListValue.getArrayElement(0);
+        assertTrue(data.isHostObject());
 
-        assertValue(context, testListValue);
-        assertValue(context, calendarValue);
+        assertValue(testListValue);
+        assertValue(data);
     }
 
     @Test
@@ -147,6 +165,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
         data.x = 44;
         assertEquals(44, anotherThis.x());
+        assertNotSame(anotherThis, xyp);
         assertEquals(anotherThis, xyp);
         assertEquals(anotherThis.hashCode(), xyp.hashCode());
     }
@@ -174,7 +193,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertFalse(memberKeys.contains("one"));
         assertFalse(memberKeys.contains("null"));
         assertFalse(memberKeys.contains("three"));
-        assertValue(context, context.asValue(map));
+        assertValue(context.asValue(map));
     }
 
     @Test
@@ -388,6 +407,14 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertFalse(context.asValue(new Object()).isNull());
     }
 
+    @Test
+    public void testClassStaticMembers() {
+        Value stringClass = context.asValue(String.class);
+        Value stringStatic = stringClass.getMember("static");
+        assertEquals("concatenated", stringStatic.getMember("join").execute("cat", "con", "enated").asString());
+        assertEquals(String.class, stringStatic.getMember("class").asHostObject());
+    }
+
     @FunctionalInterface
     public interface FunctionalWithDefaults {
         Object call(Object... args);
@@ -399,6 +426,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     @Test
     public void functionalInterfaceOverridingObjectMethods() throws Exception {
+        Assume.assumeFalse("Cannot get reflection data for a lambda", TruffleOptions.AOT);
         Value object = context.asValue((FunctionalWithObjectMethodOverrides) (args) -> args.length >= 1 ? args[0] : null);
         assertArrayEquals(new Object[]{"call"}, object.getMemberKeys().toArray());
         assertEquals(42, object.execute(42).asInt());
@@ -419,12 +447,23 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void executableAsFunction() throws Exception {
+        TruffleObject executable = new FunctionObject();
+        Function<Integer, Integer> f = context.asValue(executable).as(Function.class);
+        assertEquals(13, (int) f.apply(13));
+        assertTrue(f.equals(f));
+    }
+
+    @Test
     public void executableAsFunctionalInterface1() throws Exception {
         TruffleObject executable = new FunctionObject();
         FunctionalWithDefaults f = context.asValue(executable).as(FunctionalWithDefaults.class);
         assertEquals(50, f.call((Object) 13, (Object) 37));
         f.hashCode();
         f.equals(null);
+        assertTrue(f.equals(f));
+        assertEquals(f, context.asValue(executable).as(FunctionalWithDefaults.class));
         f.toString();
     }
 
@@ -435,6 +474,8 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertEquals(50, f.call(13, 37));
         f.hashCode();
         f.equals(null);
+        assertTrue(f.equals(f));
+        assertEquals(f, context.asValue(executable).as(FunctionalWithObjectMethodOverrides.class));
         f.toString();
     }
 
@@ -500,6 +541,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @Test
     public void testNewClass() {
         Value hashMapClass = context.asValue(HashMap.class);
+        assertTrue(hashMapClass.canInstantiate());
         Value hashMap = hashMapClass.newInstance();
         assertTrue(hashMap.isHostObject());
         assertTrue(hashMap.asHostObject() instanceof HashMap);
@@ -519,6 +561,50 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertTrue(object.isHostObject());
         assertTrue(object.hasArrayElements());
         assertEquals(4, object.getArraySize());
+    }
+
+    @Test
+    public void testMultiDimArray() {
+        long[][] matrix = {
+                        {1, 2},
+                        {3, 4},
+                        {5, 6},
+        };
+
+        Value object = context.asValue(matrix);
+        assertTrue(object.isHostObject());
+        assertTrue(object.hasArrayElements());
+        assertEquals(3, object.getArraySize());
+
+        Value row = object.getArrayElement(1);
+        assertTrue(row.hasArrayElements());
+        assertEquals(2, row.getArraySize());
+        assertEquals(3, row.getArrayElement(0).asInt());
+        assertEquals(4, row.getArrayElement(1).asInt());
+    }
+
+    @Test
+    public void testNewMultiDimArray() {
+        Value objectClass = context.asValue(long[][].class);
+
+        // Current behavior, but maybe this should work?
+        // Similar to Array.newInstance(long.class, 3, 4)
+        ValueAssert.assertFails(() -> objectClass.newInstance(3, 4), IllegalArgumentException.class);
+
+        Value object = objectClass.newInstance(4);
+        assertTrue(object.isHostObject());
+        assertTrue(object.hasArrayElements());
+        assertEquals(4, object.getArraySize());
+
+        Value row = object.getArrayElement(0);
+        assertTrue(row.isNull());
+
+        object.setArrayElement(0, new long[]{3, 4});
+        row = object.getArrayElement(0);
+        assertTrue(row.hasArrayElements());
+        assertEquals(2, row.getArraySize());
+        assertEquals(3, row.getArrayElement(0).asInt());
+        assertEquals(4, row.getArrayElement(1).asInt());
     }
 
     @Test
@@ -753,7 +839,8 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         List<Data> data();
     }
 
-    static class ListArray extends ProxyInteropObject {
+    @SuppressWarnings("deprecation")
+    static class ListArray extends ProxyLegacyInteropObject {
 
         private final List<String> array;
 
@@ -764,7 +851,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         @Override
         public int keyInfo(Number key) {
             if (key.intValue() < array.size() && key.intValue() >= 0) {
-                return KeyInfo.READABLE;
+                return com.oracle.truffle.api.interop.KeyInfo.READABLE | com.oracle.truffle.api.interop.KeyInfo.REMOVABLE;
             }
             return super.keyInfo(key);
         }
@@ -792,6 +879,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     }
 
+    @SuppressWarnings("deprecation")
     static final class RemoveKeysObject implements TruffleObject {
 
         private final Map<String, ?> keys;
@@ -801,7 +889,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         }
 
         @Override
-        public ForeignAccess getForeignAccess() {
+        public com.oracle.truffle.api.interop.ForeignAccess getForeignAccess() {
             return RemoveKeysObjectMessageResolutionForeign.ACCESS;
         }
 
@@ -809,10 +897,10 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
             return obj instanceof RemoveKeysObject;
         }
 
-        @MessageResolution(receiverType = RemoveKeysObject.class)
+        @com.oracle.truffle.api.interop.MessageResolution(receiverType = RemoveKeysObject.class)
         static final class RemoveKeysObjectMessageResolution {
 
-            @Resolve(message = "KEYS")
+            @com.oracle.truffle.api.interop.Resolve(message = "KEYS")
             public abstract static class PropertiesKeysOnlyNode extends Node {
 
                 public Object access(RemoveKeysObject receiver) {
@@ -848,7 +936,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                 }
             }
 
-            @Resolve(message = "READ")
+            @com.oracle.truffle.api.interop.Resolve(message = "READ")
             public abstract static class ReadKeyNode extends Node {
 
                 public Object access(RemoveKeysObject receiver, String name) {
@@ -860,7 +948,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                 }
             }
 
-            @Resolve(message = "REMOVE")
+            @com.oracle.truffle.api.interop.Resolve(message = "REMOVE")
             public abstract static class RemoveKeyNode extends Node {
 
                 public Object access(RemoveKeysObject receiver, String name) {
@@ -871,9 +959,21 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                     return true;
                 }
             }
+
+            @com.oracle.truffle.api.interop.Resolve(message = "KEY_INFO")
+            public abstract static class KeyInfoNode extends Node {
+
+                public Object access(RemoveKeysObject receiver, String name) {
+                    if (!receiver.keys.containsKey(name)) {
+                        return com.oracle.truffle.api.interop.KeyInfo.NONE;
+                    }
+                    return com.oracle.truffle.api.interop.KeyInfo.READABLE | com.oracle.truffle.api.interop.KeyInfo.MODIFIABLE | com.oracle.truffle.api.interop.KeyInfo.REMOVABLE;
+                }
+            }
         }
     }
 
+    @SuppressWarnings("deprecation")
     static final class ArrayTruffleObject implements TruffleObject {
 
         private int size;
@@ -883,7 +983,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         }
 
         @Override
-        public ForeignAccess getForeignAccess() {
+        public com.oracle.truffle.api.interop.ForeignAccess getForeignAccess() {
             return ArrayTruffleObjectMessageResolutionForeign.ACCESS;
         }
 
@@ -891,10 +991,10 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
             return obj instanceof ArrayTruffleObject;
         }
 
-        @MessageResolution(receiverType = ArrayTruffleObject.class)
+        @com.oracle.truffle.api.interop.MessageResolution(receiverType = ArrayTruffleObject.class)
         static final class ArrayTruffleObjectMessageResolution {
 
-            @Resolve(message = "HAS_SIZE")
+            @com.oracle.truffle.api.interop.Resolve(message = "HAS_SIZE")
             public abstract static class ArrayHasSizeNode extends Node {
 
                 public Object access(ArrayTruffleObject receiver) {
@@ -903,7 +1003,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                 }
             }
 
-            @Resolve(message = "GET_SIZE")
+            @com.oracle.truffle.api.interop.Resolve(message = "GET_SIZE")
             public abstract static class ArrayGetSizeNode extends Node {
 
                 public Object access(ArrayTruffleObject receiver) {
@@ -911,10 +1011,11 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                 }
             }
 
-            @Resolve(message = "READ")
+            @com.oracle.truffle.api.interop.Resolve(message = "READ")
             public abstract static class ArrayReadSizeNode extends Node {
 
-                public Object access(ArrayTruffleObject receiver, int index) {
+                public Object access(ArrayTruffleObject receiver, Number number) {
+                    int index = number.intValue();
                     if (index < 0 || index >= receiver.size) {
                         throw new ArrayIndexOutOfBoundsException(index);
                     }
@@ -922,10 +1023,11 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                 }
             }
 
-            @Resolve(message = "REMOVE")
+            @com.oracle.truffle.api.interop.Resolve(message = "REMOVE")
             public abstract static class ArrayRemoveNode extends Node {
 
-                public Object access(ArrayTruffleObject receiver, int index) {
+                public Object access(ArrayTruffleObject receiver, Number number) {
+                    int index = number.intValue();
                     if (index < 0 || index >= receiver.size) {
                         throw new ArrayIndexOutOfBoundsException(index);
                     }
@@ -933,12 +1035,25 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
                     return true;
                 }
             }
+
+            @com.oracle.truffle.api.interop.Resolve(message = "KEY_INFO")
+            public abstract static class KeyInfoNode extends Node {
+
+                public int access(ArrayTruffleObject receiver, Number number) {
+                    int index = number.intValue();
+                    if (index != number.doubleValue() || index < 0 || index >= receiver.size) {
+                        return com.oracle.truffle.api.interop.KeyInfo.NONE;
+                    }
+                    return com.oracle.truffle.api.interop.KeyInfo.MODIFIABLE | com.oracle.truffle.api.interop.KeyInfo.READABLE | com.oracle.truffle.api.interop.KeyInfo.REMOVABLE;
+                }
+            }
         }
     }
 
-    @MessageResolution(receiverType = FunctionObject.class)
+    @SuppressWarnings("deprecation")
+    @com.oracle.truffle.api.interop.MessageResolution(receiverType = FunctionObject.class)
     static final class FunctionObject implements TruffleObject {
-        @Resolve(message = "IS_EXECUTABLE")
+        @com.oracle.truffle.api.interop.Resolve(message = "IS_EXECUTABLE")
         abstract static class IsExecutable extends Node {
             @SuppressWarnings("unused")
             protected Object access(FunctionObject obj) {
@@ -946,9 +1061,11 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
             }
         }
 
-        @Resolve(message = "EXECUTE")
+        @com.oracle.truffle.api.interop.Resolve(message = "EXECUTE")
         @SuppressWarnings("unused")
         abstract static class Execute extends Node {
+
+            @TruffleBoundary
             protected Object access(FunctionObject obj, Object[] args) {
                 return Arrays.stream(args).mapToInt(o -> (int) o).sum();
             }
@@ -959,7 +1076,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         }
 
         @Override
-        public ForeignAccess getForeignAccess() {
+        public com.oracle.truffle.api.interop.ForeignAccess getForeignAccess() {
             return FunctionObjectForeign.ACCESS;
         }
     }

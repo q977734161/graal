@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2009, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -21,6 +23,8 @@
  * questions.
  */
 package org.graalvm.compiler.core.common.cfg;
+
+import java.util.Comparator;
 
 public abstract class AbstractBlockBase<T extends AbstractBlockBase<T>> {
 
@@ -161,7 +165,7 @@ public abstract class AbstractBlockBase<T extends AbstractBlockBase<T>> {
 
     public abstract T getPostdominator();
 
-    public abstract double probability();
+    public abstract double getRelativeFrequency();
 
     public abstract T getDominator(int distance);
 
@@ -169,4 +173,13 @@ public abstract class AbstractBlockBase<T extends AbstractBlockBase<T>> {
     public int hashCode() {
         return id;
     }
+
+    public static class BlockIdComparator implements Comparator<AbstractBlockBase<?>> {
+        @Override
+        public int compare(AbstractBlockBase<?> o1, AbstractBlockBase<?> o2) {
+            return Integer.compare(o1.getId(), o2.getId());
+        }
+    }
+
+    public static final BlockIdComparator BLOCK_ID_COMPARATOR = new BlockIdComparator();
 }

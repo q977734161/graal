@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,11 +46,13 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 
 import java.io.ByteArrayOutputStream;
+import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.Value;
 import org.junit.After;
 import org.junit.Before;
@@ -64,7 +66,7 @@ public class SLJavaInteropTest {
     @Before
     public void create() {
         os = new ByteArrayOutputStream();
-        context = Context.newBuilder().out(os).build();
+        context = Context.newBuilder().allowHostAccess(HostAccess.ALL).out(os).build();
     }
 
     @After
@@ -80,7 +82,7 @@ public class SLJavaInteropTest {
         Runnable runnable = main.as(Runnable.class);
         runnable.run();
 
-        assertEquals("Called!\n", os.toString("UTF-8"));
+        assertEquals("Called!\n", toUnixString(os));
     }
 
     private Value lookup(String symbol) {
@@ -97,7 +99,7 @@ public class SLJavaInteropTest {
         PassInValues valuesIn = fn.as(PassInValues.class);
         valuesIn.call("OK", "Fine");
 
-        assertEquals("Called with OK and Fine\n", os.toString("UTF-8"));
+        assertEquals("Called with OK and Fine\n", toUnixString(os));
     }
 
     private static void assertNumber(double exp, Object real) {
@@ -122,7 +124,7 @@ public class SLJavaInteropTest {
         Value fn = lookup("values");
         PassInArray valuesIn = fn.as(PassInArray.class);
         valuesIn.call(new Object[]{"OK", "Fine"});
-        assertEquals("Called with OKFine and null\n", os.toString("UTF-8"));
+        assertEquals("Called with OKFine and NULL\n", toUnixString(os));
     }
 
     @Test
@@ -135,7 +137,7 @@ public class SLJavaInteropTest {
         PassInVarArg valuesIn = fn.as(PassInVarArg.class);
 
         valuesIn.call("OK", "Fine");
-        assertEquals("Called with OK and Fine\n", os.toString("UTF-8"));
+        assertEquals("Called with OK and Fine\n", toUnixString(os));
     }
 
     @Test
@@ -148,7 +150,7 @@ public class SLJavaInteropTest {
         PassInArgAndVarArg valuesIn = fn.as(PassInArgAndVarArg.class);
 
         valuesIn.call("OK", "Fine", "Well");
-        assertEquals("Called with OK and FineWell\n", os.toString("UTF-8"));
+        assertEquals("Called with OK and FineWell\n", toUnixString(os));
     }
 
     @Test
@@ -357,6 +359,17 @@ public class SLJavaInteropTest {
         assertNumber(33L, c);
     }
 
+    /**
+     * Converts a {@link ByteArrayOutputStream} content into UTF-8 String with UNIX line ends.
+     */
+    static String toUnixString(ByteArrayOutputStream stream) {
+        try {
+            return stream.toString("UTF-8").replace("\r\n", "\n");
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     @FunctionalInterface
     public interface Values {
         Sum values(Sum sum, String key, int value);
@@ -417,11 +430,13 @@ public class SLJavaInteropTest {
     public static class Sum {
         int sum;
 
+        @HostAccess.Export
         public Sum sum(Pair p) {
             sum += p.value();
             return this;
         }
 
+        @HostAccess.Export
         public void sumArray(List<Pair> pairs) {
             Object[] arr = pairs.toArray();
             assertNotNull("Array created", arr);
@@ -430,6 +445,7 @@ public class SLJavaInteropTest {
             }
         }
 
+        @HostAccess.Export
         public void sumArrayArray(List<List<Pair>> pairs) {
             Object[] arr = pairs.toArray();
             assertNotNull("Array created", arr);
@@ -439,6 +455,7 @@ public class SLJavaInteropTest {
             }
         }
 
+        @HostAccess.Export
         public void sumArrayMap(List<List<Map<String, Integer>>> pairs) {
             Object[] arr = pairs.toArray();
             assertNotNull("Array created", arr);
@@ -451,6 +468,7 @@ public class SLJavaInteropTest {
             }
         }
 
+        @HostAccess.Export
         public void sumMapArray(Map<String, List<Pair>> pairs) {
             assertEquals("Two elements", 2, pairs.size());
             Object one = pairs.get("one");

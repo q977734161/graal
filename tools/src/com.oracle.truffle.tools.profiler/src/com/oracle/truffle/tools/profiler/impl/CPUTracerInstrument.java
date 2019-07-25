@@ -39,7 +39,7 @@ import com.oracle.truffle.tools.profiler.CPUTracer;
  *
  * @since 0.30
  */
-@TruffleInstrument.Registration(id = CPUTracerInstrument.ID, name = "CPU Tracer", version = "0.1", services = {CPUTracer.class})
+@TruffleInstrument.Registration(id = CPUTracerInstrument.ID, name = "CPU Tracer", version = CPUTracerInstrument.VERSION, services = {CPUTracer.class})
 public class CPUTracerInstrument extends TruffleInstrument {
 
     /**
@@ -56,6 +56,9 @@ public class CPUTracerInstrument extends TruffleInstrument {
      * @since 0.30
      */
     public static final String ID = "cputracer";
+
+    static final String VERSION = "0.3.0";
+    private boolean enabled;
     private CPUTracer tracer;
     private static ProfilerToolFactory<CPUTracer> factory;
 
@@ -86,24 +89,6 @@ public class CPUTracerInstrument extends TruffleInstrument {
      * Does a lookup in the runtime instruments of the engine and returns an instance of the
      * {@link CPUTracer}.
      *
-     * @since 0.30
-     * @deprecated use {@link #getTracer(Engine)} instead.
-     */
-    @Deprecated
-    @SuppressWarnings("deprecation")
-    public static CPUTracer getTracer(com.oracle.truffle.api.vm.PolyglotEngine engine) {
-        com.oracle.truffle.api.vm.PolyglotRuntime.Instrument instrument = engine.getRuntime().getInstruments().get(ID);
-        if (instrument == null) {
-            throw new IllegalStateException("Tracer is not installed.");
-        }
-        instrument.setEnabled(true);
-        return instrument.lookup(CPUTracer.class);
-    }
-
-    /**
-     * Does a lookup in the runtime instruments of the engine and returns an instance of the
-     * {@link CPUTracer}.
-     *
      * @since 0.33
      */
     public static CPUTracer getTracer(Engine engine) {
@@ -124,12 +109,13 @@ public class CPUTracerInstrument extends TruffleInstrument {
     protected void onCreate(Env env) {
 
         tracer = factory.create(env);
-        if (env.getOptions().get(CPUTracerCLI.ENABLED)) {
+        enabled = env.getOptions().get(CPUTracerCLI.ENABLED);
+        if (enabled) {
             try {
                 tracer.setFilter(getSourceSectionFilter(env));
             } catch (IllegalArgumentException e) {
                 new PrintStream(env.err()).println(ID + " error: " + e.getMessage());
-                env.getOptions().set(CPUTracerCLI.ENABLED, false);
+                enabled = false;
                 tracer.setCollecting(false);
                 env.registerService(tracer);
                 return;
@@ -146,8 +132,9 @@ public class CPUTracerInstrument extends TruffleInstrument {
         final boolean internals = env.getOptions().get(CPUTracerCLI.TRACE_INTERNAL);
         final Object[] filterRootName = env.getOptions().get(CPUTracerCLI.FILTER_ROOT);
         final Object[] filterFile = env.getOptions().get(CPUTracerCLI.FILTER_FILE);
+        final String filterMimeType = env.getOptions().get(CPUTracerCLI.FILTER_MIME_TYPE);
         final String filterLanguage = env.getOptions().get(CPUTracerCLI.FILTER_LANGUAGE);
-        return CPUTracerCLI.buildFilter(roots, statements, calls, internals, filterRootName, filterFile, filterLanguage);
+        return CPUTracerCLI.buildFilter(roots, statements, calls, internals, filterRootName, filterFile, filterMimeType, filterLanguage);
     }
 
     /**
@@ -167,8 +154,8 @@ public class CPUTracerInstrument extends TruffleInstrument {
      */
     @Override
     protected void onDispose(Env env) {
-        if (env.getOptions().get(CPUTracerCLI.ENABLED)) {
-            CPUTracerCLI.printTracerHistogram(new PrintStream(env.out()), tracer);
+        if (enabled) {
+            CPUTracerCLI.handleOutput(env, tracer);
             tracer.close();
         }
     }

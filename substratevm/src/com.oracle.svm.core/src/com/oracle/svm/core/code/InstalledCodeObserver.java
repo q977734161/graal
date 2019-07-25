@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,7 +28,7 @@ import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.heap.PinnedAllocator;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.meta.SharedMethod;
 
 public interface InstalledCodeObserver {
@@ -36,9 +38,13 @@ public interface InstalledCodeObserver {
 
         default void release() {
         }
+
+        @Uninterruptible(reason = "Called from uninterruptible code", mayBeInlined = true)
+        default void releaseOnTearDown() {
+        }
     }
 
-    InstalledCodeObserverHandle install(PinnedAllocator metaInfoAllocator);
+    InstalledCodeObserverHandle install();
 
     interface Factory {
         InstalledCodeObserver create(DebugContext debug, SharedMethod method, CompilationResult compilation, Pointer code);

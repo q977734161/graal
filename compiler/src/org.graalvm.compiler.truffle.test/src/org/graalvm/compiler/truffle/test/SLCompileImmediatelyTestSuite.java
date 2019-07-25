@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,12 +24,9 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleBackgroundCompilation;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleCompileImmediately;
-
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
+import org.graalvm.compiler.truffle.runtime.TruffleRuntimeOptions;
+import org.graalvm.compiler.truffle.runtime.SharedTruffleRuntimeOptions;
 import org.junit.AfterClass;
-import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,7 +39,7 @@ import com.oracle.truffle.sl.test.SLTestSuite;
 @SLTestSuite(value = {"tests"}, testCaseDirectory = SLSimpleTestSuite.class)
 public class SLCompileImmediatelyTestSuite {
 
-    private static TruffleCompilerOptions.TruffleOptionsOverrideScope overrideScope;
+    private static TruffleRuntimeOptions.TruffleRuntimeOptionsOverrideScope overrideScope;
 
     @BeforeClass
     public static void beforeClass() {
@@ -53,9 +52,8 @@ public class SLCompileImmediatelyTestSuite {
          * it has all nodes in the uninitialized specialization. This means that most methods are
          * compiled multiple times, in different specialization states.
          */
-        overrideScope = TruffleCompilerOptions.overrideOptions(TruffleCompileImmediately, true, TruffleBackgroundCompilation, false);
+        overrideScope = TruffleRuntimeOptions.overrideOptions(SharedTruffleRuntimeOptions.TruffleCompileImmediately, true, SharedTruffleRuntimeOptions.TruffleBackgroundCompilation, false);
 
-        Assume.assumeFalse("Crashes on AArch64 in C2 (GR-8733)", System.getProperty("os.arch").equalsIgnoreCase("aarch64"));
     }
 
     @AfterClass

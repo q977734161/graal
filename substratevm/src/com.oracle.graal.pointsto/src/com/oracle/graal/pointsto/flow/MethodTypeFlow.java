@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -183,8 +185,8 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
         originalMethodFlows.addSource(sourceFlow);
     }
 
-    protected void addInstanceOf(InstanceOfTypeFlow instanceOf) {
-        originalMethodFlows.addInstanceOf(instanceOf);
+    protected void addInstanceOf(Object key, InstanceOfTypeFlow instanceOf) {
+        originalMethodFlows.addInstanceOf(key, instanceOf);
     }
 
     protected void addMiscEntry(TypeFlow<?> input) {
@@ -252,7 +254,7 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
     }
 
     public Collection<InvokeTypeFlow> getInvokes() {
-        return originalMethodFlows.getInvokes();
+        return originalMethodFlows.getInvokeFlows();
     }
 
     public StructuredGraph getGraph() {
@@ -316,19 +318,10 @@ public class MethodTypeFlow extends TypeFlow<AnalysisMethod> {
                     }
                     String message = cause.getMessage();
                     bb.getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, message, ex.context(), cause.getCause());
-                } else if (ex.getCause() instanceof ClassNotFoundException) {
-                    String message = "Bytecode parsing error: " + ex.getMessage();
-                    bb.getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, message, ex.context(), ex.getCause());
-                } else if (ex.getCause() instanceof NoClassDefFoundError) {
-                    String message = "Bytecode parsing error: " + ex.getMessage();
-                    bb.getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, message, ex.context(), ex.getCause());
                 } else {
-                    throw ex;
+                    /* Wrap all other errors as parsing errors. */
+                    throw AnalysisError.parsingError(method, ex);
                 }
-            } catch (NoClassDefFoundError ex) {
-                bb.getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, ex.toString(), null, ex);
-            } catch (UnsupportedFeatureException ex) {
-                bb.getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, ex.getMessage(), null, ex);
             } catch (Throwable t) {
                 /* Wrap all other errors as parsing errors. */
                 throw AnalysisError.parsingError(method, t);

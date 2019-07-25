@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -36,19 +38,27 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.reflect.hosted.AccessorComputer;
-import com.oracle.svm.reflect.hosted.DeclaredAnnotationsComputer.FieldDeclaredAnnotationsComputer;
-import com.oracle.svm.reflect.hosted.ReflectionFeature;
 import com.oracle.svm.reflect.hosted.FieldOffsetComputer;
 
-import sun.reflect.FieldAccessor;
+import sun.reflect.generics.repository.FieldRepository;
 
-@TargetClass(value = Field.class, onlyWith = ReflectionFeature.IsEnabled.class)
+@TargetClass(value = Field.class)
 public final class Target_java_lang_reflect_Field {
 
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) FieldAccessor fieldAccessor;
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) FieldAccessor overrideFieldAccessor;
+    @Alias FieldRepository genericInfo;
 
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldDeclaredAnnotationsComputer.class) //
+    @Alias //
+    @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) //
+    Target_jdk_internal_reflect_FieldAccessor fieldAccessor;
+    @Alias //
+    @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) //
+    Target_jdk_internal_reflect_FieldAccessor overrideFieldAccessor;
+
+    /**
+     * The declaredAnnotations field doesn't need a value recomputation. Its value is pre-loaded in
+     * the {@link com.oracle.svm.reflect.hosted.ReflectionMetadataFeature}.
+     */
+    @Alias //
     Map<Class<? extends Annotation>, Annotation> declaredAnnotations;
 
     @Alias //
@@ -57,8 +67,11 @@ public final class Target_java_lang_reflect_Field {
     @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = FieldOffsetComputer.class) //
     int offset;
 
+    @Alias
+    native Target_java_lang_reflect_Field copy();
+
     @Substitute
-    FieldAccessor acquireFieldAccessor(@SuppressWarnings("unused") boolean overrideFinalCheck) {
+    Target_jdk_internal_reflect_FieldAccessor acquireFieldAccessor(@SuppressWarnings("unused") boolean overrideFinalCheck) {
         if (fieldAccessor == null) {
             throw VMError.unsupportedFeature("Runtime reflection is not supported.");
         }
@@ -67,14 +80,7 @@ public final class Target_java_lang_reflect_Field {
 
     @Substitute
     Map<Class<? extends Annotation>, Annotation> declaredAnnotations() {
-        Target_java_lang_reflect_Field holder = root;
-        if (holder == null) {
-            holder = this;
-        }
-
-        if (holder.declaredAnnotations == null) {
-            throw VMError.shouldNotReachHere("Annotations must be computed during native image generation");
-        }
-        return holder.declaredAnnotations;
+        Target_java_lang_reflect_Field holder = ReflectionHelper.getHolder(this);
+        return ReflectionHelper.requireNonNull(holder.declaredAnnotations, "Declared annotations must be computed during native image generation.");
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -40,7 +42,7 @@ public abstract class ClassInstanceReplacer<S, T> implements Function<Object, Ob
     private final Map<S, T> replacements = Collections.synchronizedMap(new IdentityHashMap<>());
     private boolean sealed;
 
-    public ClassInstanceReplacer(Class<S> sourceClass) {
+    protected ClassInstanceReplacer(Class<S> sourceClass) {
         this.sourceClass = sourceClass;
     }
 
@@ -49,20 +51,12 @@ public abstract class ClassInstanceReplacer<S, T> implements Function<Object, Ob
         if (object == null || object.getClass() != sourceClass) {
             return object;
         }
-        return doReplace(object);
+        return replacements.computeIfAbsent(sourceClass.cast(object), this::doReplace);
     }
 
-    private Object doReplace(Object object) {
-        @SuppressWarnings("unchecked")
-        S source = (S) object;
-        T replacement = replacements.get(object);
-        if (replacement == null) {
-            VMError.guarantee(!sealed, "new object introduced after static analysis");
-
-            T newValue = createReplacement(source);
-            T oldValue = replacements.putIfAbsent(source, newValue);
-            replacement = oldValue != null ? oldValue : newValue;
-        }
+    private T doReplace(S object) {
+        VMError.guarantee(!sealed, "new object introduced after static analysis");
+        T replacement = createReplacement(object);
         assert replacement.getClass() != sourceClass : "leads to recursive replacement";
         return replacement;
     }

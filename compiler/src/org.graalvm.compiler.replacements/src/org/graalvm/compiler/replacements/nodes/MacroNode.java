@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,6 +25,7 @@
 package org.graalvm.compiler.replacements.nodes;
 
 import static jdk.vm.ci.code.BytecodeFrame.isPlaceholderBci;
+import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_UNKNOWN;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_UNKNOWN;
 
@@ -38,14 +41,15 @@ import org.graalvm.compiler.graph.NodeInputList;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.FixedNode;
-import org.graalvm.compiler.nodes.Invokable;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.FrameState;
+import org.graalvm.compiler.nodes.Invokable;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.GuardsStage;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
@@ -54,7 +58,7 @@ import org.graalvm.compiler.phases.common.GuardLoweringPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
 import org.graalvm.compiler.phases.common.RemoveValueProxyPhase;
 import org.graalvm.compiler.phases.common.inlining.InliningUtil;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
+import org.graalvm.word.LocationIdentity;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -86,18 +90,22 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
 
     protected final int bci;
     protected final ResolvedJavaMethod targetMethod;
-    protected final StampPair returnStamp;
     protected final InvokeKind invokeKind;
+    protected final StampPair returnStamp;
 
     protected MacroNode(NodeClass<? extends MacroNode> c, InvokeKind invokeKind, ResolvedJavaMethod targetMethod, int bci, StampPair returnStamp, ValueNode... arguments) {
-        super(c, returnStamp.getTrustedStamp());
-        assert targetMethod.getSignature().getParameterCount(!targetMethod.isStatic()) == arguments.length;
+        super(c, returnStamp != null ? returnStamp.getTrustedStamp() : null);
+        assertArgumentCount(targetMethod, arguments);
         this.arguments = new NodeInputList<>(this, arguments);
         this.bci = bci;
         this.targetMethod = targetMethod;
         this.returnStamp = returnStamp;
         this.invokeKind = invokeKind;
         assert !isPlaceholderBci(bci);
+    }
+
+    protected void assertArgumentCount(ResolvedJavaMethod method, ValueNode... args) {
+        assert method.getSignature().getParameterCount(!method.isStatic()) == args.length;
     }
 
     public ValueNode getArgument(int i) {
@@ -152,8 +160,7 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
      */
     @SuppressWarnings("try")
     protected StructuredGraph lowerReplacement(final StructuredGraph replacementGraph, LoweringTool tool) {
-        final PhaseContext c = new PhaseContext(tool.getMetaAccess(), tool.getConstantReflection(), tool.getConstantFieldProvider(), tool.getLowerer(), tool.getReplacements(),
-                        tool.getStampProvider());
+        final CoreProviders c = tool.getProviders();
         if (!graph().hasValueProxies()) {
             new RemoveValueProxyPhase().apply(replacementGraph);
         }
@@ -198,13 +205,15 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
 
             if (invoke.stateAfter() == null) {
                 ResolvedJavaMethod method = graph().method();
-                if (method.getAnnotation(MethodSubstitution.class) != null || method.getAnnotation(Snippet.class) != null) {
-                    // One cause for this is that a MacroNode is created for a method that
-                    // no longer needs a MacroNode. For example, Class.getComponentType()
-                    // only needs a MacroNode prior to JDK9 as it was given a non-native
-                    // implementation in JDK9.
-                    throw new GraalError("%s macro created for call to %s in %s must be lowerable to a snippet or intrinsic graph. " +
-                                    "Maybe a macro node is not needed for this method in the current JDK?", getClass().getSimpleName(), targetMethod.format("%h.%n(%p)"), graph());
+                if (!IS_IN_NATIVE_IMAGE) {
+                    if (method.getAnnotation(MethodSubstitution.class) != null || method.getAnnotation(Snippet.class) != null) {
+                        // One cause for this is that a MacroNode is created for a method that
+                        // no longer needs a MacroNode. For example, Class.getComponentType()
+                        // only needs a MacroNode prior to JDK9 as it was given a non-native
+                        // implementation in JDK9.
+                        throw new GraalError("%s macro created for call to %s in %s must be lowerable to a snippet or intrinsic graph. " +
+                                        "Maybe a macro node is not needed for this method in the current JDK?", getClass().getSimpleName(), targetMethod.format("%h.%n(%p)"), graph());
+                    }
                 }
                 throw new GraalError("%s: cannot lower to invoke without state: %s", graph(), this);
             }
@@ -221,9 +230,13 @@ public abstract class MacroNode extends FixedWithNextNode implements Lowerable, 
         }
     }
 
+    public LocationIdentity getLocationIdentity() {
+        return LocationIdentity.any();
+    }
+
     protected InvokeNode createInvoke() {
         MethodCallTargetNode callTarget = graph().add(new MethodCallTargetNode(invokeKind, targetMethod, arguments.toArray(new ValueNode[arguments.size()]), returnStamp, null));
-        InvokeNode invoke = graph().add(new InvokeNode(callTarget, bci));
+        InvokeNode invoke = graph().add(new InvokeNode(callTarget, bci, getLocationIdentity()));
         if (stateAfter() != null) {
             invoke.setStateAfter(stateAfter().duplicate());
             if (getStackKind() != JavaKind.Void) {

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,11 +33,12 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.VMError;
 
 public final class ProjectHeaderFile {
@@ -70,7 +73,7 @@ public final class ProjectHeaderFile {
 
     /**
      * Base class for fall back resolvers registration. Extending this class will ensure that the
-     * {@link #ProjectHeaderFile()} will be added as a dependency.
+     * {@link ProjectHeaderFile} will be added as a dependency.
      */
     public abstract static class RegisterFallbackResolverFeature implements Feature {
 
@@ -173,9 +176,8 @@ public final class ProjectHeaderFile {
         @Override
         public HeaderSearchResult resolveHeader(String projectName, String headerFile) {
             List<String> locations = new ArrayList<>();
-            String[] clibPathComponents = SubstrateOptions.CLibraryPath.getValue().split(",");
-            for (int i = 0; i < clibPathComponents.length; ++i) {
-                Path clibPathHeaderFile = Paths.get(clibPathComponents[i]).resolve(headerFile).normalize().toAbsolutePath();
+            for (String clibPathComponent : OptionUtils.flatten(",", SubstrateOptions.CLibraryPath.getValue())) {
+                Path clibPathHeaderFile = Paths.get(clibPathComponent).resolve(headerFile).normalize().toAbsolutePath();
                 locations.add(clibPathHeaderFile.toString());
                 if (Files.exists(clibPathHeaderFile)) {
                     return new HeaderSearchResult(Optional.of("\"" + clibPathHeaderFile + "\""), locations);

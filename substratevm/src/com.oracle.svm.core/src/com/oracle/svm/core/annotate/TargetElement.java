@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,6 +28,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 /**
@@ -49,15 +52,12 @@ public @interface TargetElement {
     String name() default "";
 
     /**
-     * Substitute only if predicates are true (default: unconditional substitutions). The parameter
-     * to the predicate is the "original" class as specified by the {@link TargetClass} annotation.
+     * Substitute only if all provided predicates are true (default: unconditional substitution that
+     * is always included).
+     *
+     * The classes must either implement {@link BooleanSupplier} or {@link Predicate}&lt;Class&gt;
+     * (the parameter for {@link Predicate#test} is the "original" class as specified by the
+     * {@link TargetClass} annotation, as a {@link Class}).
      */
-    Class<? extends Predicate<Class<?>>>[] onlyWith() default AlwaysIncluded.class;
-
-    class AlwaysIncluded implements Predicate<Class<?>> {
-        @Override
-        public boolean test(Class<?> originalClass) {
-            return true;
-        }
-    }
+    Class<?>[] onlyWith() default TargetClass.AlwaysIncluded.class;
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,15 +24,17 @@
  */
 package com.oracle.svm.core.thread;
 
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil.Thunk;
 import com.oracle.svm.core.annotate.RestrictHeapAccess;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.Safepoint.SafepointException;
 import com.oracle.svm.core.util.VMError;
 
@@ -84,18 +88,23 @@ public abstract class VMOperation extends VMOperationControl.AllocationFreeStack
     /** Public interface: Queue the operation for execution. */
     public final void enqueue() {
         try {
+            StackOverflowCheck.singleton().makeYellowZoneAvailable();
+
             if (!SubstrateOptions.MultiThreaded.getValue()) {
                 // If I am single-threaded, I can just execute the operation.
                 execute();
             } else {
                 // If I am multi-threaded, then I have to bring the system to a safepoint, etc.
-                setQueuingVMThread(CEntryPointContext.getCurrentIsolateThread());
+                setQueuingVMThread(CurrentIsolate.getCurrentThread());
                 VMOperationControl.enqueue(this);
                 setQueuingVMThread(WordFactory.nullPointer());
             }
         } catch (SafepointException se) {
             /* This exception is intended to be thrown from safepoint checks, at one's own risk */
             throw rethrow(se.inner);
+
+        } finally {
+            StackOverflowCheck.singleton().protectYellowZone();
         }
     }
 
@@ -134,7 +143,7 @@ public abstract class VMOperation extends VMOperationControl.AllocationFreeStack
         final VMOperationControl control = ImageSingletons.lookup(VMOperationControl.class);
         final VMOperation previousInProgress = control.getInProgress();
         try {
-            executingVMThread = CEntryPointContext.getCurrentIsolateThread();
+            executingVMThread = CurrentIsolate.getCurrentThread();
             control.setInProgress(this);
             operate();
         } finally {
@@ -143,9 +152,10 @@ public abstract class VMOperation extends VMOperationControl.AllocationFreeStack
         }
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isInProgress() {
         VMOperation cur = ImageSingletons.lookup(VMOperationControl.class).getInProgress();
-        return cur != null && cur.executingVMThread == CEntryPointContext.getCurrentIsolateThread();
+        return cur != null && cur.executingVMThread == CurrentIsolate.getCurrentThread();
     }
 
     /** Check that there is a VMOperation in progress. */
@@ -186,7 +196,7 @@ public abstract class VMOperation extends VMOperationControl.AllocationFreeStack
         return systemEffect == SystemEffect.CAUSES_SAFEPOINT;
     }
 
-    final IsolateThread getQueuingVMThread() {
+    protected final IsolateThread getQueuingVMThread() {
         return queuingVMThread;
     }
 

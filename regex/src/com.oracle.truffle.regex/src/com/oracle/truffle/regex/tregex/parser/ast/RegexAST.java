@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,13 @@
  */
 package com.oracle.truffle.regex.tregex.parser.ast;
 
+import com.oracle.truffle.regex.RegexFlags;
 import com.oracle.truffle.regex.RegexOptions;
 import com.oracle.truffle.regex.RegexSource;
 import com.oracle.truffle.regex.UnsupportedRegexException;
+import com.oracle.truffle.regex.charset.CharSet;
 import com.oracle.truffle.regex.tregex.TRegexOptions;
 import com.oracle.truffle.regex.tregex.automaton.StateIndex;
-import com.oracle.truffle.regex.tregex.matchers.MatcherBuilder;
 import com.oracle.truffle.regex.tregex.nfa.ASTNodeSet;
 import com.oracle.truffle.regex.tregex.parser.Counter;
 import com.oracle.truffle.regex.tregex.parser.RegexProperties;
@@ -51,6 +52,7 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
      * Original pattern as seen by the parser.
      */
     private final RegexSource source;
+    private final RegexFlags flags;
     private final RegexOptions options;
     private final Counter.ThresholdCounter nodeCount = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxParseTreeSize, "parse tree explosion");
     private final Counter.ThresholdCounter groupCount = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxNumberOfCaptureGroups, "too many capture groups");
@@ -73,13 +75,18 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
     private ASTNodeSet<RegexASTNode> hardPrefixNodes;
     private final EconomicMap<GroupBoundaries, GroupBoundaries> groupBoundariesDeduplicationMap = EconomicMap.create();
 
-    public RegexAST(RegexSource source, RegexOptions options) {
+    public RegexAST(RegexSource source, RegexFlags flags, RegexOptions options) {
         this.source = source;
+        this.flags = flags;
         this.options = options;
     }
 
     public RegexSource getSource() {
         return source;
+    }
+
+    public RegexFlags getFlags() {
+        return flags;
     }
 
     public RegexOptions getOptions() {
@@ -135,6 +142,12 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
 
     public RegexProperties getProperties() {
         return properties;
+    }
+
+    public boolean isLiteralString() {
+        Group r = getRoot();
+        RegexProperties p = getProperties();
+        return !((p.hasAlternations() || p.hasCharClasses() || p.hasLookAroundAssertions() || r.hasLoops()) || ((r.startsWithCaret() || r.endsWithDollar()) && getFlags().isMultiline()));
     }
 
     @Override
@@ -209,7 +222,7 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
         return register(new BackReference(groupNumber));
     }
 
-    public CharacterClass createCharacterClass(MatcherBuilder matcherBuilder) {
+    public CharacterClass createCharacterClass(CharSet matcherBuilder) {
         return register(new CharacterClass(matcherBuilder));
     }
 
@@ -363,8 +376,8 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
      * regex: /(?<=ab)/
      *  -> prefix length: 2
      *  -> result: /(?:[_any_][_any_](?:|[_any_](?:|[_any_])))(?<=ab)/
-     *      -> the non-optional [_any_] - matchers will be used if fromIndex > 0, the optional matchers
-     *         will always be used
+     *      -> the non-optional [_any_] - matchers will be used if fromIndex > 0,
+     *                                    the optional matchers will always be used
      * }
      */
     public void createPrefix() {
@@ -440,7 +453,7 @@ public class RegexAST implements StateIndex<RegexASTNode>, JsonConvertible {
      * set to true.
      */
     private CharacterClass createPrefixAnyMatcher() {
-        final CharacterClass anyMatcher = createCharacterClass(MatcherBuilder.createFull());
+        final CharacterClass anyMatcher = createCharacterClass(CharSet.getFull());
         anyMatcher.setPrefix();
         return anyMatcher;
     }

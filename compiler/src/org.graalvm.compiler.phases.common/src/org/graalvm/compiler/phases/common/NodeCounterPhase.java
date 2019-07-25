@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,13 +27,25 @@ package org.graalvm.compiler.phases.common;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionType;
 import org.graalvm.compiler.phases.BasePhase;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 
-public class NodeCounterPhase extends BasePhase<PhaseContext> {
+public class NodeCounterPhase extends BasePhase<CoreProviders> {
+
+    private Stage stage;
+
+    public NodeCounterPhase(Stage stage) {
+        this.stage = stage;
+    }
+
+    public enum Stage {
+        INIT,
+        EARLY,
+        LATE
+    }
 
     public static class Options {
         // @formatter:off
@@ -41,10 +55,12 @@ public class NodeCounterPhase extends BasePhase<PhaseContext> {
     }
 
     @Override
-    protected void run(StructuredGraph graph, PhaseContext context) {
+    protected void run(StructuredGraph graph, CoreProviders context) {
+
         for (Node node : graph.getNodes()) {
-            DebugContext.counter("NodeCounter_%s",
-                            node.getNodeClass().getClazz().getSimpleName()).increment(node.getDebug());
+            String nodeName = node.getNodeClass().getClazz().getSimpleName();
+
+            DebugContext.counter("NodeCounter_%s_%s", this.stage, nodeName).increment(node.getDebug());
         }
     }
 }

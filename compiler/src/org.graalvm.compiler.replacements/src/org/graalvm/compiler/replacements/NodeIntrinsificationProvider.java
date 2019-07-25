@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,13 +25,13 @@
 package org.graalvm.compiler.replacements;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.spi.ArrayOffsetProvider;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.nodes.graphbuilderconf.NodeIntrinsicPluginFactory.InjectionProvider;
+import org.graalvm.compiler.replacements.arraycopy.ArrayCopyForeignCalls;
 import org.graalvm.compiler.word.WordTypes;
 
 import jdk.vm.ci.meta.JavaKind;
@@ -41,15 +43,12 @@ public class NodeIntrinsificationProvider implements InjectionProvider {
     private final MetaAccessProvider metaAccess;
     private final SnippetReflectionProvider snippetReflection;
     private final ForeignCallsProvider foreignCalls;
-    private final ArrayOffsetProvider arrayOffsetProvider;
     private final WordTypes wordTypes;
 
-    public NodeIntrinsificationProvider(MetaAccessProvider metaAccess, SnippetReflectionProvider snippetReflection, ForeignCallsProvider foreignCalls, ArrayOffsetProvider arrayOffsetProvider,
-                    WordTypes wordTypes) {
+    public NodeIntrinsificationProvider(MetaAccessProvider metaAccess, SnippetReflectionProvider snippetReflection, ForeignCallsProvider foreignCalls, WordTypes wordTypes) {
         this.metaAccess = metaAccess;
         this.snippetReflection = snippetReflection;
         this.foreignCalls = foreignCalls;
-        this.arrayOffsetProvider = arrayOffsetProvider;
         this.wordTypes = wordTypes;
     }
 
@@ -73,12 +72,12 @@ public class NodeIntrinsificationProvider implements InjectionProvider {
         T injected = snippetReflection.getInjectedNodeIntrinsicParameter(type);
         if (injected != null) {
             return injected;
-        } else if (type.equals(ForeignCallsProvider.class)) {
+        } else if (type.equals(ForeignCallsProvider.class) || type.equals(ArrayCopyForeignCalls.class)) {
             return type.cast(foreignCalls);
         } else if (type.equals(SnippetReflectionProvider.class)) {
             return type.cast(snippetReflection);
-        } else if (type.equals(ArrayOffsetProvider.class)) {
-            return type.cast(arrayOffsetProvider);
+        } else if (type.equals(WordTypes.class)) {
+            return type.cast(wordTypes);
         } else {
             throw new GraalError("Cannot handle injected argument of type %s.", type.getName());
         }

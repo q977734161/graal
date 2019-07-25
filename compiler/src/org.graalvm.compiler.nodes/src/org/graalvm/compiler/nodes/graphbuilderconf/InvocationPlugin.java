@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -195,6 +197,11 @@ public interface InvocationPlugin extends GraphBuilderPlugin {
                 return apply(b, targetMethod, receiver, argsIncludingReceiver[1], argsIncludingReceiver[2], argsIncludingReceiver[3]);
             } else if (argsIncludingReceiver.length == 5) {
                 return apply(b, targetMethod, receiver, argsIncludingReceiver[1], argsIncludingReceiver[2], argsIncludingReceiver[3], argsIncludingReceiver[4]);
+            } else if (argsIncludingReceiver.length == 6) {
+                return apply(b, targetMethod, receiver, argsIncludingReceiver[1], argsIncludingReceiver[2], argsIncludingReceiver[3], argsIncludingReceiver[4], argsIncludingReceiver[5]);
+            } else if (argsIncludingReceiver.length == 7) {
+                return apply(b, targetMethod, receiver, argsIncludingReceiver[1], argsIncludingReceiver[2], argsIncludingReceiver[3], argsIncludingReceiver[4], argsIncludingReceiver[5],
+                                argsIncludingReceiver[6]);
             } else {
                 return defaultHandler(b, targetMethod, receiver, argsIncludingReceiver);
             }

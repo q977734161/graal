@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,17 +26,26 @@ package com.oracle.svm.core.posix.linux;
 
 import java.io.IOException;
 
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
+import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.posix.headers.Errno;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.headers.Errno;
+import com.oracle.svm.core.jdk.JDK11OrLater;
+import com.oracle.svm.core.jdk.JDK8OrEarlier;
+import com.oracle.svm.core.posix.PosixJavaNIOSubstitutions;
 import com.oracle.svm.core.posix.headers.Socket;
 import com.oracle.svm.core.posix.headers.Time;
 import com.oracle.svm.core.posix.headers.Unistd;
@@ -80,9 +91,11 @@ public final class LinuxNIOSubstitutions {
             return LinuxEPoll.epoll_event.offsetOfdata();
         }
 
+        /* { Do not reformat commented-out code: @formatter:off */
         // 057 JNIEXPORT jint JNICALL
         // 058 Java_sun_nio_ch_EPoll_epollCreate(JNIEnv *env, jclass c) {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static int epollCreate() throws IOException {
             // 059     /*
             // 060      * epoll_create expects a size as a hint to the kernel about how to
@@ -98,15 +111,38 @@ public final class LinuxNIOSubstitutions {
             // 067     return epfd;
             return epfd;
         }
+        /* } Do not reformat commented-out code: @formatter:on */
 
+        /* { Do not reformat commented-out code: @formatter:off */
+        //    58  JNIEXPORT jint JNICALL
+        //    59  Java_sun_nio_ch_EPoll_create(JNIEnv *env, jclass clazz) {
+        @Substitute //
+        @TargetElement(onlyWith = JDK11OrLater.class) //
+        static int create() throws IOException {
+            //    60      /* size hint not used in modern kernels */
+            //    61      int epfd = epoll_create(256);
+            int epfd = LinuxEPoll.epoll_create(256);
+            //    62      if (epfd < 0) {
+            if (epfd < 0) {
+                //    63          JNU_ThrowIOExceptionWithLastError(env, "epoll_create failed");
+                throw new IOException("epoll_create failed");
+            }
+            //    64      }
+            //    65      return epfd;
+            return epfd;
+        }
+        /* } Do not reformat commented-out code: @formatter:on */
+
+        /* { Do not reformat commented-out code: @formatter:off */
         // 070 JNIEXPORT jint JNICALL
         // 071 Java_sun_nio_ch_EPoll_epollCtl(JNIEnv *env, jclass c, jint epfd,
         // 072                                    jint opcode, jint fd, jint events)
         // 073 {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static int epollCtl(int epfd, int opcode, int fd, int events) {
             // 074     struct epoll_event event;
-            LinuxEPoll.epoll_event event = StackValue.get(SizeOf.get(LinuxEPoll.epoll_event.class));
+            LinuxEPoll.epoll_event event = StackValue.get(LinuxEPoll.epoll_event.class);
             // 075     int res;
             int res;
             // 076
@@ -117,19 +153,44 @@ public final class LinuxNIOSubstitutions {
             // 079
             // 080     RESTARTABLE(epoll_ctl(epfd, (int)opcode, (int)fd, &event), res);
             do {
-                do {
-                    res = LinuxEPoll.epoll_ctl(epfd, opcode, fd, event);
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = LinuxEPoll.epoll_ctl(epfd, opcode, fd, event);
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             // 082     return (res == 0) ? 0 : errno;
             return (res == 0) ? 0 : Errno.errno();
         }
+        /* } Do not reformat commented-out code: @formatter:on */
 
+        // 68 JNIEXPORT jint JNICALL
+        // 69 Java_sun_nio_ch_EPoll_ctl(JNIEnv *env, jclass clazz, jint epfd,
+        // 70 jint opcode, jint fd, jint events)
+        // 71 {
+        @Substitute //
+        @TargetElement(onlyWith = JDK11OrLater.class) //
+        static int ctl(int epfd, int opcode, int fd, int events) {
+            // 72 struct epoll_event event;
+            LinuxEPoll.epoll_event event = StackValue.get(LinuxEPoll.epoll_event.class);
+            // 73 int res;
+            int res;
+            // 74
+            // 75 event.events = events;
+            event.events(events);
+            // 76 event.data.fd = fd;
+            event.addressOfdata().fd(fd);
+            // 77
+            // 78 res = epoll_ctl(epfd, (int)opcode, (int)fd, &event);
+            res = LinuxEPoll.epoll_ctl(epfd, opcode, fd, event);
+            // 79 return (res == 0) ? 0 : errno;
+            return (res == 0) ? 0 : Errno.errno();
+            // 80 }
+        }
+
+        /* { Do not reformat commented-out code: @formatter:off */
         // 085 JNIEXPORT jint JNICALL
         // 086 Java_sun_nio_ch_EPoll_epollWait(JNIEnv *env, jclass c,
         // 087                                     jint epfd, jlong address, jint numfds)
         // 088 {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static int epollWait(int epfd, long address, int numfds) throws IOException {
             // 089     struct epoll_event *events = jlong_to_ptr(address);
             LinuxEPoll.epoll_event events = WordFactory.pointer(address);
@@ -138,10 +199,8 @@ public final class LinuxNIOSubstitutions {
             // 091
             // 092     RESTARTABLE(epoll_wait(epfd, events, numfds, -1), res);
             do {
-                do {
-                    res = LinuxEPoll.epoll_wait(epfd, events, numfds, -1);
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = LinuxEPoll.epoll_wait(epfd, events, numfds, -1);
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             // 093     if (res < 0) {
             if (res < 0) {
                 // 094         JNU_ThrowIOExceptionWithLastError(env, "epoll_wait failed");
@@ -150,8 +209,43 @@ public final class LinuxNIOSubstitutions {
             // 096     return res;
             return res;
         }
+        /* } Do not reformat commented-out code: @formatter:on */
+
+        // 82 JNIEXPORT jint JNICALL
+        // 83 Java_sun_nio_ch_EPoll_wait(JNIEnv *env, jclass clazz, jint epfd,
+        // 84 jlong address, jint numfds, jint timeout)
+        // 85 {
+        @Substitute //
+        @TargetElement(onlyWith = JDK11OrLater.class) //
+        @SuppressWarnings({"unused"})
+        static int wait(int epfd, long address, int numfds, int timeout) throws IOException {
+            // 86 struct epoll_event *events = jlong_to_ptr(address);
+            LinuxEPoll.epoll_event events = WordFactory.pointer(address);
+            // 87 int res = epoll_wait(epfd, events, numfds, timeout);
+            int res = LinuxEPoll.epoll_wait(epfd, events, numfds, timeout);
+            // 88 if (res < 0) {
+            if (res < 0) {
+                // 89 if (errno == EINTR) {
+                if (Errno.errno() == Errno.EINTR()) {
+                    // 90 return IOS_INTERRUPTED;
+                    return PosixJavaNIOSubstitutions.Target_sun_nio_ch_IOStatus.IOS_INTERRUPTED;
+                    // 91 } else {
+                } else {
+                    // 92 JNU_ThrowIOExceptionWithLastError(env, "epoll_wait failed");
+                    throw new IOException("epoll_wait failed");
+                    // 93 return IOS_THROWN;
+                    // not reached
+                    // 94 }
+                }
+                // 95 }
+            }
+            // 96 return res;
+            return res;
+            // 97 }
+        }
 
         /* This method appears in EPoll.c, but is not declared in EPoll.java. */
+        /* { Do not reformat commented-out code: @formatter:off */
         // 099 JNIEXPORT void JNICALL
         // 100 Java_sun_nio_ch_EPoll_close0(JNIEnv *env, jclass c, jint epfd) {
         // @Substitute
@@ -165,15 +259,20 @@ public final class LinuxNIOSubstitutions {
         //         } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
         //     } while (false);
         // }
+        /* } Do not reformat commented-out code: @formatter:on */
     }
     /* } @formatter:on */
 
     /* { Do not reformat commented-out code: @formatter:off */
     /** Translations of jdk/src/solaris/native/sun/nio/ch/EPollArrayWrapper.c?v=Java_1.8.0_40_b10. */
     @Platforms({Platform.LINUX.class})
-    @TargetClass(className = "sun.nio.ch.EPollArrayWrapper")
+    @TargetClass(className = "sun.nio.ch.EPollArrayWrapper", onlyWith = JDK8OrEarlier.class)
     static final class Target_sun_nio_ch_EPollArrayWrapper {
 
+        /* The translation of RESTARTABLE is to expand the body without the wrapper
+         *     do { .... } while (0)
+         * whose purpose is to make the macro expansion into a single C statement.
+         */
         // 037 #define RESTARTABLE(_cmd, _result) do { \
         // 038   do { \
         // 039     _result = _cmd; \
@@ -234,7 +333,7 @@ public final class LinuxNIOSubstitutions {
         @Substitute
         void epollCtl(int epfd, int opcode, int fd, int events) throws IOException {
             // 109     struct epoll_event event;
-            LinuxEPoll.epoll_event event = StackValue.get(SizeOf.get(LinuxEPoll.epoll_event.class));
+            LinuxEPoll.epoll_event event = StackValue.get(LinuxEPoll.epoll_event.class);
             // 110     int res;
             int res;
             // 111
@@ -245,10 +344,8 @@ public final class LinuxNIOSubstitutions {
             // 114
             // 115     RESTARTABLE(epoll_ctl(epfd, (int)opcode, (int)fd, &event), res);
             do {
-                do {
-                    res = LinuxEPoll.epoll_ctl(epfd, opcode, fd, event);
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = LinuxEPoll.epoll_ctl(epfd, opcode, fd, event);
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             // 117     /*
             // 118      * A channel may be registered with several Selectors. When each Selector
             // 119      * is polled a EPOLL_CTL_DEL op will be inserted into its pending update
@@ -283,10 +380,8 @@ public final class LinuxNIOSubstitutions {
             if (timeout <= 0) {
                 // 141         RESTARTABLE(epoll_wait(epfd, events, numfds, timeout), res);
                 do {
-                    do {
-                        res = LinuxEPoll.epoll_wait(epfd, events, numfds, (int) timeout);
-                    } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-                } while (false);
+                    res = LinuxEPoll.epoll_wait(epfd, events, numfds, (int) timeout);
+                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             } else {                      /* Bounded wait; bounded restarts */
                 // 143         res = iepoll(epfd, events, numfds, timeout);
                 res = Util_sun_nio_ch_EPollArrayWrapper.iepoll(epfd, events, numfds, timeout);
@@ -306,7 +401,7 @@ public final class LinuxNIOSubstitutions {
         @Substitute
         static void interrupt(int fd) throws IOException {
             // 155     int fakebuf[1];
-            CIntPointer fakebuf = StackValue.get(1, SizeOf.get(CIntPointer.class));
+            CIntPointer fakebuf = StackValue.get(1, CIntPointer.class);
             // 156     fakebuf[0] = 1;
             fakebuf.write(0, 1);
             // 157     if (write(fd, fakebuf, 1) < 0) {
@@ -332,7 +427,7 @@ public final class LinuxNIOSubstitutions {
             // 048 int remaining = timeout;
             long remaining = timeout;
             // 049 struct timeval t;
-            Time.timeval t = StackValue.get(SizeOf.get(Time.timeval.class));
+            Time.timeval t = StackValue.get(Time.timeval.class);
             // 050 int diff;
             long diff;
             // 051
@@ -373,6 +468,31 @@ public final class LinuxNIOSubstitutions {
     }
     /* } @formatter:on */
 
+    /**
+     * Re-run the class initialization for {@code sun.nio.ch.EPollArrayWrapper} so that static
+     * fields are re-initialized from the platform running the image.
+     * <p>
+     * The static initializer for {@code sun.nio.ch.EPollArrayWrapper} captures the number of file
+     * descriptors available on the platform in {@code EPollArrayWrapper.OPEN_MAX} using
+     * {@code IOUtil,fdLimit()}. Based on that the constructor for
+     * {@code sun.nio.ch.EPollArrayWrapper} does or does not create an overflow table,
+     * {@code EPollArrayWrapper.eventsHigh}. If the number of file descriptors increases between the
+     * build platform and the execution platform, attempting to use the uninitialized overflow table
+     * may cause a {@code NullPointerException}. Re-initializing the static fields should allow the
+     * overflow table to be created if it is needed on the execution platform.
+     */
+    @AutomaticFeature
+    static final class EPollArrayWrapperFeature implements Feature {
+
+        @Override
+        public void duringSetup(DuringSetupAccess access) {
+            if (JavaVersionUtil.JAVA_SPEC <= 8) {
+                /* This class only exists on JDK-8 and earlier platforms. */
+                ImageSingletons.lookup(RuntimeClassInitializationSupport.class).rerunInitialization(access.findClassByName("sun.nio.ch.EPollArrayWrapper"), "required for substitutions");
+            }
+        }
+    }
+
     /* { Do not reformat commented-out code: @formatter:off */
     /** Translations of jdk/src/solaris/native/sun/nio/ch/EPollPort.c?v=Java_1.8.0_40_b10. */
     @Platforms({Platform.LINUX.class})
@@ -381,17 +501,18 @@ public final class LinuxNIOSubstitutions {
 
         // 038 JNIEXPORT void JNICALL
         // 039 Java_sun_nio_ch_EPollPort_socketpair(JNIEnv* env, jclass clazz, jintArray sv) {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static void socketpair(int[] sv) throws IOException {
             // 040     int sp[2];
-            CIntPointer sp = StackValue.get(2, SizeOf.get(CIntPointer.class));
+            CIntPointer sp = StackValue.get(2, CIntPointer.class);
             // 041     if (socketpair(PF_UNIX, SOCK_STREAM, 0, sp) == -1) {
             if (Socket.socketpair(Socket.PF_UNIX(), Socket.SOCK_STREAM(), 0, sp) == -1) {
                 // 042         JNU_ThrowIOExceptionWithLastError(env, "socketpair failed");
                 throw new IOException("socketpair failed");
             } else {
                 // 044         jint res[2];
-                CIntPointer res = StackValue.get(2, SizeOf.get(CIntPointer.class));
+                CIntPointer res = StackValue.get(2, CIntPointer.class);
                 // 045         res[0] = (jint)sp[0];
                 res.write(0, sp.read(0));
                 // 046         res[1] = (jint)sp[1];
@@ -404,20 +525,19 @@ public final class LinuxNIOSubstitutions {
 
         // 051 JNIEXPORT void JNICALL
         // 052 Java_sun_nio_ch_EPollPort_interrupt(JNIEnv *env, jclass c, jint fd) {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static void interrupt(int fd) throws IOException {
             // 053     int res;
             int res;
             // 054     int buf[1];
-            CIntPointer buf = StackValue.get(SizeOf.get(CIntPointer.class));
+            CIntPointer buf = StackValue.get(CIntPointer.class);
             // 055     buf[0] = 1;
             buf.write(0, 1);
             // 056     RESTARTABLE(write(fd, buf, 1), res);
             do {
-                do {
-                    res = (int) Unistd.write(fd, buf, WordFactory.unsigned(1)).rawValue();
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = (int) Unistd.write(fd, buf, WordFactory.unsigned(1)).rawValue();
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             // 057     if (res < 0) {
             if (res < 0) {
                 // 058         JNU_ThrowIOExceptionWithLastError(env, "write failed");
@@ -427,18 +547,17 @@ public final class LinuxNIOSubstitutions {
 
         // 062 JNIEXPORT void JNICALL
         // 063 Java_sun_nio_ch_EPollPort_drain1(JNIEnv *env, jclass cl, jint fd) {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static void drain1(int fd) throws IOException {
             // 064     int res;
             int res;
             // 065     char buf[1];
-            CCharPointer buf = StackValue.get(SizeOf.get(CCharPointer.class));
+            CCharPointer buf = StackValue.get(CCharPointer.class);
             // 066     RESTARTABLE(read(fd, buf, 1), res);
             do {
-                do {
-                    res = (int) Unistd.read(fd, buf, WordFactory.unsigned(1)).rawValue();
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = (int) Unistd.read(fd, buf, WordFactory.unsigned(1)).rawValue();
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
             // 067     if (res < 0) {
             if (res < 0) {
                 // 068         JNU_ThrowIOExceptionWithLastError(env, "drain1 failed");
@@ -448,16 +567,15 @@ public final class LinuxNIOSubstitutions {
 
         // 072 JNIEXPORT void JNICALL
         // 073 Java_sun_nio_ch_EPollPort_close0(JNIEnv *env, jclass c, jint fd) {
-        @Substitute
+        @Substitute //
+        @TargetElement(onlyWith = JDK8OrEarlier.class)
         static void close0(int fd) {
             // 074     int res;
             int res;
             // 075     RESTARTABLE(close(fd), res);
             do {
-                do {
-                    res = Unistd.close(fd);
-                } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
-            } while (false);
+                res = Unistd.close(fd);
+            } while ((res == -1) && (Errno.errno() == Errno.EINTR()));
         }
     }
     /* } @formatter:on */

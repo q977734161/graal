@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor;
 
@@ -60,10 +78,13 @@ import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionKey;
+import org.graalvm.options.OptionMap;
+import org.graalvm.options.OptionStability;
 
 import com.oracle.truffle.api.Option;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
+import com.oracle.truffle.dsl.processor.generator.GeneratorUtils;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeExecutableElement;
 import com.oracle.truffle.dsl.processor.java.model.CodeTree;
@@ -237,6 +258,13 @@ public class OptionProcessor extends AbstractProcessor {
             return false;
         }
 
+        boolean optionMap = false;
+        TypeMirror optionMapType = ElementUtils.getTypeElement(processingEnv, OptionMap.class.getName()).asType();
+        List<? extends TypeMirror> typeArguments = ((DeclaredType) fieldType).getTypeArguments();
+        if (typeArguments.size() == 1) {
+            optionMap = types.isSubtype(typeArguments.get(0), types.erasure(optionMapType));
+        }
+
         String help = annotation.help();
         if (help.length() != 0) {
             char firstChar = help.charAt(0);
@@ -254,18 +282,21 @@ public class OptionProcessor extends AbstractProcessor {
             optionName = annotation.name();
         }
 
-        if (!optionName.isEmpty() && !Character.isUpperCase(optionName.charAt(0))) {
-            error(element, elementAnnotation, "Option names must start with capital letter");
+        // Applying this restriction to all options requires changes in some language
+        // implementations.
+        if (optionMap && optionName.contains(".")) {
+            error(element, elementAnnotation, "Option (maps) cannot contain a '.' in the name");
             return false;
         }
 
         boolean deprecated = annotation.deprecated();
 
         OptionCategory category = annotation.category();
-
         if (category == null) {
-            category = OptionCategory.DEBUG;
+            category = OptionCategory.INTERNAL;
         }
+
+        OptionStability stability = annotation.stability();
 
         for (String group : groupPrefixStrings) {
             String name;
@@ -281,7 +312,7 @@ public class OptionProcessor extends AbstractProcessor {
                     name = group + "." + optionName;
                 }
             }
-            info.options.add(new OptionInfo(name, help, field, elementAnnotation, deprecated, category));
+            info.options.add(new OptionInfo(name, help, field, elementAnnotation, deprecated, category, stability, optionMap));
         }
         return true;
     }
@@ -295,15 +326,14 @@ public class OptionProcessor extends AbstractProcessor {
         processingEnv.getMessager().printMessage(Kind.ERROR, formattedMessage, element, annotation);
     }
 
-    private void generateOptionDescriptor(OptionsInfo info) {
+    private static void generateOptionDescriptor(OptionsInfo info) {
         Element element = info.type;
         ProcessorContext context = ProcessorContext.getInstance();
 
         CodeTypeElement unit = generateDescriptors(context, element, info);
         DeclaredType overrideType = (DeclaredType) context.getType(Override.class);
-        DeclaredType suppressedWarnings = (DeclaredType) context.getType(SuppressWarnings.class);
         unit.accept(new GenerateOverrideVisitor(overrideType), null);
-        unit.accept(new FixWarningsVisitor(context.getEnvironment(), suppressedWarnings, overrideType), null);
+        unit.accept(new FixWarningsVisitor(element, overrideType), null);
         try {
             unit.accept(new CodeWriter(context.getEnvironment(), element), null);
         } catch (RuntimeException e) {
@@ -322,7 +352,7 @@ public class OptionProcessor extends AbstractProcessor {
         ProcessorContext.getInstance().getEnvironment().getMessager().printMessage(Kind.ERROR, message + ": " + ElementUtils.printException(t), e);
     }
 
-    private CodeTypeElement generateDescriptors(ProcessorContext context, Element element, OptionsInfo model) {
+    private static CodeTypeElement generateDescriptors(ProcessorContext context, Element element, OptionsInfo model) {
         String optionsClassName = ElementUtils.getSimpleName(element.asType()) + OptionDescriptors.class.getSimpleName();
         TypeElement sourceType = (TypeElement) model.type;
         PackageElement pack = context.getEnvironment().getElementUtils().getPackageOf(sourceType);
@@ -330,25 +360,53 @@ public class OptionProcessor extends AbstractProcessor {
         CodeTypeElement descriptors = new CodeTypeElement(typeModifiers, ElementKind.CLASS, pack, optionsClassName);
         DeclaredType optionDescriptorsType = context.getDeclaredType(OptionDescriptors.class);
         descriptors.getImplements().add(optionDescriptorsType);
+        GeneratorUtils.addGeneratedBy(context, descriptors, (TypeElement) element);
 
         ExecutableElement get = ElementUtils.findExecutableElement(optionDescriptorsType, "get");
-        CodeExecutableElement getMethod = CodeExecutableElement.clone(processingEnv, get);
+        CodeExecutableElement getMethod = CodeExecutableElement.clone(get);
         getMethod.getModifiers().remove(ABSTRACT);
         CodeTreeBuilder builder = getMethod.createBuilder();
 
         String nameVariableName = getMethod.getParameters().get(0).getSimpleName().toString();
-        builder.startSwitch().string(nameVariableName).end().startBlock();
+
+        boolean elseIf = false;
         for (OptionInfo info : model.options) {
+            if (!info.optionMap) {
+                continue;
+            }
+            elseIf = builder.startIf(elseIf);
+            // Prefix options must be delimited by a '.' or match exactly.
+            // e.g. for java.Props: java.Props.Threshold and java.Props match, but
+            // java.PropsThreshold doesn't.
+            builder.startCall(nameVariableName, "startsWith").doubleQuote(info.name + ".").end();
+            builder.string(" || ");
+            builder.startCall(nameVariableName, "equals").doubleQuote(info.name).end();
+
+            builder.end().startBlock();
+            builder.startReturn().tree(createBuildOptionDescriptor(context, info)).end();
+            builder.end();
+        }
+
+        boolean startSwitch = false;
+        for (OptionInfo info : model.options) {
+            if (info.optionMap) {
+                continue;
+            }
+            if (!startSwitch) {
+                builder.startSwitch().string(nameVariableName).end().startBlock();
+                startSwitch = true;
+            }
             builder.startCase().doubleQuote(info.name).end().startCaseBlock();
             builder.startReturn().tree(createBuildOptionDescriptor(context, info)).end();
             builder.end(); // case
         }
-        builder.end(); // block
+        if (startSwitch) {
+            builder.end(); // block
+        }
         builder.returnNull();
-
         descriptors.add(getMethod);
 
-        CodeExecutableElement iteratorMethod = CodeExecutableElement.clone(processingEnv, ElementUtils.findExecutableElement(optionDescriptorsType, "iterator"));
+        CodeExecutableElement iteratorMethod = CodeExecutableElement.clone(ElementUtils.findExecutableElement(optionDescriptorsType, "iterator"));
         iteratorMethod.getModifiers().remove(ABSTRACT);
         builder = iteratorMethod.createBuilder();
 
@@ -389,6 +447,8 @@ public class OptionProcessor extends AbstractProcessor {
         }
         builder.startCall("", "help").doubleQuote(info.help).end();
         builder.startCall("", "category").staticReference(context.getType(OptionCategory.class), info.category.name()).end();
+        builder.startCall("", "stability").staticReference(context.getType(OptionStability.class), info.stability.name()).end();
+
         builder.startCall("", "build").end();
         return builder.build();
     }
@@ -399,17 +459,21 @@ public class OptionProcessor extends AbstractProcessor {
         final String name;
         final String help;
         final boolean deprecated;
+        final boolean optionMap;
         final VariableElement field;
         final AnnotationMirror annotation;
         final OptionCategory category;
+        final OptionStability stability;
 
-        OptionInfo(String name, String help, VariableElement field, AnnotationMirror annotation, boolean deprecated, OptionCategory category) {
+        OptionInfo(String name, String help, VariableElement field, AnnotationMirror annotation, boolean deprecated, OptionCategory category, OptionStability stability, boolean optionMap) {
             this.name = name;
             this.help = help;
             this.field = field;
             this.annotation = annotation;
             this.deprecated = deprecated;
             this.category = category;
+            this.stability = stability;
+            this.optionMap = optionMap;
         }
 
         @Override

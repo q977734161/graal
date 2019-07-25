@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,6 @@
  */
 package com.oracle.truffle.regex.tregex.nodes;
 
-import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.regex.tregex.matchers.CharMatcher;
 
 public class TraceFinderDFAStateNode extends BackwardDFAStateNode {
@@ -34,16 +33,9 @@ public class TraceFinderDFAStateNode extends BackwardDFAStateNode {
     private final byte preCalculatedUnAnchoredResult;
     private final byte preCalculatedAnchoredResult;
 
-    public TraceFinderDFAStateNode(short id,
-                    boolean finalState,
-                    boolean anchoredFinalState,
-                    boolean hasBackwardPrefixState,
-                    short loopToSelf,
-                    short[] successors,
-                    CharMatcher[] matchers,
-                    byte preCalculatedUnAnchoredResult,
-                    byte preCalculatedAnchoredResult) {
-        super(id, finalState, anchoredFinalState, hasBackwardPrefixState, loopToSelf, successors, matchers);
+    public TraceFinderDFAStateNode(short id, byte flags, LoopOptimizationNode loopOptimizationNode, short[] successors, CharMatcher[] matchers,
+                    AllTransitionsInOneTreeMatcher allTransitionsInOneTreeMatcher, byte preCalculatedUnAnchoredResult, byte preCalculatedAnchoredResult) {
+        super(id, flags, loopOptimizationNode, successors, matchers, allTransitionsInOneTreeMatcher);
         this.preCalculatedUnAnchoredResult = preCalculatedUnAnchoredResult;
         this.preCalculatedAnchoredResult = preCalculatedAnchoredResult;
     }
@@ -59,34 +51,34 @@ public class TraceFinderDFAStateNode extends BackwardDFAStateNode {
         return new TraceFinderDFAStateNode(this, copyID);
     }
 
-    public boolean hasPreCalculatedUnAnchoredResult() {
+    private boolean hasPreCalculatedUnAnchoredResult() {
         return preCalculatedUnAnchoredResult != NO_PRE_CALC_RESULT;
     }
 
-    public int getPreCalculatedUnAnchoredResult() {
+    private int getPreCalculatedUnAnchoredResult() {
         return Byte.toUnsignedInt(preCalculatedUnAnchoredResult);
     }
 
-    public boolean hasPreCalculatedAnchoredResult() {
+    private boolean hasPreCalculatedAnchoredResult() {
         return preCalculatedAnchoredResult != NO_PRE_CALC_RESULT;
     }
 
-    public int getPreCalculatedAnchoredResult() {
+    private int getPreCalculatedAnchoredResult() {
         return Byte.toUnsignedInt(preCalculatedAnchoredResult);
     }
 
     @Override
-    protected void storeResult(VirtualFrame frame, TRegexDFAExecutorNode executor, int index, boolean anchored) {
+    void storeResult(TRegexDFAExecutorLocals locals, int index, boolean anchored) {
         if (anchored) {
             assert hasPreCalculatedAnchoredResult();
             if (hasPreCalculatedUnAnchoredResult() && getPreCalculatedUnAnchoredResult() < getPreCalculatedAnchoredResult()) {
-                executor.setResultInt(frame, getPreCalculatedUnAnchoredResult());
+                locals.setResultInt(getPreCalculatedUnAnchoredResult());
             } else {
-                executor.setResultInt(frame, getPreCalculatedAnchoredResult());
+                locals.setResultInt(getPreCalculatedAnchoredResult());
             }
         } else {
             assert hasPreCalculatedUnAnchoredResult();
-            executor.setResultInt(frame, getPreCalculatedUnAnchoredResult());
+            locals.setResultInt(getPreCalculatedUnAnchoredResult());
         }
     }
 }

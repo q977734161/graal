@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,11 @@
  */
 package com.oracle.svm.core.posix.headers.darwin;
 
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CLibrary;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 
@@ -39,7 +41,7 @@ import com.oracle.svm.core.posix.headers.PosixDirectives;
  */
 @CContext(PosixDirectives.class)
 @CLibrary("-framework CoreFoundation")
-@Platforms(Platform.DARWIN.class)
+@Platforms(InternalPlatform.DARWIN_AND_JNI.class)
 public class CoreFoundation {
 
     public interface CFStringRef extends PointerBase {
@@ -60,8 +62,8 @@ public class CoreFoundation {
     public static native void CFStringAppendCharacters(CFMutableStringRef theString, PointerBase chars, SignedWord numChars);
 
     /**
-     * @function CFStringNormalize Normalizes the string into the specified form as described in
-     *           Unicode Technical Report #15.
+     * Normalizes the string into the specified form as described in Unicode Technical Report #15.
+     * 
      * @param theString The string which is to be normalized. If this parameter is not a valid
      *            mutable CFString, the behavior is undefined.
      * @param theForm The form into which the string is to be normalized. If this parameter is not a
@@ -72,18 +74,26 @@ public class CoreFoundation {
 
     /** Number of 16-bit Unicode characters in the string. */
     @CFunction
-    public static native SignedWord CFStringGetLength(CFStringRef theString);
-
-    /**
-     * Extracting the contents of the string. For obtaining multiple characters, calling
-     * CFStringGetCharacters() is more efficient than multiple calls to
-     * CFStringGetCharacterAtIndex(). If the length of the string is not known (so you can't use a
-     * fixed size buffer for CFStringGetCharacters()), another method is to use is
-     * CFStringGetCharacterFromInlineBuffer() (see further below).
-     */
-    @CFunction
-    public static native void CFStringGetCharacters(CFStringRef theString, SignedWord range, PointerBase buffer);
+    public static native long CFStringGetLength(CFStringRef theString);
 
     @CFunction
     public static native void CFRelease(PointerBase cf);
+
+    @CFunction
+    public static native PointerBase CFRetain(PointerBase cf);
+
+    public interface CFDictionaryRef extends PointerBase {
+    }
+
+    @CFunction
+    public static native CFDictionaryRef _CFCopyServerVersionDictionary();
+
+    @CFunction
+    public static native CFDictionaryRef _CFCopySystemVersionDictionary();
+
+    @CFunction
+    public static native CFStringRef CFDictionaryGetValue(CFDictionaryRef theDict, CFStringRef key);
+
+    @CFunction
+    public static native char CFStringGetCharacterAtIndex(CFStringRef theString, long idx);
 }

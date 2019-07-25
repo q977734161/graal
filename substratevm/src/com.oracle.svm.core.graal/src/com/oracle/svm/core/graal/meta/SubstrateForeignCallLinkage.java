@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,7 +30,7 @@ import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.graal.code.amd64.SubstrateCallingConventionType;
+import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
 
 import jdk.vm.ci.code.Architecture;
@@ -97,7 +99,7 @@ public class SubstrateForeignCallLinkage implements ForeignCallLinkage {
 
     @Override
     public boolean needsDebugInfo() {
-        return true;
+        return descriptor.needsDebugInfo();
     }
 
     @Override

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,11 +36,6 @@ public final class AnnotatedSuperInfo {
     private static final AnnotatedType[] EMPTY_ANNOTATED_TYPE_ARRAY = new AnnotatedType[0];
 
     private static final AnnotatedSuperInfo EMPTY_ANNOTATED_SUPER_INFO = new AnnotatedSuperInfo(null, EMPTY_ANNOTATED_TYPE_ARRAY);
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static AnnotatedSuperInfo forEmpty() {
-        return EMPTY_ANNOTATED_SUPER_INFO;
-    }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static AnnotatedSuperInfo factory(AnnotatedType annotatedSuperType, AnnotatedType[] annotatedInterfaces) {

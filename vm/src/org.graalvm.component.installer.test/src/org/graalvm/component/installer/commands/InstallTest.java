@@ -24,25 +24,34 @@
  */
 package org.graalvm.component.installer.commands;
 
+import java.io.File;
 import org.graalvm.component.installer.CommandTestBase;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import org.graalvm.component.installer.CatalogIterable;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.graalvm.component.installer.remote.CatalogIterable;
 import org.graalvm.component.installer.Commands;
 import org.graalvm.component.installer.CommonConstants;
-import org.graalvm.component.installer.ComponentParam;
+import org.graalvm.component.installer.ComponentIterable;
 import org.graalvm.component.installer.DependencyException;
 import org.graalvm.component.installer.FailedOperationException;
+import org.graalvm.component.installer.SystemUtils;
+import org.graalvm.component.installer.model.CatalogContents;
 import org.graalvm.component.installer.model.ComponentInfo;
 import org.graalvm.component.installer.persist.ProxyResource;
-import org.graalvm.component.installer.persist.RemoteCatalogDownloader;
+import org.graalvm.component.installer.remote.RemoteCatalogDownloader;
 import org.graalvm.component.installer.persist.test.Handler;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import org.junit.Before;
@@ -171,6 +180,7 @@ public class InstallTest extends CommandTestBase {
 
         inst.execute();
 
+        options.put(Commands.OPTION_FAIL_EXISTING, "");
         inst = new InstallCommand();
         inst.init(this, withBundle(InstallCommand.class));
         files.add(dataFile("truffleruby3.jar").toFile());
@@ -180,10 +190,40 @@ public class InstallTest extends CommandTestBase {
         inst.execute();
     }
 
-    Iterable<ComponentParam> componentIterable;
+    @Test
+    public void testSkipExistingComponent() throws IOException {
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        inst.execute();
+
+        File f = new File(folder.getRoot(), "inst");
+        File binRuby = new File(f, "bin/ruby");
+        assertTrue("Ruby must be installed", binRuby.exists());
+
+        Files.walk(f.toPath()).forEach((p) -> {
+            try {
+                if (!p.equals(f.toPath()) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
+                    Files.delete(p);
+                }
+            } catch (IOException ex) {
+                Logger.getLogger(InstallTest.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        });
+
+        assertFalse("Ruby must be deleted", binRuby.exists());
+
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+        files.add(dataFile("truffleruby3.jar").toFile());
+        inst.execute();
+        assertFalse("Component must not be processed", binRuby.exists());
+    }
+
+    ComponentIterable componentIterable;
 
     @Override
-    public Iterable<ComponentParam> existingFiles() throws FailedOperationException {
+    public ComponentIterable existingFiles() throws FailedOperationException {
         if (componentIterable != null) {
             return componentIterable;
         }
@@ -199,13 +239,10 @@ public class InstallTest extends CommandTestBase {
         URL u2 = new URL(u, "graalvm-ruby.zip");
 
         Handler.bind(u.toString(), getClass().getResource("catalog"));
-        componentIterable = new CatalogIterable(this, this,
-                        new RemoteCatalogDownloader(
-                                        this,
-                                        this.getLocalRegistry(),
-                                        u));
         storage.graalInfo.put(CommonConstants.CAP_GRAALVM_VERSION, "0.33-dev");
+        initCatalogIterable(u);
         textParams.add("ruby");
+        options.put(Commands.OPTION_FAIL_EXISTING, "");
         files.clear();
         inst = new InstallCommand();
         inst.init(this, withBundle(InstallCommand.class));
@@ -217,6 +254,43 @@ public class InstallTest extends CommandTestBase {
         }
 
         assertFalse(Handler.isVisited(u2));
+    }
+
+    private void initCatalogIterable(URL u) {
+        RemoteCatalogDownloader rcd = new RemoteCatalogDownloader(
+                        this,
+                        this,
+                        u);
+
+        registry = new CatalogContents(this, rcd.getStorage(), localRegistry);
+        componentIterable = new CatalogIterable(this, this,
+                        getRegistry(), rcd);
+    }
+
+    @Test
+    public void testSkipExistingFromCatalog() throws Exception {
+        ComponentInfo fakeInfo = new ComponentInfo("ruby", "Fake ruby", "1.0");
+        storage.installed.add(fakeInfo);
+
+        URL u = new URL("test://graalvm.io/download/catalog");
+        URL u2 = new URL(u, "graalvm-ruby.zip");
+
+        Handler.bind(u.toString(), getClass().getResource("catalog"));
+        Handler.bind(u2.toString(), getClass().getResource("graalvm-ruby.zip"));
+        storage.graalInfo.put(CommonConstants.CAP_GRAALVM_VERSION, "0.33-dev");
+        initCatalogIterable(u);
+        textParams.add("ruby");
+        files.clear();
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        try {
+            inst.execute();
+        } catch (DependencyException.Conflict ex) {
+            fail("Should not raise an error");
+        }
+
+        assertFalse("Should not touch the remote file", Handler.isVisited(u2));
     }
 
     @Test
@@ -236,7 +310,7 @@ public class InstallTest extends CommandTestBase {
 
     @Test
     public void testFailInstallCleanup() throws IOException {
-        Path offending = targetPath.resolve("bin/ruby");
+        Path offending = targetPath.resolve(SystemUtils.fromCommonString("jre/bin/ruby"));
         Files.createDirectories(offending.getParent());
         Files.createFile(offending);
 
@@ -246,11 +320,141 @@ public class InstallTest extends CommandTestBase {
         try {
             inst.execute();
             fail("Exception expected");
-        } catch (IOException ex) {
+        } catch (IOException | FailedOperationException ex) {
             // OK
         }
         Files.delete(offending);
-        Files.delete(offending.getParent());
+        Files.delete(offending.getParent()); // jre/bin
+        Files.delete(offending.getParent().getParent()); // jre
         assertFalse(Files.list(targetPath).findFirst().isPresent());
     }
+
+    @Test
+    public void testPostinstMessagePrinted() throws Exception {
+        AtomicBoolean printed = new AtomicBoolean();
+        delegateFeedback(new FeedbackAdapter() {
+            @Override
+            public boolean verbatimOut(String aMsg, boolean beVerbose) {
+                if ("Postinst".equals(aMsg)) {
+                    printed.set(true);
+                }
+                return super.verbatimOut(aMsg, beVerbose);
+            }
+        });
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        inst.execute();
+        assertTrue("Postinst message must be printed", printed.get());
+    }
+
+    /**
+     * The exact message contents. Whitespaces are important, incl. newlines.
+     */
+    private static final String GOLDEN_MESSAGE = "\n" +
+                    "IMPORTANT NOTE:\n" +
+                    "---------------\n" +
+                    "The Ruby openssl C extension needs to be recompiled on your system to work with the installed libssl.\n" +
+                    "Make sure headers for libssl are installed, see https://github.com/oracle/truffleruby/blob/master/doc/user/installing-libssl.md for details.\n" +
+                    "Then run the following command:\n" +
+                    "      ${graalvm_home}/jre/languages/ruby/lib/truffle/post_install_hook.sh\n"; // exactly
+                                                                                                   // 6
+                                                                                                   // spaces
+                                                                                                   // at
+                                                                                                   // the
+                                                                                                   // beginning
+
+    @Test
+    public void testPostinstMessageFormat() throws Exception {
+        String[] formatted = new String[1];
+        files.set(0, dataFile("postinst.jar").toFile());
+        delegateFeedback(new FeedbackAdapter() {
+            @Override
+            public boolean verbatimOut(String aMsg, boolean beVerbose) {
+                if (aMsg.contains("Ruby openssl")) { // NOI18N
+                    formatted[0] = aMsg;
+                }
+                return super.verbatimOut(aMsg, beVerbose);
+            }
+        });
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        inst.execute();
+        assertNotNull("Postinst message must be printed", formatted[0]);
+
+        String check = GOLDEN_MESSAGE.replace("${graalvm_home}", getGraalHomePath().toString());
+        assertEquals(check, formatted[0]);
+    }
+
+    /**
+     * Installs an a missing component from the same distribution.
+     * 
+     * @throws Exception
+     */
+    @Test
+    public void testInstallMissingComponent() throws Exception {
+        ComponentInfo fakeInfo = new ComponentInfo("ruby", "Fake ruby", "1.0");
+        storage.installed.add(fakeInfo);
+
+    }
+
+    @Test
+    public void testRefuseNonAdminInstall() throws Exception {
+        options.put(Commands.OPTION_DRY_RUN, "");
+
+        storage.writableUser = "hero"; // NOI18N
+
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        exception.expect(FailedOperationException.class);
+        exception.expectMessage("ADMIN");
+
+        inst.execute();
+    }
+
+    private static final String BLOCKED_CONTENT = "This is a blocked file"; // NOI18N
+    private static final String INSTALL_CONTENT = "#!/usr/bin/env bash"; // NOI18N
+
+    /**
+     * Checks that in the 'replace' scenario, the locked file is first scheduled for delete and then
+     * the new version for copy/moe to the original place.
+     */
+    @Test
+    public void testReplaceExistingComponentWithLockedFiles() throws IOException {
+        options.put(Commands.OPTION_REPLACE_COMPONENTS, "");
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+
+        inst.execute();
+
+        Path blockedFile = targetPath.resolve(SystemUtils.fromCommonString("jre/languages/ruby/bin/rake"));
+        Path copyDir = targetPath.resolve(SystemUtils.fromCommonString("jre/languages/ruby/bin.new"));
+        Path copyFile = copyDir.resolve("rake");
+
+        Files.write(blockedFile, Collections.singletonList(BLOCKED_CONTENT));
+
+        BlockedFileOps blockedOps = new BlockedFileOps();
+        fileOps = blockedOps;
+        fileOps.init(this);
+        fileOps.setRootPath(targetPath);
+
+        blockedOps.blockedPaths.add(blockedFile);
+        Path delayDeletes = folder.newFile("delayDeletes").toPath();
+        Path copiedFiles = folder.newFile("copiedDirs").toPath();
+        blockedOps.setDelayDeletedList(delayDeletes);
+        blockedOps.setCopyContents(copiedFiles);
+
+        inst = new InstallCommand();
+        inst.init(this, withBundle(InstallCommand.class));
+        files.add(dataFile("truffleruby3.jar").toFile());
+
+        inst.execute();
+
+        // check that the original blocked file was not replaced:
+        assertEquals(BLOCKED_CONTENT, Files.readAllLines(blockedFile).get(0));
+        assertEquals(INSTALL_CONTENT, Files.readAllLines(copyFile).get(0));
+    }
+
 }

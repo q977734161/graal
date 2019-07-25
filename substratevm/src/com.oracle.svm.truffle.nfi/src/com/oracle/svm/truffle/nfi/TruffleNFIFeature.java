@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,7 +28,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.truffle.TruffleFeature;
@@ -41,7 +43,7 @@ import com.oracle.truffle.nfi.NFILanguage;
  */
 public final class TruffleNFIFeature implements Feature {
 
-    static class IsEnabled implements BooleanSupplier {
+    public static class IsEnabled implements BooleanSupplier {
         @Override
         public boolean getAsBoolean() {
             return ImageSingletons.contains(TruffleNFIFeature.class);
@@ -55,7 +57,6 @@ public final class TruffleNFIFeature implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        ImageSingletons.add(TruffleNFISupport.class, new TruffleNFISupport());
         access.registerObjectReplacer(new NativeObjectReplacer(access));
     }
 }

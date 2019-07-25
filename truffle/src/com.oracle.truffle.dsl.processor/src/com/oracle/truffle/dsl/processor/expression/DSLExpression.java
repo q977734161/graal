@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor.expression;
 
@@ -28,9 +46,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
 
@@ -41,7 +61,9 @@ import org.antlr.v4.runtime.RecognitionException;
 import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.TokenStream;
 
+import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.generator.DSLExpressionGenerator;
+import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeTree;
 
 public abstract class DSLExpression {
@@ -60,10 +82,128 @@ public abstract class DSLExpression {
         }
     }
 
+    public List<DSLExpression> flatten() {
+        List<DSLExpression> expressions = new ArrayList<>();
+        accept(new DSLExpressionVisitor() {
+            public void visitVariable(Variable binary) {
+                expressions.add(binary);
+            }
+
+            public void visitNegate(Negate negate) {
+                expressions.add(negate);
+            }
+
+            public void visitIntLiteral(IntLiteral binary) {
+                expressions.add(binary);
+            }
+
+            public void visitClassLiteral(ClassLiteral classLiteral) {
+                expressions.add(classLiteral);
+            }
+
+            public void visitCall(Call binary) {
+                expressions.add(binary);
+            }
+
+            public void visitBooleanLiteral(BooleanLiteral binary) {
+                expressions.add(binary);
+            }
+
+            public void visitBinary(Binary binary) {
+                expressions.add(binary);
+            }
+        });
+        return expressions;
+    }
+
+    @Override
+    public abstract boolean equals(Object obj);
+
+    @Override
+    public abstract int hashCode();
+
+    public boolean mayAllocate() {
+        final AtomicBoolean mayAllocate = new AtomicBoolean(false);
+        accept(new DSLExpressionVisitor() {
+
+            public void visitVariable(Variable var) {
+            }
+
+            public void visitClassLiteral(ClassLiteral classLiteral) {
+            }
+
+            public void visitNegate(Negate negate) {
+            }
+
+            public void visitIntLiteral(IntLiteral binary) {
+            }
+
+            public void visitCall(Call binary) {
+                mayAllocate.set(true);
+            }
+
+            public void visitBooleanLiteral(BooleanLiteral binary) {
+            }
+
+            public void visitBinary(Binary binary) {
+            }
+        });
+        return mayAllocate.get();
+    }
+
+    public boolean isNodeReceiverBound() {
+        final AtomicBoolean bindsReceiver = new AtomicBoolean(false);
+        accept(new DSLExpressionVisitor() {
+
+            public void visitVariable(Variable var) {
+                if (var.getReceiver() == null) {
+                    VariableElement resolvedVar = var.getResolvedVariable();
+                    if (resolvedVar != null && !resolvedVar.getModifiers().contains(Modifier.STATIC) &&
+                                    (resolvedVar.getEnclosingElement() == null || resolvedVar.getEnclosingElement().getKind() != ElementKind.METHOD)) {
+                        String name = resolvedVar.getSimpleName().toString();
+                        if (!name.equals("null") && !name.equals("this")) {
+                            bindsReceiver.set(true);
+                        }
+                    }
+                }
+            }
+
+            public void visitClassLiteral(ClassLiteral classLiteral) {
+            }
+
+            public void visitNegate(Negate negate) {
+
+            }
+
+            public void visitIntLiteral(IntLiteral binary) {
+
+            }
+
+            public void visitCall(Call binary) {
+                if (binary.getReceiver() == null) {
+                    ExecutableElement method = binary.getResolvedMethod();
+                    if (method != null && !method.getModifiers().contains(Modifier.STATIC)) {
+                        bindsReceiver.set(true);
+                    }
+                }
+            }
+
+            public void visitBooleanLiteral(BooleanLiteral binary) {
+
+            }
+
+            public void visitBinary(Binary binary) {
+
+            }
+        });
+        return bindsReceiver.get();
+    }
+
     public static DSLExpression parse(String input) {
         ExpressionLexer lexer = new ExpressionLexer(CharStreams.fromString(input));
         TokenStream tokens = new CommonTokenStream(lexer);
         ExpressionParser parser = new ExpressionParser(tokens);
+        parser.setBuildParseTree(false);
         lexer.removeErrorListeners();
         parser.removeErrorListeners();
         lexer.addErrorListener(DSLErrorListener.INSTANCE);
@@ -73,6 +213,21 @@ public abstract class DSLExpression {
         } catch (RecognitionException e) {
             throw new InvalidExpressionException(e.getMessage());
         }
+    }
+
+    public final Set<ExecutableElement> findBoundExecutableElements() {
+        final Set<ExecutableElement> methods = new HashSet<>();
+        this.accept(new AbstractDSLExpressionVisitor() {
+
+            @Override
+            public void visitCall(Call binary) {
+                if (binary.getResolvedMethod() != null) {
+                    methods.add(binary.getResolvedMethod());
+                }
+            }
+
+        });
+        return methods;
     }
 
     public final Set<VariableElement> findBoundVariableElements() {
@@ -273,6 +428,48 @@ public abstract class DSLExpression {
 
     }
 
+    public static final class ClassLiteral extends DSLExpression {
+
+        private final TypeMirror literal;
+
+        public ClassLiteral(TypeMirror literal) {
+            this.literal = literal;
+        }
+
+        public TypeMirror getLiteral() {
+            return literal;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof ClassLiteral)) {
+                return false;
+            }
+            return ElementUtils.typeEquals(literal, ((ClassLiteral) obj).literal);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(literal);
+        }
+
+        @Override
+        public TypeMirror getResolvedType() {
+            return ProcessorContext.getInstance().getType(Class.class);
+        }
+
+        @Override
+        public void accept(DSLExpressionVisitor visitor) {
+            visitor.visitClassLiteral(this);
+        }
+
+        @Override
+        public DSLExpression reduce(DSLExpressionReducer visitor) {
+            return this;
+        }
+
+    }
+
     public static final class Call extends DSLExpression {
 
         private final DSLExpression receiver;
@@ -285,6 +482,11 @@ public abstract class DSLExpression {
             this.receiver = receiver;
             this.name = name;
             this.parameters = parameters;
+            for (DSLExpression parameter : parameters) {
+                if (parameter == null) {
+                    throw new NullPointerException();
+                }
+            }
         }
 
         @Override
@@ -395,14 +597,14 @@ public abstract class DSLExpression {
         public boolean equals(Object obj) {
             if (obj instanceof Variable) {
                 Variable other = (Variable) obj;
-                return Objects.equals(receiver, other.receiver) && name.equals(other.name);
+                return ElementUtils.variableEquals(resolvedVariable, other.resolvedVariable) && Objects.equals(receiver, other.receiver);
             }
             return false;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(receiver, name);
+            return Objects.hash(resolvedVariable, receiver);
         }
 
         public DSLExpression getReceiver() {
@@ -582,7 +784,7 @@ public abstract class DSLExpression {
 
     }
 
-    public abstract class AbstractDSLExpressionVisitor implements DSLExpressionVisitor {
+    public abstract static class AbstractDSLExpressionVisitor implements DSLExpressionVisitor {
         @Override
         public void visitBinary(Binary binary) {
         }
@@ -593,6 +795,9 @@ public abstract class DSLExpression {
 
         @Override
         public void visitIntLiteral(IntLiteral binary) {
+        }
+
+        public void visitClassLiteral(ClassLiteral classLiteral) {
         }
 
         @Override
@@ -610,6 +815,8 @@ public abstract class DSLExpression {
     public interface DSLExpressionVisitor {
 
         void visitBinary(Binary binary);
+
+        void visitClassLiteral(ClassLiteral classLiteral);
 
         void visitNegate(Negate negate);
 

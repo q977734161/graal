@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug.test;
 
@@ -33,6 +49,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
+import java.net.URI;
 import java.util.List;
 
 import org.junit.Assert;
@@ -46,6 +63,7 @@ import com.oracle.truffle.api.debug.SuspendAnchor;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
 import com.oracle.truffle.tck.DebuggerTester;
 import org.graalvm.polyglot.Source;
 
@@ -432,8 +450,9 @@ public class BreakpointTest extends AbstractDebugTest {
             session.suspendNextExecution();
             startEval(Source.newBuilder(InstrumentationTestLanguage.ID, testFile).build());
             for (int i = 0; i < 3; i++) {
+                int finalIndex = i;
                 expectSuspended((SuspendedEvent event) -> {
-                    checkState(event, 4, true, "STATEMENT").prepareContinue();
+                    checkState(event, 4, true, "STATEMENT", "loopIndex0", String.valueOf(finalIndex), "loopResult0", "Null").prepareContinue();
                 });
             }
             Assert.assertEquals(3, breakpoint.getHitCount());
@@ -457,8 +476,9 @@ public class BreakpointTest extends AbstractDebugTest {
             Breakpoint breakpoint3 = session.install(Breakpoint.newBuilder(getSourceImpl(source)).lineIs(4).build());
             startEval(source);
             for (int i = 0; i < 3; i++) {
+                int finalIndex = i;
                 expectSuspended((SuspendedEvent event) -> {
-                    checkState(event, 4, true, "STATEMENT").prepareContinue();
+                    checkState(event, 4, true, "STATEMENT", "loopIndex0", String.valueOf(finalIndex), "loopResult0", "Null").prepareContinue();
                 });
                 if (i == 0) {
                     breakpoint3.dispose();
@@ -543,7 +563,7 @@ public class BreakpointTest extends AbstractDebugTest {
             startEval(source);
 
             expectSuspended((SuspendedEvent event) -> {
-                checkState(event, 3, true, "STATEMENT");
+                checkState(event, 3, true, "STATEMENT", "loopIndex0", "0", "loopResult0", "Null");
                 Assert.assertEquals(1, event.getBreakpoints().size());
                 Assert.assertSame(breakpoint, event.getBreakpoints().iterator().next());
                 Assert.assertFalse(breakpoint.isEnabled());
@@ -772,13 +792,6 @@ public class BreakpointTest extends AbstractDebugTest {
     @SuppressWarnings("try") // auto-closeable resource session is never referenced in body of
                              // corresponding try statement
     public void testGlobalBreakpoints() throws Throwable {
-        try {
-            Class.forName("java.beans.PropertyChangeListener");
-        } catch (ClassNotFoundException ex) {
-            // skip the test if running only with java.base JDK9 module
-            return;
-        }
-
         final Source source = testSource("ROOT(\n" +
                         "  STATEMENT,\n" +
                         "  STATEMENT\n" +
@@ -875,13 +888,6 @@ public class BreakpointTest extends AbstractDebugTest {
 
     @Test
     public void testGlobalBreakpointsInMultipleSessions() throws Throwable {
-        try {
-            Class.forName("java.beans.PropertyChangeListener");
-        } catch (ClassNotFoundException ex) {
-            // skip the test if running only with java.base JDK9 module
-            return;
-        }
-
         final Source source = testSource("ROOT(\n" +
                         "  STATEMENT,\n" +
                         "  STATEMENT,\n" +
@@ -1087,10 +1093,10 @@ public class BreakpointTest extends AbstractDebugTest {
         tester.close();
         // Different materialization changes the order of nodes that are processed during search for
         // the nearest suspendable location of a breakpoint.
-        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "1"));
+        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().allowExperimentalOptions(true).option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "1"));
         tester.assertColumnBreakpointsResolution(source, "B", "R", InstrumentablePositionsTestLanguage.ID);
         tester.close();
-        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "2"));
+        tester = new DebuggerTester(org.graalvm.polyglot.Context.newBuilder().allowExperimentalOptions(true).option(InstrumentablePositionsTestLanguage.ID + ".PreMaterialize", "2"));
         tester.assertColumnBreakpointsResolution(source, "B", "R", InstrumentablePositionsTestLanguage.ID);
     }
 
@@ -1137,5 +1143,35 @@ public class BreakpointTest extends AbstractDebugTest {
             });
             expectDone();
         }
+    }
+
+    @Test
+    public void testRelativeSourceBreak() throws Exception {
+        String sourceContent = "relative source\nVarA";
+        String relativePath = "relative/test.file";
+        TestDebugNoContentLanguage language = new TestDebugNoContentLanguage(relativePath, true, true);
+        ProxyLanguage.setDelegate(language);
+        try (DebuggerSession session = tester.startSession()) {
+            Breakpoint breakpoint = Breakpoint.newBuilder(new URI(null, null, relativePath, null)).lineIs(1).build();
+            session.install(breakpoint);
+            Source source = Source.create(ProxyLanguage.ID, sourceContent);
+            tester.startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                assertSame(breakpoint, event.getBreakpoints().get(0));
+                SourceSection sourceSection = event.getSourceSection();
+                Assert.assertTrue(sourceSection.isAvailable());
+                Assert.assertTrue(sourceSection.hasLines());
+                Assert.assertTrue(sourceSection.hasColumns());
+                Assert.assertFalse(sourceSection.hasCharIndex());
+                Assert.assertFalse(sourceSection.getSource().hasCharacters());
+
+                URI uri = sourceSection.getSource().getURI();
+                Assert.assertFalse(uri.toString(), uri.isAbsolute());
+                Assert.assertEquals(relativePath, uri.getPath());
+
+                event.prepareContinue();
+            });
+        }
+        expectDone();
     }
 }

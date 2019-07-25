@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,212 +26,234 @@ package com.oracle.truffle.tools.chromeinspector.types;
 
 import java.io.PrintWriter;
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
+import com.oracle.truffle.tools.utils.json.JSONArray;
+import com.oracle.truffle.tools.utils.json.JSONObject;
 
+import com.oracle.truffle.api.debug.DebugException;
 import com.oracle.truffle.api.debug.DebugScope;
 import com.oracle.truffle.api.debug.DebugValue;
+import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 import com.oracle.truffle.api.nodes.LanguageInfo;
+import com.oracle.truffle.tools.chromeinspector.InspectorExecutionContext;
+import com.oracle.truffle.tools.chromeinspector.LanguageChecks;
+import com.oracle.truffle.tools.chromeinspector.objects.NullObject;
+import com.oracle.truffle.tools.chromeinspector.types.TypeInfo.TYPE;
 
 public final class RemoteObject {
 
-    private enum TYPE {
-
-        OBJECT("object"),
-        FUNCTION("function"),
-        UNDEFINED("undefined"),
-        STRING("string"),
-        NUMBER("number"),
-        BOOLEAN("boolean"),
-        SYMBOL("symbol");
-
-        private final String id;
-
-        TYPE(String id) {
-            this.id = id;
-        }
-
-        String getId() {
-            return id;
-        }
-    }
+    private static final Double NEGATIVE_DOUBLE_0 = Double.valueOf("-0");
+    private static final Float NEGATIVE_FLOAT_0 = Float.valueOf("-0");
 
     private static final AtomicLong LAST_ID = new AtomicLong(0);
 
     private final DebugValue valueValue;
     private final DebugScope valueScope;
-    private final String type;
-    private final String subtype;
-    private final String className;
-    private final String value;
+    private final boolean generatePreview;
     private final String objectId;
-    private final String description;
-    private final JSONObject jsonObject;
+    private final InspectorExecutionContext context;
+    private final IndexRange indexRange;
+    private TypeInfo typeInfo;
+    private Object value;
+    private boolean replicableValue;
+    private String unserializableValue;
+    private String description;
+    private JSONObject preview;
+    private JSONObject customPreview;
+    private JSONObject jsonObject;
 
-    public RemoteObject(DebugValue originalDebugValue, PrintWriter err) {
-        DebugValue debugValue = originalDebugValue;
+    public RemoteObject(DebugValue debugValue, boolean generatePreview, InspectorExecutionContext context) {
+        this(debugValue, false, generatePreview, context);
+    }
+
+    public RemoteObject(DebugValue debugValue, boolean readEagerly, boolean generatePreview, InspectorExecutionContext context) {
+        this(debugValue, readEagerly, generatePreview, context, null);
+    }
+
+    public RemoteObject(DebugValue debugValue, boolean readEagerly, boolean generatePreview, InspectorExecutionContext context, IndexRange indexRange) {
         this.valueValue = debugValue;
         this.valueScope = null;
+        this.generatePreview = generatePreview;
+        this.context = context;
+        this.indexRange = indexRange;
+        if (!debugValue.hasReadSideEffects() || readEagerly) {
+            boolean isObject = initFromValue();
+            objectId = (isObject) ? Long.toString(LAST_ID.incrementAndGet()) : null;
+            jsonObject = createJSON();
+        } else {
+            objectId = Long.toString(LAST_ID.incrementAndGet());
+        }
+    }
+
+    private boolean initFromValue() {
+        DebugValue debugValue = valueValue;
         LanguageInfo originalLanguage = debugValue.getOriginalLanguage();
         // Setup the object with a language-specific value
         if (originalLanguage != null) {
             debugValue = debugValue.asInLanguage(originalLanguage);
         }
-        DebugValue metaObject = getMetaObject(debugValue, originalLanguage, err);
-        boolean isObject = isObject(debugValue, err);
-        String vtype = null;
-        String vsubtype = null;
-        String vclassName = null;
-        String vdescription = null;
-        if (metaObject != null) {
-            try {
-                Collection<DebugValue> properties = metaObject.getProperties();
-                if (properties != null) {
-                    for (DebugValue prop : properties) {
-                        String name = prop.getName();
-                        if ("type".equals(name)) {
-                            vtype = prop.as(String.class);
-                        } else if ("subtype".equals(name)) {
-                            vsubtype = prop.as(String.class);
-                        } else if ("className".equals(name)) {
-                            vclassName = prop.as(String.class);
-                        } else if ("description".equals(name)) {
-                            vdescription = prop.as(String.class);
+        PrintWriter err = context != null ? context.getErr() : null;
+        this.typeInfo = TypeInfo.fromValue(debugValue, originalLanguage, err);
+        boolean readable = debugValue.isReadable();
+        String toString;
+        Object rawValue = null;
+        String unserializable = null;
+        boolean replicableRawValue = true;
+        try {
+            if (readable) {
+                toString = debugValue.as(String.class);
+            } else {
+                toString = InspectorExecutionContext.VALUE_NOT_READABLE;
+                replicableRawValue = false;
+            }
+            if (readable && !typeInfo.isObject) {
+                if ("null".equals(typeInfo.subtype) && TYPE.OBJECT.getId().equals(typeInfo.type)) {
+                    replicableRawValue = false;
+                } else if (TYPE.UNDEFINED.getId().equals(typeInfo.type)) {
+                    replicableRawValue = false;
+                } else {
+                    rawValue = debugValue.as(Boolean.class);
+                    if (rawValue == null) {
+                        rawValue = debugValue.as(Number.class);
+                        if (rawValue != null && !isFinite((Number) rawValue)) {
+                            unserializable = rawValue.toString();
+                            rawValue = null;
+                        } else if (rawValue == null) {
+                            replicableRawValue = false;
+                            rawValue = toString;
                         }
                     }
                 }
-            } catch (Exception ex) {
-                if (err != null) {
-                    err.println("getProperties of meta object of (" + debugValue.getName() + ") has caused: " + ex);
+            }
+        } catch (DebugException ex) {
+            if (err != null && ex.isInternalError()) {
+                err.println(debugValue.getName() + " as(class) has caused: " + ex);
+                ex.printStackTrace(err);
+            }
+            throw ex;
+        }
+        this.value = rawValue;
+        this.replicableValue = replicableRawValue;
+        this.unserializableValue = unserializable;
+        if (typeInfo.descriptionType != null && !typeInfo.descriptionType.equals(toString)) {
+            this.description = typeInfo.descriptionType + ((toString != null && !toString.isEmpty()) ? " " + toString : "");
+        } else {
+            this.description = toString;
+        }
+        if (typeInfo.isObject && typeInfo.isJS && generatePreview) {
+            try {
+                this.preview = ObjectPreview.create(debugValue, typeInfo.type, typeInfo.subtype, originalLanguage, err);
+            } catch (DebugException ex) {
+                if (err != null && ex.isInternalError()) {
+                    err.println(debugValue.getName() + " preview has caused: " + ex);
                     ex.printStackTrace(err);
                 }
             }
         }
-        String descriptionType = null;
-        if (vtype != null && (vsubtype != null || vclassName != null)) {
-            this.type = vtype;
-            this.subtype = vsubtype;
-            this.className = vclassName;
-        } else {
-            if (debugValue.isArray()) {
-                this.subtype = "array";
-            } else {
-                this.subtype = null;
-            }
-            if (isObject) {
-                this.type = TYPE.OBJECT.getId();
-                this.className = (metaObject != null) ? metaObject.as(String.class) : null;
-            } else {
-                String metaType = (metaObject != null) ? metaObject.as(String.class) : null;
-                this.type = getType(debugValue, metaType);
-                this.className = null;
-                if (TYPE.OBJECT.getId().equals(this.type)) {
-                    descriptionType = metaType;
+        if (readable && context != null && context.isCustomObjectFormatterEnabled()) {
+            if (originalLanguage != null) {
+                try {
+                    this.customPreview = CustomPreview.create(debugValue, originalLanguage, context);
+                } catch (DebugException ex) {
+                    if (err != null) {
+                        if (ex.isInternalError()) {
+                            err.println(debugValue.getName() + " custom preview has caused: " + ex);
+                            ex.printStackTrace(err);
+                        } else {
+                            err.println("Custom Formatter Failed: " + ex.getLocalizedMessage());
+                        }
+                    }
                 }
             }
         }
-        if (descriptionType == null) {
-            descriptionType = this.className;
-        }
-        String toString;
-        try {
-            toString = debugValue.as(String.class);
-        } catch (Exception ex) {
-            if (err != null) {
-                err.println(debugValue.getName() + " as(String.class) has caused: " + ex);
-                ex.printStackTrace(err);
-            }
-            toString = null;
-        }
-        this.value = (!isObject) ? toString : null;
-        if ((vdescription == null || vdescription.equals(toString)) && descriptionType != null) {
-            this.description = descriptionType + ((toString != null && !toString.isEmpty()) ? " " + toString : "");
-        } else if (vdescription != null && !vdescription.isEmpty()) {
-            this.description = vdescription;
-        } else {
-            this.description = toString;
-        }
-        this.objectId = (isObject) ? Long.toString(LAST_ID.incrementAndGet()) : null;
-        this.jsonObject = createJSON();
+        return typeInfo.isObject;
     }
 
     public RemoteObject(DebugScope scope) {
         this.valueValue = null;
         this.valueScope = scope;
-        this.type = "object";
-        this.subtype = null;
-        this.className = null;
+        this.generatePreview = false;
+        this.context = null;
+        this.indexRange = null;
+        this.typeInfo = new TypeInfo(TYPE.OBJECT.getId(), null, null, null, true, false);
         this.value = null;
+        this.replicableValue = false;
+        this.unserializableValue = null;
         this.objectId = Long.toString(LAST_ID.incrementAndGet());
         this.description = scope.getName();
         this.jsonObject = createJSON();
     }
 
+    private RemoteObject(String type, String subtype, String className, String description) {
+        this.valueValue = null;
+        this.valueScope = null;
+        this.generatePreview = false;
+        this.context = null;
+        this.indexRange = null;
+        this.typeInfo = new TypeInfo(type, subtype, className, null, true, false);
+        this.value = null;
+        this.replicableValue = false;
+        this.unserializableValue = null;
+        this.objectId = Long.toString(LAST_ID.incrementAndGet());
+        this.description = description;
+        this.jsonObject = createJSON();
+    }
+
+    public static RemoteObject createSimpleObject(String type, String className, String description) {
+        return new RemoteObject(type, null, className, description);
+    }
+
+    public static RemoteObject createNullObject(TruffleInstrument.Env env, LanguageInfo language) {
+        String nullStr = env.toString(language, NullObject.INSTANCE);
+        return new RemoteObject("object", "null", null, nullStr);
+    }
+
     private JSONObject createJSON() {
         JSONObject json = new JSONObject();
-        json.put("type", type);
-        json.putOpt("subtype", subtype);
-        json.putOpt("className", className);
+        json.put("type", typeInfo.type);
+        json.putOpt("subtype", typeInfo.subtype);
+        json.putOpt("className", typeInfo.className);
+        json.putOpt("unserializableValue", unserializableValue);
         json.putOpt("value", value);
         json.putOpt("description", description);
         json.putOpt("objectId", objectId);
+        json.putOpt("preview", preview);
+        json.putOpt("customPreview", customPreview);
         return json;
     }
 
-    private static DebugValue getMetaObject(DebugValue debugValue, LanguageInfo originalLanguage, PrintWriter err) {
+    static DebugValue getMetaObject(DebugValue debugValue, LanguageInfo originalLanguage, PrintWriter err) {
         DebugValue metaObject;
         try {
             metaObject = debugValue.getMetaObject();
             if (originalLanguage != null && metaObject != null) {
                 metaObject = metaObject.asInLanguage(originalLanguage);
             }
-        } catch (Exception ex) {
-            if (err != null) {
+        } catch (DebugException ex) {
+            if (err != null && ex.isInternalError()) {
                 err.println("getMetaObject(" + debugValue.getName() + ") has caused: " + ex);
                 ex.printStackTrace(err);
             }
-            metaObject = null;
+            throw ex;
         }
         return metaObject;
     }
 
-    private static boolean isObject(DebugValue debugValue, PrintWriter err) {
-        boolean isObject;
+    static String toString(DebugValue value, PrintWriter err) {
+        if (!value.isReadable()) {
+            return InspectorExecutionContext.VALUE_NOT_READABLE;
+        }
         try {
-            isObject = debugValue.getProperties() != null;
-        } catch (Exception ex) {
-            if (err != null) {
-                err.println("getProperties(" + debugValue.getName() + ") has caused: " + ex);
+            return value.as(String.class);
+        } catch (DebugException ex) {
+            if (err != null && ex.isInternalError()) {
+                err.println(value.getName() + " as(String.class) has caused: " + ex);
                 ex.printStackTrace(err);
             }
-            isObject = false;
+            throw ex;
         }
-        return isObject;
-    }
-
-    /**
-     * The type must be one of {@link TYPE}.
-     */
-    private static String getType(DebugValue value, String metaObject) {
-        if (metaObject == null) {
-            return TYPE.OBJECT.getId();
-        }
-        for (TYPE type : TYPE.values()) {
-            if (metaObject.equalsIgnoreCase(type.getId())) {
-                return type.getId();
-            }
-        }
-        Number number = value.as(Number.class);
-        if (number != null) {
-            return TYPE.NUMBER.getId();
-        }
-        Boolean bool = value.as(Boolean.class);
-        if (bool != null) {
-            return TYPE.BOOLEAN.getId();
-        }
-        return TYPE.OBJECT.getId();
     }
 
     /**
@@ -241,9 +263,10 @@ public final class RemoteObject {
     public static JSONObject createJSONResultValue(DebugValue debugValue, PrintWriter err) {
         JSONObject json = new JSONObject();
         DebugValue metaObject = getMetaObject(debugValue, null, err);
-        boolean isObject = isObject(debugValue, err);
+        boolean isObject = TypeInfo.isObject(debugValue, err);
+        boolean isJS = LanguageChecks.isJS(debugValue.getOriginalLanguage());
         String vtype = null;
-        if (metaObject != null) {
+        if (metaObject != null & isJS) {
             try {
                 Collection<DebugValue> properties = metaObject.getProperties();
                 if (properties != null) {
@@ -254,48 +277,72 @@ public final class RemoteObject {
                         }
                     }
                 }
-            } catch (Exception ex) {
-                if (err != null) {
+            } catch (DebugException ex) {
+                if (err != null && ex.isInternalError()) {
                     err.println("getProperties of meta object of (" + debugValue.getName() + ") has caused: " + ex);
                     ex.printStackTrace(err);
                 }
+                throw ex;
             }
         }
         if (vtype == null) {
             if (isObject) {
                 vtype = "object";
             } else {
-                vtype = (metaObject != null) ? metaObject.as(String.class) : "object";
+                vtype = (metaObject != null) ? toString(metaObject, err) : "object";
             }
         }
         json.put("type", vtype);
-        json.put("value", createJSONValue(debugValue, err));
-        return json;
-    }
-
-    public static Object createJSONValue(DebugValue debugValue, PrintWriter err) {
-        Collection<DebugValue> properties = null;
+        String[] unserializablePtr = new String[1];
         try {
-            properties = debugValue.getProperties();
-        } catch (Exception ex) {
-            if (err != null) {
+            json.putOpt("value", createJSONValue(debugValue, unserializablePtr, err));
+        } catch (DebugException ex) {
+            if (err != null && ex.isInternalError()) {
                 err.println("getProperties(" + debugValue.getName() + ") has caused: " + ex);
                 ex.printStackTrace(err);
             }
+            throw ex;
+        }
+        json.putOpt("unserializableValue", unserializablePtr[0]);
+        return json;
+    }
+
+    private static Object createJSONValue(DebugValue debugValue, String[] unserializablePtr, PrintWriter err) {
+        if (!debugValue.isReadable()) {
+            return InspectorExecutionContext.VALUE_NOT_READABLE;
         }
         if (debugValue.isArray()) {
-            JSONArray array = new JSONArray();
-            for (DebugValue element : debugValue.getArray()) {
-                array.put(createJSONValue(element, err));
+            List<DebugValue> valueArray = debugValue.getArray();
+            if (valueArray != null) {
+                JSONArray array = new JSONArray();
+                for (DebugValue element : valueArray) {
+                    array.put(createJSONValue(element, null, err));
+                }
+                return array;
             }
-            return array;
-        } else if (properties != null) {
+        }
+        Collection<DebugValue> properties = debugValue.getProperties();
+        if (properties != null) {
             JSONObject props = new JSONObject();
             for (DebugValue property : properties) {
-                props.put(property.getName(), createJSONValue(property, err));
+                props.put(property.getName(), createJSONValue(property, null, err));
             }
             return props;
         } else {
+            if (unserializablePtr != null) {
+                Boolean bool = debugValue.as(Boolean.class);
+                if (bool != null) {
+                    return bool;
+                }
+                Number num = debugValue.as(Number.class);
+                if (num != null) {
+                    if (!isFinite(num)) {
+                        unserializablePtr[0] = num.toString();
+                        return null;
+                    }
+                    return num;
+                }
+            }
             return debugValue.as(String.class);
         }
     }
@@ -305,7 +352,19 @@ public final class RemoteObject {
     }
 
     public JSONObject toJSON() {
+        if (jsonObject == null) {
+            initFromValue();
+            jsonObject = createJSON();
+        }
         return jsonObject;
+    }
+
+    /**
+     * Test whether the JSON value can be parsed back to the equal DebugValue (by
+     * {@link CallArgument}).
+     */
+    public boolean isReplicable() {
+        return replicableValue;
     }
 
     /**
@@ -316,10 +375,32 @@ public final class RemoteObject {
     }
 
     /**
+     * Get the raw (primitive, String, or null) value.
+     */
+    public Object getRawValue() {
+        return value;
+    }
+
+    /**
      * Get the frame, or <code>null</code> when there is a {@link #getDebugValue() value}.
      */
     public DebugScope getScope() {
         return valueScope;
+    }
+
+    public IndexRange getIndexRange() {
+        return indexRange;
+    }
+
+    private static boolean isFinite(Number n) {
+        if (n instanceof Double) {
+            Double d = (Double) n;
+            return !d.isInfinite() && !d.isNaN() && !d.equals(NEGATIVE_DOUBLE_0);
+        } else if (n instanceof Float) {
+            Float f = (Float) n;
+            return !f.isInfinite() && !f.isNaN() && !f.equals(NEGATIVE_FLOAT_0);
+        }
+        return true;
     }
 
     /**
@@ -327,5 +408,29 @@ public final class RemoteObject {
      */
     public static void resetIDs() {
         LAST_ID.set(0);
+    }
+
+    public static final class IndexRange {
+        private int start;
+        private int end;
+        private boolean named;
+
+        public IndexRange(int start, int end, boolean named) {
+            this.start = start;
+            this.end = end;
+            this.named = named;
+        }
+
+        public boolean isNamed() {
+            return named;
+        }
+
+        public int start() {
+            return start;
+        }
+
+        public int end() {
+            return end;
+        }
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,20 +24,24 @@
  */
 package com.oracle.svm.core;
 
+//Checkstyle: stop
+
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.options.OptionType;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.IsolateThread;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.annotate.NeverInline;
+import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.HostedOptionKey;
@@ -43,11 +49,10 @@ import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
-import org.graalvm.compiler.api.replacements.Fold;
 
-//Checkstyle: stop
 import sun.misc.Signal;
 import sun.misc.SignalHandler;
+
 //Checkstyle: resume
 
 @AutomaticFeature
@@ -63,7 +68,9 @@ public class VMInspection implements Feature {
         RuntimeSupport.getRuntimeSupport().addStartupHook(() -> {
             DumpAllStacks.install();
             DumpHeapReport.install();
-            DumpRuntimeCompilation.install();
+            if (DeoptimizationSupport.enabled()) {
+                DumpRuntimeCompilation.install();
+            }
         });
     }
 
@@ -88,7 +95,7 @@ class DumpAllStacks implements SignalHandler {
         VMOperation.enqueueBlockingSafepoint("DumpAllStacks", () -> {
             Log log = Log.log();
             for (IsolateThread vmThread = VMThreads.firstThread(); VMThreads.isNonNullThread(vmThread); vmThread = VMThreads.nextThread(vmThread)) {
-                if (vmThread == CEntryPointContext.getCurrentIsolateThread()) {
+                if (vmThread == CurrentIsolate.getCurrentThread()) {
                     /* Skip the signal handler stack */
                     continue;
                 }
@@ -117,6 +124,7 @@ class DumpHeapReport implements SignalHandler {
         Signal.handle(new Signal("USR1"), new DumpHeapReport());
     }
 
+    @SuppressWarnings("deprecation")
     @NeverInline("Ensure ClassCastException gets caught")
     private static void performHeapDump(FileOutputStream fileOutputStream) throws Exception {
         Object[] args = new Object[]{"HeapDump.dumpHeap(FileOutputStream, Boolean)Boolean", fileOutputStream, Boolean.TRUE};

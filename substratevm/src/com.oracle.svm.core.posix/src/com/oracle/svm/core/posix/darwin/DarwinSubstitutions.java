@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,12 +28,11 @@ import static com.oracle.svm.core.posix.headers.Time.gettimeofday;
 import static com.oracle.svm.core.posix.headers.darwin.DarwinTime.mach_absolute_time;
 import static com.oracle.svm.core.posix.headers.darwin.DarwinTime.mach_timebase_info;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
@@ -42,7 +43,7 @@ import com.oracle.svm.core.posix.headers.Time.timeval;
 import com.oracle.svm.core.posix.headers.Time.timezone;
 import com.oracle.svm.core.posix.headers.darwin.DarwinTime.MachTimebaseInfo;
 
-@Platforms(Platform.DARWIN.class)
+@Platforms(InternalPlatform.DARWIN_AND_JNI.class)
 @TargetClass(java.lang.System.class)
 final class Target_java_lang_System {
 
@@ -56,7 +57,7 @@ final class Target_java_lang_System {
         }
 
         if (!utilJavaLangSystem.timeBaseValid) {
-            MachTimebaseInfo timeBaseInfo = StackValue.get(SizeOf.get(MachTimebaseInfo.class));
+            MachTimebaseInfo timeBaseInfo = StackValue.get(MachTimebaseInfo.class);
             if (mach_timebase_info(timeBaseInfo) == 0) {
                 if (timeBaseInfo.getdenom() == 1 && timeBaseInfo.getnumer() == 1) {
                     utilJavaLangSystem.fastTime = true;
@@ -72,7 +73,7 @@ final class Target_java_lang_System {
         }
 
         /* High precision time is not available, fall back to low precision. */
-        timeval timeval = StackValue.get(SizeOf.get(timeval.class));
+        timeval timeval = StackValue.get(timeval.class);
         timezone timezone = WordFactory.nullPointer();
         gettimeofday(timeval, timezone);
         return timeval.tv_sec() * 1_000_000_000L + timeval.tv_usec() * 1_000L;
@@ -85,7 +86,7 @@ final class Target_java_lang_System {
 }
 
 /** Additional static-like fields for {@link Target_java_lang_System}. */
-@Platforms(Platform.DARWIN.class)
+@Platforms(InternalPlatform.DARWIN_AND_JNI.class)
 final class Util_java_lang_System {
     boolean timeBaseValid = false;
     boolean fastTime = false;
@@ -96,7 +97,7 @@ final class Util_java_lang_System {
     }
 }
 
-@Platforms(Platform.DARWIN.class)
+@Platforms(InternalPlatform.DARWIN_AND_JNI.class)
 @AutomaticFeature
 class DarwinSubsitutionsFeature implements Feature {
 

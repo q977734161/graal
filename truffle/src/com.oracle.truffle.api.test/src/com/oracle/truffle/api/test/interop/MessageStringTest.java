@@ -1,24 +1,42 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.interop;
 
@@ -33,26 +51,25 @@ import java.util.Locale;
 
 import org.junit.Test;
 
-import com.oracle.truffle.api.interop.Message;
-
+@SuppressWarnings("deprecation")
 public class MessageStringTest {
 
     @Test
     public void testFields() throws Exception {
-        for (Field f : Message.class.getFields()) {
-            if (f.getType() != Message.class) {
+        for (Field f : com.oracle.truffle.api.interop.Message.class.getFields()) {
+            if (f.getType() != com.oracle.truffle.api.interop.Message.class) {
                 continue;
             }
             if ((f.getModifiers() & Modifier.STATIC) == 0) {
                 continue;
             }
-            Message msg = (Message) f.get(null);
+            com.oracle.truffle.api.interop.Message msg = (com.oracle.truffle.api.interop.Message) f.get(null);
 
-            String persistent = Message.toString(msg);
+            String persistent = com.oracle.truffle.api.interop.Message.toString(msg);
             assertNotNull("Found name for " + f, persistent);
             assertEquals("It is in upper case", persistent, persistent.toUpperCase(Locale.ENGLISH));
 
-            Message newMsg = Message.valueOf(persistent);
+            com.oracle.truffle.api.interop.Message newMsg = com.oracle.truffle.api.interop.Message.valueOf(persistent);
 
             assertSame("Same for " + f, msg, newMsg);
 
@@ -62,8 +79,8 @@ public class MessageStringTest {
 
     @Test
     public void testFactoryMethods() throws Exception {
-        for (Method m : Message.class.getMethods()) {
-            if (m.getReturnType() != Message.class) {
+        for (Method m : com.oracle.truffle.api.interop.Message.class.getMethods()) {
+            if (m.getReturnType() != com.oracle.truffle.api.interop.Message.class) {
                 continue;
             }
             if (!m.getName().startsWith("create")) {
@@ -72,13 +89,13 @@ public class MessageStringTest {
             if ((m.getModifiers() & Modifier.STATIC) == 0) {
                 continue;
             }
-            Message msg = (Message) m.invoke(null, 0);
+            com.oracle.truffle.api.interop.Message msg = (com.oracle.truffle.api.interop.Message) m.invoke(null, 0);
 
-            String persistent = Message.toString(msg);
+            String persistent = com.oracle.truffle.api.interop.Message.toString(msg);
             assertNotNull("Found name for " + m, persistent);
             assertEquals("It is in upper case", persistent, persistent.toUpperCase(Locale.ENGLISH));
 
-            Message newMsg = Message.valueOf(persistent);
+            com.oracle.truffle.api.interop.Message newMsg = com.oracle.truffle.api.interop.Message.valueOf(persistent);
 
             assertEquals("Same for " + m, msg, newMsg);
 
@@ -88,14 +105,14 @@ public class MessageStringTest {
     }
 
     @Test
-    public void specialMessagePersitance() {
+    public void specialPersistance() {
         SpecialMsg msg = new SpecialMsg();
-        String persistent = Message.toString(msg);
-        Message newMsg = Message.valueOf(persistent);
-        assertEquals("Message reconstructed", msg, newMsg);
+        String persistent = com.oracle.truffle.api.interop.Message.toString(msg);
+        com.oracle.truffle.api.interop.Message newMsg = com.oracle.truffle.api.interop.Message.valueOf(persistent);
+        assertEquals("com.oracle.truffle.api.interop.Message reconstructed", msg, newMsg);
     }
 
-    public static final class SpecialMsg extends Message {
+    public static final class SpecialMsg extends com.oracle.truffle.api.interop.Message {
 
         @Override
         public boolean equals(Object message) {

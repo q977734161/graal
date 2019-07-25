@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,6 +27,7 @@ package com.oracle.svm.core.snippets;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 
+import com.oracle.svm.core.annotate.NeverInline;
 import com.oracle.svm.core.hub.DynamicHub;
 
 /**
@@ -60,12 +63,6 @@ public class KnownIntrinsics {
     public static native Object formatArray(Pointer memory, Class<?> hub, int length, boolean rememberedSet, boolean unaligned);
 
     /**
-     * Casts the result to a new static type without any type checking. The caller is responsible
-     * for type safety.
-     */
-    public static native <T> T unsafeCast(Object obj, Class<T> toType);
-
-    /**
      * Narrow down the range of values to exclude 0 as the possible pointer value.
      *
      * @param pointer that we are narrowing to non-null
@@ -79,23 +76,18 @@ public class KnownIntrinsics {
     public static native Pointer readStackPointer();
 
     /**
-     * Writes the stack pointer. Note that this is very dangerous. You have to know what you are
-     * doing.
-     */
-    public static native void writeStackPointer(Pointer value);
-
-    /**
-     * Returns the value of the native instruction pointer.
-     */
-    public static native CodePointer readInstructionPointer();
-
-    /**
      * Returns the value of the native stack pointer for the physical caller frame.
+     *
+     * The caller of this method must be annotated with {@link NeverInline} to ensure that the
+     * physical caller frame is deterministic.
      */
     public static native Pointer readCallerStackPointer();
 
     /**
      * Returns the value of the native instruction pointer for the physical caller frame.
+     *
+     * The caller of this method must be annotated with {@link NeverInline} to ensure that the
+     * physical caller frame is deterministic.
      */
     public static native CodePointer readReturnAddress();
 

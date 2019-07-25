@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -53,6 +55,17 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
     }
 
     @Override
+    public boolean allowRuntimeCompilation() {
+        /*
+         * The safe default for all methods with manually generated graphs is that such methods are
+         * not available for runtime compilation. Note that a manually generated graph must be able
+         * to provide the proper deoptimization entry points and deoptimization frame states. If a
+         * subclass provides that, it can override this method and return true.
+         */
+        return false;
+    }
+
+    @Override
     public String getName() {
         return original.getName();
     }
@@ -79,7 +92,7 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
 
     @Override
     public int getMaxLocals() {
-        return getSignature().getParameterCount(true) + 2;
+        return getSignature().getParameterCount(!isStatic()) * 2;
     }
 
     @Override
@@ -169,6 +182,11 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
         return original.getAnnotation(annotationClass);
+    }
+
+    @Override
+    public Parameter[] getParameters() {
+        return original.getParameters();
     }
 
     @Override

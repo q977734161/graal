@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -49,9 +51,7 @@ import org.graalvm.compiler.code.DataSection;
 import org.graalvm.compiler.core.GraalCompiler;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.CompilationIdentifier.Verbosity;
-import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
-import org.graalvm.compiler.core.target.Backend;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.DebugContext.Description;
 import org.graalvm.compiler.debug.GraalError;
@@ -66,10 +66,12 @@ import org.graalvm.compiler.lir.asm.DataBuilder;
 import org.graalvm.compiler.lir.asm.FrameContext;
 import org.graalvm.compiler.lir.framemap.FrameMap;
 import org.graalvm.compiler.lir.phases.LIRSuites;
+import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.FrameState;
+import org.graalvm.compiler.nodes.IndirectCallTargetNode;
 import org.graalvm.compiler.nodes.Invoke;
 import org.graalvm.compiler.nodes.InvokeNode;
 import org.graalvm.compiler.nodes.ParameterNode;
@@ -93,7 +95,6 @@ import org.graalvm.compiler.phases.common.inlining.InliningUtil;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.phases.tiers.LowTierContext;
 import org.graalvm.compiler.phases.tiers.MidTierContext;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.phases.util.GraphOrder;
 import org.graalvm.compiler.phases.util.Providers;
@@ -119,13 +120,14 @@ import com.oracle.svm.core.code.FrameInfoEncoder;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
 import com.oracle.svm.core.deopt.DeoptTester;
 import com.oracle.svm.core.graal.GraalConfiguration;
+import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.nodes.DeoptEntryNode;
 import com.oracle.svm.core.graal.nodes.DeoptTestNode;
 import com.oracle.svm.core.graal.phases.DeadStoreRemovalPhase;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
-import com.oracle.svm.core.option.HostedOptionValues;
+import com.oracle.svm.core.heap.RestrictHeapAccessCallees;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureHandler;
@@ -141,6 +143,7 @@ import com.oracle.svm.hosted.substitute.DeletedMethod;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.CodeCacheProvider;
 import jdk.vm.ci.code.DebugInfo;
+import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.site.Call;
 import jdk.vm.ci.code.site.Infopoint;
 import jdk.vm.ci.code.site.InfopointReason;
@@ -161,12 +164,14 @@ public class CompileQueue {
     protected CompletionExecutor executor;
     private final ConcurrentMap<HostedMethod, CompileTask> compilations;
     protected final RuntimeConfiguration runtimeConfig;
-    private final OptimisticOptimizations optimisticOpts;
-    private final Suites regularSuites;
-    private final Suites deoptTargetSuites;
-    private final LIRSuites regularLIRSuites;
-    private final LIRSuites deoptTargetLIRSuites;
+    private Suites regularSuites = null;
+    private Suites deoptTargetSuites = null;
+    private LIRSuites regularLIRSuites = null;
+    private LIRSuites deoptTargetLIRSuites = null;
     private final ConcurrentMap<Constant, DataSection.Data> dataCache;
+
+    private SnippetReflectionProvider snippetReflection;
+    private final FeatureHandler featureHandler;
 
     private volatile boolean inliningProgress;
 
@@ -263,9 +268,11 @@ public class CompileQueue {
     protected class TrivialInlineTask implements DebugContextRunnable {
 
         private final HostedMethod method;
+        private final Description description;
 
         TrivialInlineTask(HostedMethod method) {
             this.method = method;
+            this.description = new Description(method, method.getName());
         }
 
         @Override
@@ -275,7 +282,7 @@ public class CompileQueue {
 
         @Override
         public Description getDescription() {
-            return new Description(method, toString());
+            return description;
         }
     }
 
@@ -283,10 +290,12 @@ public class CompileQueue {
 
         protected final CompileReason reason;
         private final HostedMethod method;
+        private final Description description;
 
         public ParseTask(HostedMethod method, CompileReason reason) {
             this.method = method;
             this.reason = reason;
+            this.description = new Description(method, method.getName());
         }
 
         @Override
@@ -296,7 +305,7 @@ public class CompileQueue {
 
         @Override
         public Description getDescription() {
-            return new Description(method, toString());
+            return description;
         }
     }
 
@@ -305,30 +314,29 @@ public class CompileQueue {
         this.universe = universe;
         this.compilations = new ConcurrentHashMap<>();
         this.runtimeConfig = runtimeConfigBuilder.getRuntimeConfig();
-        this.optimisticOpts = OptimisticOptimizations.ALL.remove(OptimisticOptimizations.Optimization.UseLoopLimitChecks);
         this.deoptimizeAll = deoptimizeAll;
         this.dataCache = new ConcurrentHashMap<>();
         this.executor = new CompletionExecutor(universe.getBigBang(), executorService);
-
-        regularSuites = NativeImageGenerator.createSuites(featureHandler, runtimeConfig, snippetReflection, true);
-        deoptTargetSuites = NativeImageGenerator.createSuites(featureHandler, runtimeConfig, snippetReflection, true);
-        removeDeoptTargetOptimizations(deoptTargetSuites);
-        regularLIRSuites = NativeImageGenerator.createLIRSuites(featureHandler, runtimeConfig.getProviders(), true);
-        deoptTargetLIRSuites = NativeImageGenerator.createLIRSuites(featureHandler, runtimeConfig.getProviders(), true);
-        removeDeoptTargetOptimizations(deoptTargetLIRSuites);
+        this.featureHandler = featureHandler;
+        this.snippetReflection = snippetReflection;
 
         // let aotjs override the replacements registration
-        callForReplacements(debug, featureHandler, runtimeConfig, snippetReflection);
+        callForReplacements(debug, runtimeConfig);
     }
 
-    protected void callForReplacements(DebugContext debug, FeatureHandler featureHandler, @SuppressWarnings("hiding") RuntimeConfiguration runtimeConfig, SnippetReflectionProvider snippetReflection) {
-        NativeImageGenerator.registerReplacements(debug, featureHandler, runtimeConfig, runtimeConfig.getProviders(), snippetReflection, true);
+    public static OptimisticOptimizations getOptimisticOpts() {
+        return OptimisticOptimizations.ALL.remove(OptimisticOptimizations.Optimization.UseLoopLimitChecks);
+    }
+
+    protected void callForReplacements(DebugContext debug, @SuppressWarnings("hiding") RuntimeConfiguration runtimeConfig) {
+        NativeImageGenerator.registerReplacements(debug, featureHandler, runtimeConfig, runtimeConfig.getProviders(), snippetReflection, true, true);
     }
 
     @SuppressWarnings("try")
     public void finish(DebugContext debug) {
         try {
-            try (StopTimer t = new Timer("(parse)").start()) {
+            String imageName = universe.getBigBang().getHostVM().getImageName();
+            try (StopTimer t = new Timer(imageName, "(parse)").start()) {
                 parseAll();
             }
             // Checking @Uninterruptible annotations does not take long enough to justify a timer.
@@ -341,12 +349,15 @@ public class CompileQueue {
             MustNotSynchronizeAnnotationChecker.check(debug, universe.getMethods());
             beforeCompileAll(debug);
 
-            if (SubstrateOptions.AOTInline.getValue()) {
-                try (StopTimer ignored = new Timer("(inline)").start()) {
+            if (SubstrateOptions.AOTInline.getValue() && SubstrateOptions.AOTTrivialInline.getValue()) {
+                try (StopTimer ignored = new Timer(imageName, "(inline)").start()) {
                     inlineTrivialMethods(debug);
                 }
             }
-            try (StopTimer t = new Timer("(compile)").start()) {
+
+            assert suitesNotCreated();
+            createSuites();
+            try (StopTimer t = new Timer(imageName, "(compile)").start()) {
                 compileAll();
             }
         } catch (InterruptedException ie) {
@@ -355,6 +366,29 @@ public class CompileQueue {
         if (NativeImageOptions.PrintMethodHistogram.getValue()) {
             printMethodHistogram();
         }
+    }
+
+    private boolean suitesNotCreated() {
+        return regularSuites == null && deoptTargetLIRSuites == null && regularLIRSuites == null && deoptTargetSuites == null;
+    }
+
+    private void createSuites() {
+        regularSuites = NativeImageGenerator.createSuites(featureHandler, runtimeConfig, snippetReflection, true, !universe.isPostParseCanonicalized());
+        deoptTargetSuites = NativeImageGenerator.createSuites(featureHandler, runtimeConfig, snippetReflection, true, !universe.isPostParseCanonicalized());
+        removeDeoptTargetOptimizations(deoptTargetSuites);
+        regularLIRSuites = NativeImageGenerator.createLIRSuites(featureHandler, runtimeConfig.getProviders(), true);
+        deoptTargetLIRSuites = NativeImageGenerator.createLIRSuites(featureHandler, runtimeConfig.getProviders(), true);
+        removeDeoptTargetOptimizations(deoptTargetLIRSuites);
+    }
+
+    public static PhaseSuite<HighTierContext> afterParseCanonicalization() {
+        PhaseSuite<HighTierContext> phaseSuite = new PhaseSuite<>();
+        phaseSuite.appendPhase(new DeadStoreRemovalPhase());
+        phaseSuite.appendPhase(new DevirtualizeCallsPhase());
+        phaseSuite.appendPhase(new CanonicalizerPhase());
+        phaseSuite.appendPhase(new StrengthenStampsPhase());
+        phaseSuite.appendPhase(new CanonicalizerPhase());
+        return phaseSuite;
     }
 
     private void printMethodHistogram() {
@@ -491,15 +525,32 @@ public class CompileQueue {
 
     @SuppressWarnings("try")
     private void inlineTrivialMethods(DebugContext debug) throws InterruptedException {
+        executor.init();
+        PhaseSuite<HighTierContext> afterParseSuite = afterParseCanonicalization();
         for (HostedMethod method : universe.getMethods()) {
             try (DebugContext.Scope s = debug.scope("InlineTrivial", method.compilationInfo.getGraph(), method, this)) {
                 if (method.compilationInfo.getGraph() != null) {
+                    HostedProviders providers = (HostedProviders) runtimeConfig.lookupBackend(method).getProviders();
+                    if (!universe.isPostParseCanonicalized()) {
+                        executor.execute((DebugContext newDebug) -> {
+                            method.compilationInfo.getGraph().resetDebug(newDebug);
+                            afterParseSuite.apply(method.compilationInfo.getGraph(), new HighTierContext(providers, afterParseSuite, getOptimisticOpts()));
+
+                            /* Check that graph is in good shape after parsing. */
+                            assert GraphOrder.assertSchedulableGraph(method.compilationInfo.getGraph());
+                        });
+                    }
                     checkTrivial(method);
                 }
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
         }
+
+        executor.start();
+        executor.complete();
+        executor.shutdown();
+        universe.setPostParseCanonicalized();
 
         int round = 0;
         do {
@@ -547,7 +598,7 @@ public class CompileQueue {
 
                     if (inlined) {
                         Providers providers = runtimeConfig.lookupBackend(method).getProviders();
-                        new CanonicalizerPhase().apply(graph, new PhaseContext(providers));
+                        new CanonicalizerPhase().apply(graph, providers);
 
                         /*
                          * Publish the new graph, it can be picked up immediately by other threads
@@ -578,7 +629,7 @@ public class CompileQueue {
                 }
                 InliningUtil.inline(invoke, singleCallee.compilationInfo.getGraph(), true, singleCallee);
 
-                graph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph, "After inlining %s with trivial callee %s", invoke, singleCallee.format("%H.%n(%p)"));
+                graph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph, "After inlining %s with trivial callee %s", invoke, singleCallee.getQualifiedName());
                 return true;
             }
         }
@@ -603,8 +654,16 @@ public class CompileQueue {
     }
 
     private static boolean mustNotAllocate(HostedMethod method) {
+        /*
+         * GR-15580: This check is suspicious. The no-allocation restriction is propagated through
+         * the call graph, so checking explicitly for annotated methods means that either not enough
+         * methods are excluded from inlining, or the inlining restriction is not necessary at all.
+         * We should elevate all methods that really need an inlining restriction
+         * to @Uninterruptible or mark them as @NeverInline, so that no-allocation does not need any
+         * more inlining restrictions and this code can be removed.
+         */
         RestrictHeapAccess annotation = method.getAnnotation(RestrictHeapAccess.class);
-        return annotation != null && annotation.access() == RestrictHeapAccess.Access.NO_ALLOCATION;
+        return annotation != null && annotation.access() == RestrictHeapAccess.Access.NO_ALLOCATION && !annotation.mayBeInlined();
     }
 
     public static boolean callerAnnotatedWith(Invoke invoke, Class<? extends Annotation> annotationClass) {
@@ -648,21 +707,19 @@ public class CompileQueue {
 
     @SuppressWarnings("try")
     private void defaultParseFunction(DebugContext debug, HostedMethod method, CompileReason reason, RuntimeConfiguration config) {
-        if (method.getAnnotation(Fold.class) != null || method.getAnnotation(NodeIntrinsic.class) != null) {
+        if ((!NativeImageOptions.AllowFoldMethods.getValue() && method.getAnnotation(Fold.class) != null) || method.getAnnotation(NodeIntrinsic.class) != null) {
             throw VMError.shouldNotReachHere("Parsing method annotated with @Fold or @NodeIntrinsic: " + method.format("%H.%n(%p)"));
         }
 
         HostedProviders providers = (HostedProviders) config.lookupBackend(method).getProviders();
         boolean needParsing = false;
-        OptionValues options = HostedOptionValues.singleton();
         StructuredGraph graph = method.buildGraph(debug, method, providers, Purpose.AOT_COMPILATION);
         if (graph == null) {
             InvocationPlugin plugin = providers.getGraphBuilderPlugins().getInvocationPlugins().lookupInvocation(method);
             if (plugin != null && !plugin.inlineOnly()) {
                 Bytecode code = new ResolvedJavaMethodBytecode(method);
                 // DebugContext debug = new DebugContext(options, providers.getSnippetReflection());
-                graph = new SubstrateIntrinsicGraphBuilder(debug.getOptions(), debug, providers.getMetaAccess(), providers.getConstantReflection(), providers.getConstantFieldProvider(),
-                                providers.getStampProvider(), code).buildGraph(plugin);
+                graph = new SubstrateIntrinsicGraphBuilder(debug.getOptions(), debug, providers, code).buildGraph(plugin);
             }
         }
         if (graph == null && method.isNative() && NativeImageOptions.ReportUnsupportedElementsAtRuntime.getValue()) {
@@ -670,17 +727,7 @@ public class CompileQueue {
         }
         if (graph == null) {
             needParsing = true;
-            if (!method.compilationInfo.isDeoptTarget()) {
-                /*
-                 * Disabling liveness analysis preserves the values of local variables beyond the
-                 * bytecode-liveness. This greatly helps debugging. When local variable numbers are
-                 * reused by javac, local variables can still get illegal values. Since we cannot
-                 * "restore" such illegal values during deoptimization, we must do liveness analysis
-                 * for deoptimization target methods.
-                 */
-                options = new OptionValues(options, GraalOptions.OptClearNonLiveLocals, false);
-            }
-            graph = new StructuredGraph.Builder(options, debug).method(method).build();
+            graph = new StructuredGraph.Builder(debug.getOptions(), debug).method(method).build();
         }
 
         try (DebugContext.Scope s = debug.scope("Parsing", graph, method, this)) {
@@ -688,34 +735,11 @@ public class CompileQueue {
             try {
                 if (needParsing) {
                     GraphBuilderConfiguration gbConf = createHostedGraphBuilderConfiguration(providers, method);
-                    new HostedGraphBuilderPhase(providers.getMetaAccess(), providers.getStampProvider(), providers.getConstantReflection(), providers.getConstantFieldProvider(), gbConf,
-                                    optimisticOpts, null, providers.getWordTypes()).apply(graph);
+                    new HostedGraphBuilderPhase(providers, gbConf, getOptimisticOpts(), null, providers.getWordTypes()).apply(graph);
 
                 } else {
                     graph.setGuardsStage(GuardsStage.FIXED_DEOPTS);
                 }
-
-                new DeadStoreRemovalPhase().apply(graph);
-                new DevirtualizeCallsPhase().apply(graph);
-                new CanonicalizerPhase().apply(graph, new PhaseContext(providers));
-
-                /*
-                 * The StrengthenStampsPhase may not insert type check nodes for specialized
-                 * methods, because we would get type state mismatches regarding Const<Type> !=
-                 * <Type>
-                 */
-                /*
-                 * cwimmer: the old, commented out, condition always disabled checking of static
-                 * analysis results. Therefore, the checks are broken right now.
-                 */
-                // new StrengthenStampsPhase(BootImageOptions.CheckStaticAnalysisResults.getValue()
-                // && method.compilationInfo.deoptTarget != null &&
-                // !method.compilationInfo.isDeoptTarget).apply(graph);
-                new StrengthenStampsPhase(false).apply(graph);
-                new CanonicalizerPhase().apply(graph, new PhaseContext(providers));
-
-                /* Check that graph is in good shape after parsing. */
-                assert GraphOrder.assertSchedulableGraph(graph);
 
                 method.compilationInfo.graph = graph;
 
@@ -723,19 +747,17 @@ public class CompileQueue {
                     if (!canBeUsedForInlining(invoke)) {
                         invoke.setUseForInlining(false);
                     }
-                    if (invoke.callTarget() instanceof MethodCallTargetNode) {
-                        MethodCallTargetNode targetNode = (MethodCallTargetNode) invoke.callTarget();
-                        HostedMethod invokeTarget = (HostedMethod) targetNode.targetMethod();
-                        if (targetNode.invokeKind().isDirect()) {
-                            if (invokeTarget.wrapped.isImplementationInvoked()) {
-                                handleSpecialization(method, targetNode, invokeTarget, invokeTarget);
-                                ensureParsed(invokeTarget, new DirectCallReason(method, reason));
-                            }
-                        } else {
-                            for (HostedMethod invokeImplementation : invokeTarget.getImplementations()) {
-                                handleSpecialization(method, targetNode, invokeTarget, invokeImplementation);
-                                ensureParsed(invokeImplementation, new VirtualCallReason(method, invokeImplementation, reason));
-                            }
+                    CallTargetNode targetNode = invoke.callTarget();
+                    HostedMethod invokeTarget = (HostedMethod) targetNode.targetMethod();
+                    if (targetNode.invokeKind().isIndirect() || targetNode instanceof IndirectCallTargetNode) {
+                        for (HostedMethod invokeImplementation : invokeTarget.getImplementations()) {
+                            handleSpecialization(method, targetNode, invokeTarget, invokeImplementation);
+                            ensureParsed(invokeImplementation, new VirtualCallReason(method, invokeImplementation, reason));
+                        }
+                    } else {
+                        if (invokeTarget.wrapped.isImplementationInvoked()) {
+                            handleSpecialization(method, targetNode, invokeTarget, invokeTarget);
+                            ensureParsed(invokeTarget, new DirectCallReason(method, reason));
                         }
                     }
                 }
@@ -751,8 +773,20 @@ public class CompileQueue {
         }
     }
 
-    protected GraphBuilderConfiguration createHostedGraphBuilderConfiguration(HostedProviders providers, @SuppressWarnings("unused") HostedMethod method) {
+    protected GraphBuilderConfiguration createHostedGraphBuilderConfiguration(HostedProviders providers, HostedMethod method) {
         GraphBuilderConfiguration gbConf = GraphBuilderConfiguration.getDefault(providers.getGraphBuilderPlugins()).withBytecodeExceptionMode(BytecodeExceptionMode.CheckAll);
+
+        if (SubstrateOptions.Optimize.getValue() <= 0 && !method.isDeoptTarget()) {
+            /*
+             * Disabling liveness analysis preserves the values of local variables beyond the
+             * bytecode-liveness. This greatly helps debugging. When local variable numbers are
+             * reused by javac, local variables can still get illegal values. Since we cannot
+             * "restore" such illegal values during deoptimization, we cannot disable liveness
+             * analysis for deoptimization target methods.
+             */
+            gbConf = gbConf.withRetainLocalVariables(true);
+        }
+
         return gbConf;
     }
 
@@ -819,7 +853,7 @@ public class CompileQueue {
         return invoke.useForInlining();
     }
 
-    private static void handleSpecialization(final HostedMethod method, MethodCallTargetNode targetNode, HostedMethod invokeTarget, HostedMethod invokeImplementation) {
+    private static void handleSpecialization(final HostedMethod method, CallTargetNode targetNode, HostedMethod invokeTarget, HostedMethod invokeImplementation) {
         if (method.getAnnotation(Specialize.class) != null && !method.compilationInfo.isDeoptTarget() && invokeTarget.getAnnotation(DeoptTest.class) != null) {
             /*
              * Collect the constant arguments to a method which should be specialized.
@@ -851,6 +885,10 @@ public class CompileQueue {
         if (method.compilationInfo.specializedArguments != null) {
             // Do the specialization: replace the argument locals with the constant arguments.
             StructuredGraph graph = method.compilationInfo.graph;
+
+            /* Check that graph is in good shape before compilation. */
+            assert GraphOrder.assertSchedulableGraph(graph);
+
             int idx = 0;
             for (ConstantNode argument : method.compilationInfo.specializedArguments) {
                 ParameterNode local = graph.getParameter(idx++);
@@ -860,13 +898,15 @@ public class CompileQueue {
             }
         }
         executor.execute(task);
+        method.setCompiled();
     }
 
     class HostedCompilationResultBuilderFactory implements CompilationResultBuilderFactory {
         @Override
         public CompilationResultBuilder createBuilder(CodeCacheProvider codeCache, ForeignCallsProvider foreignCalls, FrameMap frameMap, Assembler asm, DataBuilder dataBuilder,
-                        FrameContext frameContext, OptionValues options, DebugContext debug, CompilationResult compilationResult) {
-            return new CompilationResultBuilder(codeCache, foreignCalls, frameMap, asm, dataBuilder, frameContext, options, debug, compilationResult, EconomicMap.wrapMap(dataCache));
+                        FrameContext frameContext, OptionValues options, DebugContext debug, CompilationResult compilationResult, Register uncompressedNullRegister) {
+            return new CompilationResultBuilder(codeCache, foreignCalls, frameMap, asm, dataBuilder, frameContext, options, debug, compilationResult, uncompressedNullRegister,
+                            EconomicMap.wrapMap(dataCache));
         }
     }
 
@@ -884,7 +924,7 @@ public class CompileQueue {
             System.out.println("Compiling " + method.format("%r %H.%n(%p)") + "  [" + reason + "]");
         }
 
-        Backend backend = config.lookupBackend(method);
+        SubstrateBackend backend = config.lookupBackend(method);
 
         StructuredGraph graph = method.compilationInfo.graph;
         assert graph != null : method;
@@ -908,17 +948,11 @@ public class CompileQueue {
 
             Suites suites = method.compilationInfo.isDeoptTarget() ? deoptTargetSuites : regularSuites;
             LIRSuites lirSuites = method.compilationInfo.isDeoptTarget() ? deoptTargetLIRSuites : regularLIRSuites;
-            CompilationResult result = new CompilationResult(compilationIdentifier, method.format("%H.%n(%p)")) {
-                @Override
-                public void close() {
-                    /*
-                     * Do nothing, we do not want our CompilationResult to be closed because we
-                     * aggregate all data items and machine code in the native image heap.
-                     */
-                }
-            };
+
+            CompilationResult result = backend.newCompilationResult(compilationIdentifier, method.format("%H.%n(%p)"));
+
             try (Indent indent = debug.logAndIndent("compile %s", method)) {
-                GraalCompiler.compileGraph(graph, method, backend.getProviders(), backend, null, optimisticOpts, method.getProfilingInfo(), suites, lirSuites, result,
+                GraalCompiler.compileGraph(graph, method, backend.getProviders(), backend, null, getOptimisticOpts(), method.getProfilingInfo(), suites, lirSuites, result,
                                 new HostedCompilationResultBuilderFactory(), false);
             }
             method.getProfilingInfo().setCompilerIRSize(StructuredGraph.class, method.compilationInfo.graph.getNodeCount());
@@ -1031,6 +1065,11 @@ public class CompileQueue {
      * feature for testing. Note that usually all image compiled methods cannot deoptimize.
      */
     protected boolean canDeoptForTesting(HostedMethod method) {
+        if (method.getName().equals("<clinit>")) {
+            /* Cannot deoptimize into static initializers. */
+            return false;
+        }
+
         if (method.getAnnotation(DeoptTest.class) != null) {
             return true;
         }
@@ -1069,14 +1108,13 @@ public class CompileQueue {
              * tracks the bug in DebugValueMap.
              */
             String className = method.getDeclaringClass().getName();
-            // @formatter:off
             if (className.contains("/svm/core/code/CodeInfoEncoder") ||
-                    className.contains("com/oracle/svm/core/heap/") ||
-                    className.contains("com/oracle/svm/core/genscavenge/") ||
-                    className.contains("debug/internal/DebugValueMap") && method.getName().equals("registerTopLevel")) {
+                            className.contains("com/oracle/svm/core/thread/JavaThreads") ||
+                            className.contains("com/oracle/svm/core/heap/") ||
+                            className.contains("com/oracle/svm/core/genscavenge/") ||
+                            className.contains("debug/internal/DebugValueMap") && method.getName().equals("registerTopLevel")) {
                 return false;
             }
-            // @formatter:on
             /*
              * Method without bytecodes, e.g., methods that have a manually constructed graph, are
              * usually not deoptimizable. This needs to change as soon as we want to runtime compile

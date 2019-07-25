@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -41,7 +43,9 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.NodeValueMap;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.nodes.virtual.EscapeObjectState;
+import org.graalvm.compiler.nodes.virtual.VirtualBoxingNode;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
+import org.graalvm.compiler.serviceprovider.GraalServices;
 import org.graalvm.compiler.virtual.nodes.MaterializedObjectState;
 import org.graalvm.compiler.virtual.nodes.VirtualObjectState;
 
@@ -250,7 +254,7 @@ public class DebugInfoBuilder {
 
             if (!state.canProduceBytecodeFrame()) {
                 // This typically means a snippet or intrinsic frame state made it to the backend
-                StackTraceElement ste = state.getCode().asStackTraceElement(state.bci);
+                String ste = state.getCode() != null ? state.getCode().asStackTraceElement(state.bci).toString() : state.toString();
                 throw new GraalError("Frame state for %s cannot be converted to a BytecodeFrame since the frame state's code is " +
                                 "not the same as the frame state method's code", ste);
             }
@@ -315,7 +319,8 @@ public class DebugInfoBuilder {
                     assert obj.entryCount() == 0 || state instanceof VirtualObjectState;
                     VirtualObject vobject = virtualObjects.get(obj);
                     if (vobject == null) {
-                        vobject = VirtualObject.get(obj.type(), virtualObjects.size());
+                        boolean isAutoBox = obj instanceof VirtualBoxingNode;
+                        vobject = GraalServices.createVirtualObject(obj.type(), virtualObjects.size(), isAutoBox);
                         virtualObjects.put(obj, vobject);
                         pendingVirtualObjects.add(obj);
                     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,10 +46,9 @@ import java.util.Arrays;
  * }
  * </pre>
  */
-public class ShortArrayBuffer {
+public class ShortArrayBuffer extends AbstractArrayBuffer {
 
     private short[] buf;
-    private int size = 0;
 
     public ShortArrayBuffer() {
         this(16);
@@ -59,12 +58,14 @@ public class ShortArrayBuffer {
         buf = new short[initialSize];
     }
 
-    public void clear() {
-        size = 0;
+    @Override
+    int getBufferLength() {
+        return buf.length;
     }
 
-    public int size() {
-        return size;
+    @Override
+    void grow(int newSize) {
+        buf = Arrays.copyOf(buf, newSize);
     }
 
     public short get(int i) {
@@ -72,18 +73,20 @@ public class ShortArrayBuffer {
     }
 
     public void add(short s) {
-        if (size == buf.length) {
-            grow(size * 2);
+        if (length == buf.length) {
+            grow(length * 2);
         }
-        buf[size] = s;
-        size++;
+        buf[length] = s;
+        length++;
     }
 
-    private void grow(int newSize) {
-        buf = Arrays.copyOf(buf, newSize);
+    public void addAll(short[] values, int valuesLength) {
+        ensureCapacity(length + valuesLength);
+        System.arraycopy(values, 0, buf, length, valuesLength);
+        length += valuesLength;
     }
 
     public short[] toArray() {
-        return Arrays.copyOf(buf, size);
+        return Arrays.copyOf(buf, length);
     }
 }

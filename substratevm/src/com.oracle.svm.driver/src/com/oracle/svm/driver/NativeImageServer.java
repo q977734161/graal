@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,9 @@
  */
 package com.oracle.svm.driver;
 
-import static com.oracle.svm.core.posix.headers.Signal.SignalEnum.SIGKILL;
-import static com.oracle.svm.core.posix.headers.Signal.SignalEnum.SIGTERM;
-
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -44,6 +44,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -55,12 +56,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import org.graalvm.nativeimage.ProcessProperties;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.option.SubstrateOptionsParser;
-import com.oracle.svm.core.posix.PosixUtils;
-import com.oracle.svm.core.posix.headers.Signal;
-import com.oracle.svm.core.posix.headers.Unistd;
+import com.oracle.svm.core.util.ClasspathUtils;
 import com.oracle.svm.hosted.server.NativeImageBuildClient;
 import com.oracle.svm.hosted.server.NativeImageBuildServer;
 import com.oracle.svm.hosted.server.SubstrateServerMessage.ServerCommand;
@@ -82,9 +82,19 @@ final class NativeImageServer extends NativeImage {
     private volatile Server building = null;
     private final List<FileChannel> openFileChannels = new ArrayList<>();
 
-    NativeImageServer() {
-        super();
-        registerOptionHandler(new ServerOptionHandler(this));
+    private final ServerOptionHandler serverOptionHandler;
+
+    private NativeImageServer(BuildConfiguration buildConfiguration) {
+        super(buildConfiguration);
+        serverOptionHandler = new ServerOptionHandler(this);
+        registerOptionHandler(serverOptionHandler);
+    }
+
+    static NativeImage create(BuildConfiguration config) {
+        if (NativeImageServerHelper.isInConfiguration()) {
+            return new NativeImageServer(config);
+        }
+        return new NativeImage(config);
     }
 
     @SuppressWarnings("serial")
@@ -117,7 +127,7 @@ final class NativeImageServer extends NativeImage {
             this.pid = Integer.parseInt(properties.get(pKeyPID));
             this.port = Integer.parseInt(properties.get(pKeyPort));
             if (this.port == 0) {
-                Signal.kill(this.pid, SIGKILL.getCValue());
+                ProcessProperties.destroyForcibly(this.pid);
                 deleteAllFiles(this.serverDir);
                 throw new ServerInstanceError();
             }
@@ -142,7 +152,7 @@ final class NativeImageServer extends NativeImage {
         private LinkedHashSet<Path> readClasspath(String rawClasspathString) {
             LinkedHashSet<Path> result = new LinkedHashSet<>();
             for (String pathStr : rawClasspathString.split(" ")) {
-                result.add(Paths.get(pathStr));
+                result.add(ClasspathUtils.stringToClasspath(pathStr));
             }
             return result;
         }
@@ -152,15 +162,16 @@ final class NativeImageServer extends NativeImage {
             showVerboseMessage(verboseServer, "Sending to server [");
             showVerboseMessage(verboseServer, serverCommand.toString());
             if (argList.size() > 0) {
-                showVerboseMessage(verboseServer, argList.stream().collect(Collectors.joining(" \\\n")));
+                showVerboseMessage(verboseServer, String.join(" \\\n", argList));
             }
             showVerboseMessage(verboseServer, "]");
-            int exitCode = NativeImageBuildClient.sendRequest(serverCommand, String.join(" ", argList).getBytes(), port, out, err);
+            int exitCode = NativeImageBuildClient.sendRequest(serverCommand, String.join("\n", argList).getBytes(), port, out, err);
             showVerboseMessage(verboseServer, "Server returns: " + exitCode);
             return exitCode;
         }
 
-        void sendBuildRequest(LinkedHashSet<Path> imageCP, LinkedHashSet<String> imageArgs) {
+        int sendBuildRequest(LinkedHashSet<Path> imageCP, LinkedHashSet<String> imageArgs) {
+            int[] requestStatus = {1};
             withLockDirFileChannel(serverDir, lockFileChannel -> {
                 boolean abortedOnce = false;
                 boolean finished = false;
@@ -188,13 +199,14 @@ final class NativeImageServer extends NativeImage {
 
                         /* Now we have the server-lock and can send the build-request */
                         List<String> command = new ArrayList<>();
-                        command.add("-task=" + "com.oracle.svm.hosted.NativeImageGeneratorRunner");
+                        command.add(NativeImageBuildServer.TASK_PREFIX + "com.oracle.svm.hosted.NativeImageGeneratorRunner");
+
                         LinkedHashSet<Path> imagecp = new LinkedHashSet<>(serverClasspath);
                         imagecp.addAll(imageCP);
-                        command.addAll(Arrays.asList("-imagecp", imagecp.stream().map(Path::toString).collect(Collectors.joining(":"))));
-                        command.addAll(imageArgs);
+                        command.addAll(createImageBuilderArgs(imageArgs, imagecp));
+
                         showVerboseMessage(isVerbose(), "SendBuildRequest [");
-                        showVerboseMessage(isVerbose(), command.stream().collect(Collectors.joining("\n")));
+                        showVerboseMessage(isVerbose(), String.join("\n", command));
                         showVerboseMessage(isVerbose(), "]");
                         try {
                             /* logfile main purpose is to know when was the last build request */
@@ -205,20 +217,18 @@ final class NativeImageServer extends NativeImage {
                             throw showError("Could not read/write into build-request log file", e);
                         }
                         // Checkstyle: stop
-                        int requestStatus = sendRequest(
+                        requestStatus[0] = sendRequest(
                                         byteStreamToByteConsumer(System.out),
                                         byteStreamToByteConsumer(System.err),
                                         ServerCommand.BUILD_IMAGE,
                                         command.toArray(new String[command.size()]));
                         // Checkstyle: resume
-                        if (requestStatus != NativeImageBuildClient.EXIT_SUCCESS) {
-                            throw showError("Processing image build request failed");
-                        }
                     } catch (IOException e) {
                         throw showError("Error while trying to lock ServerDir " + serverDir, e);
                     }
                 }
             });
+            return requestStatus[0];
         }
 
         boolean isAlive() {
@@ -254,14 +264,14 @@ final class NativeImageServer extends NativeImage {
                 long now = System.currentTimeMillis();
                 if (!sentSIGTERM && terminationTimeout < now) {
                     showWarning(this + " keeps responding to port " + port + " even after sending STOP_SERVER");
-                    Signal.kill(pid, SIGTERM.getCValue());
+                    ProcessProperties.destroy(pid);
                     sentSIGTERM = true;
                 } else if (!sentSIGKILL && killTimeout < now) {
-                    showWarning(this + " keeps responding to port " + port + " even after killing with SIGTERM");
-                    Signal.kill(pid, SIGKILL.getCValue());
+                    showWarning(this + " keeps responding to port " + port + " even after destroying");
+                    ProcessProperties.destroyForcibly(pid);
                     sentSIGKILL = true;
                 } else if (killedTimeout < now) {
-                    throw showError(this + " keeps responding to port " + port + " even after killing with SIGKILL");
+                    throw showError(this + " keeps responding to port " + port + " even after destroying forcefully");
                 }
             } while (isAlive());
             deleteAllFiles(serverDir);
@@ -280,9 +290,9 @@ final class NativeImageServer extends NativeImage {
             }
             sb.append("\nPID: ").append(pid);
             sb.append("\nPort: ").append(port);
-            sb.append("\nJavaArgs: ").append(serverJavaArgs.stream().collect(Collectors.joining(" ")));
-            sb.append("\nBootClasspath: ").append(serverBootClasspath.stream().map(Path::toString).collect(Collectors.joining(":")));
-            sb.append("\nClasspath: ").append(serverClasspath.stream().map(Path::toString).collect(Collectors.joining(":")));
+            sb.append("\nJavaArgs: ").append(String.join(" ", serverJavaArgs));
+            sb.append("\nBootClasspath: ").append(serverBootClasspath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
+            sb.append("\nClasspath: ").append(serverClasspath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
             return sb.append('\n').toString();
         }
 
@@ -333,7 +343,7 @@ final class NativeImageServer extends NativeImage {
         if (sessionName != null) {
             return sessionDirPrefix + sessionName;
         }
-        return sessionDirPrefix + Long.toHexString(Unistd.getsid(Unistd.getpid()));
+        return sessionDirPrefix + Long.toHexString(Unistd.getsid(Math.toIntExact(ProcessProperties.getProcessID())));
     }
 
     private static String getMachineID() {
@@ -367,7 +377,7 @@ final class NativeImageServer extends NativeImage {
     }
 
     @SuppressWarnings("try")
-    private Server getServerInstance(LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, LinkedHashSet<String> javaArgs) {
+    private Server getServerInstance(LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, List<String> javaArgs) {
         Server[] result = {null};
         /* Important - Creating new servers is a machine-exclusive operation */
         withFileChannel(getMachineDir().resolve("create-server.lock"), lockFileChannel -> {
@@ -399,20 +409,24 @@ final class NativeImageServer extends NativeImage {
                 replaceArg(javaArgs, oXms, xmsValueStr);
 
                 Path sessionDir = getSessionDir();
-                String serverUID = imageServerUID(classpath, bootClasspath, javaArgs);
+                List<Collection<Path>> builderPaths = new ArrayList<>(Arrays.asList(classpath, bootClasspath));
+                if (config.useJavaModules()) {
+                    builderPaths.addAll(Arrays.asList(config.getBuilderModulePath(), config.getBuilderUpgradeModulePath()));
+                }
+                String serverUID = imageServerUID(javaArgs, builderPaths);
                 Path serverDir = sessionDir.resolve(serverDirPrefix + serverUID);
                 Optional<Server> reusableServer = aliveServers.stream().filter(s -> s.serverDir.equals(serverDir)).findFirst();
                 if (reusableServer.isPresent()) {
                     Server server = reusableServer.get();
                     if (!server.isAlive()) {
-                        throw showError("Found defunct server:" + server.getServerInfo());
+                        throw showError("Found defunct image-build server:" + server.getServerInfo());
                     }
-                    showVerboseMessage(verboseServer, "Reuse running server: " + server);
+                    showVerboseMessage(verboseServer, "Reuse existing image-build server: " + server);
                     result[0] = server;
                 } else {
                     if (aliveServers.size() >= maxServers) {
                         /* Server limit reached */
-                        showVerboseMessage(verboseServer, "Server limit reached -> remove least recently used server");
+                        showVerboseMessage(verboseServer, "Image-build server limit reached -> remove least recently used");
                         /* Shutdown least recently used within session */
                         Server victim = findVictim(aliveServers);
                         /* If none found also consider servers from other sessions on machine */
@@ -420,13 +434,13 @@ final class NativeImageServer extends NativeImage {
                             showMessage("Shutdown " + victim);
                             victim.shutdown();
                         } else {
-                            showWarning("Native image server limit exceeded. Use options --server{-list,-shutdown[-all]} to fix the problem.");
+                            showWarning("Image-build server limit exceeded. Use options --server{-list,-shutdown[-all]} to fix the problem.");
                         }
                     }
                     /* Instantiate new server and write properties file */
                     Server server = startServer(serverDir, 0, classpath, bootClasspath, javaArgs);
-                    if (server != null) {
-                        showVerboseMessage(verboseServer, "Created new server: " + server);
+                    if (server == null) {
+                        showWarning("Creating image-build server failed. Fallback to one-shot image building ...");
                     }
                     result[0] = server;
                 }
@@ -440,8 +454,8 @@ final class NativeImageServer extends NativeImage {
     private static Server findVictim(List<Server> aliveServers) {
         return aliveServers.stream()
                         .filter(Server::isAlive)
-                        .sorted(Comparator.comparing(s -> s.lastBuildRequest))
-                        .findFirst().orElse(null);
+                        .min(Comparator.comparing(s -> s.lastBuildRequest))
+                        .orElse(null);
     }
 
     private List<Path> getSessionDirs(boolean machineWide) {
@@ -532,113 +546,103 @@ final class NativeImageServer extends NativeImage {
         return aliveServers;
     }
 
-    private Server startServer(Path serverDir, int serverPort, LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, LinkedHashSet<String> javaArgs) {
+    private Server startServer(Path serverDir, int serverPort, LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, List<String> javaArgs) {
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(serverDir.toFile());
+        pb.redirectErrorStream(true);
         List<String> command = pb.command();
-        command.add(getJavaHome().resolve("bin/java").toString());
+        command.add(canonicalize(config.getJavaExecutable()).toString());
         if (!bootClasspath.isEmpty()) {
-            command.add(bootClasspath.stream().map(Path::toString).collect(Collectors.joining(":", "-Xbootclasspath/a:", "")));
+            command.add(bootClasspath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator, "-Xbootclasspath/a:", "")));
         }
-        command.addAll(Arrays.asList("-cp", classpath.stream().map(Path::toString).collect(Collectors.joining(":"))));
+        command.addAll(Arrays.asList("-cp", classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator))));
         command.addAll(javaArgs);
         command.add("com.oracle.svm.hosted.server.NativeImageBuildServer");
-        command.add("-port=" + serverPort);
+        command.add(NativeImageBuildServer.PORT_PREFIX + serverPort);
         Path logFilePath = serverDir.resolve("server.log");
-        command.add("-logFile=" + logFilePath);
+        command.add(NativeImageBuildServer.LOG_PREFIX + logFilePath);
         showVerboseMessage(isVerbose(), "StartServer [");
-        showVerboseMessage(isVerbose(), command.stream().collect(Collectors.joining(" \\\n")));
+        showVerboseMessage(isVerbose(), String.join(" \\\n", command));
         showVerboseMessage(isVerbose(), "]");
-        int childPid = daemonize(() -> {
+        int childPid = NativeImageServerHelper.daemonize(() -> {
             try {
                 ensureDirectoryExists(serverDir);
                 showVerboseMessage(verboseServer, "Starting new server ...");
                 Process process = pb.start();
-                int serverPID = PosixUtils.getpid(process);
-                showVerboseMessage(verboseServer, "PID of new server: " + serverPID);
+                long serverPID = ProcessProperties.getProcessID(process);
+                showVerboseMessage(verboseServer, "New image-build server pid: " + serverPID);
                 int selectedPort = serverPort;
                 if (selectedPort == 0) {
                     try (BufferedReader serverStdout = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                        String line = serverStdout.readLine();
-                        if (line != null && line.startsWith(NativeImageBuildServer.PORT_LOG_MESSAGE_PREFIX)) {
-                            String portStr = line.substring(NativeImageBuildServer.PORT_LOG_MESSAGE_PREFIX.length());
-                            try {
-                                selectedPort = Integer.parseInt(portStr);
-                            } catch (NumberFormatException ex) {
-                                /* Fall through */
+                        String line;
+                        int readLineTries = 60;
+                        ArrayList<String> lines = new ArrayList<>(readLineTries);
+                        while ((line = serverStdout.readLine()) != null && --readLineTries > 0) {
+                            lines.add(line);
+                            if (line.startsWith(NativeImageBuildServer.PORT_LOG_MESSAGE_PREFIX)) {
+                                String portStr = line.substring(NativeImageBuildServer.PORT_LOG_MESSAGE_PREFIX.length());
+                                try {
+                                    selectedPort = Integer.parseInt(portStr);
+                                    break;
+                                } catch (NumberFormatException ex) {
+                                    /* Fall through */
+                                }
                             }
                         }
                         if (selectedPort == 0) {
-                            throw showError("Server showed invalid port selection message: " + line);
+                            String serverOutputMessage = "";
+                            if (!lines.isEmpty()) {
+                                serverOutputMessage = "\nServer stdout/stderr:\n" + String.join("\n", lines);
+                            }
+                            throw showError("Could not determine port for sending image-build requests." + serverOutputMessage);
                         }
-                        showVerboseMessage(verboseServer, "Server selected port " + selectedPort);
+                        showVerboseMessage(verboseServer, "Image-build server selected port " + selectedPort);
                     }
                 }
                 writeServerFile(serverDir, selectedPort, serverPID, classpath, bootClasspath, javaArgs);
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable e) {
                 deleteAllFiles(serverDir);
+                throw showError("Starting image-build server instance failed", e);
             }
         });
-        if (childPid >= 0) {
-            Server server = null;
-            long timeout = System.currentTimeMillis() + 8_000;
-            while (timeout > System.currentTimeMillis()) {
-                try {
-                    /* Wait for server.properties to appear in serverDir */
-                    if (server == null) {
-                        server = new Server(serverDir);
-                    }
-                    /* Once we see the server check if it is alive (accepts commands) */
-                    if (server.isAlive()) {
-                        return server;
-                    }
-                } catch (ServerInstanceError e) {
-                    showVerboseMessage(verboseServer, "Server instance is unusable");
-                    /* Build without server */
-                    return null;
-                } catch (Exception e) {
-                    /* It might take a few moments before server becomes visible */
+
+        int exitStatus = ProcessProperties.waitForProcessExit(childPid);
+        showVerboseMessage(verboseServer, "Exit status forked child process: " + exitStatus);
+        if (exitStatus == 0) {
+            Server server;
+            try {
+                server = new Server(serverDir);
+            } catch (Exception e) {
+                showVerboseMessage(verboseServer, "Image-build server unusable.");
+                /* Build without server */
+                return null;
+            }
+
+            for (int i = 0; i < 6; i += 1) {
+                /* Check if it is alive (accepts commands) */
+                if (server.isAlive()) {
+                    showVerboseMessage(verboseServer, "Image-build server found.");
+                    return server;
                 }
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(200);
                 } catch (InterruptedException e) {
-                    String serverStr = server == null ? "server" : server.toString();
-                    throw showError("Woke up from waiting for " + serverStr + " to become alive", e);
+                    break;
                 }
             }
+            showVerboseMessage(verboseServer, "Image-build server not responding.");
+            server.shutdown();
         }
-        /* Build without server */
         return null;
     }
 
-    /*
-     * Ensures started server keeps running even after native-image completes.
-     */
-    private static int daemonize(Runnable runnable) {
-        int pid = Unistd.fork();
-        switch (pid) {
-            case 0:
-                break;
-            default:
-                return pid;
-        }
-
-        /* The server should not get signals from the native-image during the first run. */
-        Unistd.setsid();
-
-        runnable.run();
-        System.exit(0);
-        return -1;
-    }
-
-    private static void writeServerFile(Path serverDir, int port, int pid, LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, LinkedHashSet<String> javaArgs) throws Exception {
+    private static void writeServerFile(Path serverDir, int port, long pid, LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, List<String> javaArgs) throws Exception {
         Properties sp = new Properties();
         sp.setProperty(Server.pKeyPort, String.valueOf(port));
         sp.setProperty(Server.pKeyPID, String.valueOf(pid));
-        sp.setProperty(Server.pKeyJavaArgs, javaArgs.stream().collect(Collectors.joining(" ")));
-        sp.setProperty(Server.pKeyBCP, bootClasspath.stream().map(String::valueOf).collect(Collectors.joining(" ")));
-        sp.setProperty(Server.pKeyCP, classpath.stream().map(String::valueOf).collect(Collectors.joining(" ")));
+        sp.setProperty(Server.pKeyJavaArgs, String.join(" ", javaArgs));
+        sp.setProperty(Server.pKeyBCP, bootClasspath.stream().map(ClasspathUtils::classpathToString).collect(Collectors.joining(" ")));
+        sp.setProperty(Server.pKeyCP, classpath.stream().map(ClasspathUtils::classpathToString).collect(Collectors.joining(" ")));
         Path serverPropertiesPath = serverDir.resolve(Server.serverProperties);
         try (OutputStream os = Files.newOutputStream(serverPropertiesPath)) {
             sp.store(os, "");
@@ -668,7 +672,7 @@ final class NativeImageServer extends NativeImage {
         }
     }
 
-    private FileLock lockFileChannel(FileChannel channel) throws IOException {
+    private static FileLock lockFileChannel(FileChannel channel) throws IOException {
         Thread lockWatcher = new Thread(() -> {
             try {
                 Thread.sleep(TimeUnit.MINUTES.toMillis(10));
@@ -730,7 +734,7 @@ final class NativeImageServer extends NativeImage {
     }
 
     @Override
-    protected void buildImage(LinkedHashSet<String> javaArgs, LinkedHashSet<Path> bcp, LinkedHashSet<Path> cp, LinkedHashSet<String> imageArgs, LinkedHashSet<Path> imagecp) {
+    protected int buildImage(List<String> javaArgs, LinkedHashSet<Path> bcp, LinkedHashSet<Path> cp, LinkedHashSet<String> imageArgs, LinkedHashSet<Path> imagecp) {
         boolean printFlags = imageArgs.stream().anyMatch(arg -> arg.contains(enablePrintFlags));
         if (useServer && !printFlags && !javaArgs.contains("-Xdebug")) {
             AbortBuildSignalHandler signalHandler = new AbortBuildSignalHandler();
@@ -743,37 +747,33 @@ final class NativeImageServer extends NativeImage {
                 /* Send image build job to server */
                 showMessage("Build on " + server);
                 building = server;
-                server.sendBuildRequest(imagecp, imageArgs);
+                int status = server.sendBuildRequest(imagecp, imageArgs);
                 if (!server.isAlive()) {
                     /* If server does not respond after image-build -> cleanup */
                     cleanupServers(false, false, true);
                 }
-                return;
+                return status;
             }
         }
-        super.buildImage(javaArgs, bcp, cp, imageArgs, imagecp);
+        return super.buildImage(javaArgs, bcp, cp, imageArgs, imagecp);
     }
 
-    private static String imageServerUID(LinkedHashSet<Path> classpath, LinkedHashSet<Path> bootClasspath, LinkedHashSet<String> vmArgs) {
+    private static String imageServerUID(List<String> vmArgs, List<Collection<Path>> builderPaths) {
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-512");
         } catch (NoSuchAlgorithmException e) {
             throw showError("SHA-512 digest is not available", e);
         }
-        for (Path path : classpath) {
-            digest.update(path.toString().getBytes());
-        }
-        for (Path path : bootClasspath) {
-            digest.update(path.toString().getBytes());
+        for (Collection<Path> paths : builderPaths) {
+            for (Path path : paths) {
+                digest.update(path.toString().getBytes());
+                updateHash(digest, path);
+            }
         }
         for (String string : vmArgs) {
             digest.update(string.getBytes());
         }
-
-        classpath.forEach(pathElement -> updateHash(digest, pathElement));
-        bootClasspath.forEach(pathElement -> updateHash(digest, pathElement));
-        vmArgs.stream().map(String::getBytes).forEach(digest::update);
 
         byte[] digestBytes = digest.digest();
         StringBuilder sb = new StringBuilder(digestBytes.length * 2);
@@ -798,6 +798,10 @@ final class NativeImageServer extends NativeImage {
         useServer = val;
     }
 
+    boolean useServer() {
+        return useServer;
+    }
+
     @Override
     protected void setDryRun(boolean val) {
         super.setDryRun(val);
@@ -806,6 +810,10 @@ final class NativeImageServer extends NativeImage {
 
     void setVerboseServer(boolean val) {
         verboseServer = val;
+    }
+
+    boolean verboseServer() {
+        return verboseServer;
     }
 
     void setSessionName(String val) {

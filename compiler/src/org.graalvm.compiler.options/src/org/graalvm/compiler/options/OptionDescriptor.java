@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,14 +34,14 @@ import java.util.List;
  */
 public final class OptionDescriptor {
 
-    protected final String name;
-    protected final OptionType optionType;
-    protected final Class<?> optionValueType;
-    protected final String help;
-    protected final List<String> extraHelp;
-    protected final OptionKey<?> optionKey;
-    protected final Class<?> declaringClass;
-    protected final String fieldName;
+    private final String name;
+    private final OptionType optionType;
+    private final Class<?> optionValueType;
+    private final String help;
+    private final List<String> extraHelp;
+    private final OptionKey<?> optionKey;
+    private final Class<?> declaringClass;
+    private final String fieldName;
 
     private static final String[] NO_EXTRA_HELP = {};
 

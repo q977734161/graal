@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,10 +24,61 @@
  */
 package com.oracle.truffle.regex;
 
+import com.oracle.truffle.api.TruffleException;
+import com.oracle.truffle.api.nodes.Node;
+
 @SuppressWarnings("serial")
-public class UnsupportedRegexException extends RuntimeException {
+public class UnsupportedRegexException extends RuntimeException implements TruffleException {
+
+    private String reason;
+    private RegexSource regexSrc;
+
     public UnsupportedRegexException(String reason) {
-        super(reason);
+        super();
+        this.reason = reason;
+    }
+
+    public UnsupportedRegexException(String reason, Throwable cause) {
+        super(cause);
+        this.reason = reason;
+    }
+
+    public UnsupportedRegexException(String reason, RegexSource regexSrc) {
+        this(reason);
+        this.regexSrc = regexSrc;
+    }
+
+    public RegexSource getRegex() {
+        return regexSrc;
+    }
+
+    public void setRegex(RegexSource regexSrc) {
+        this.regexSrc = regexSrc;
+    }
+
+    public String getReason() {
+        return reason;
+    }
+
+    public void setReason(String reason) {
+        this.reason = reason;
+    }
+
+    @Override
+    public String getMessage() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Unsupported regular expression");
+        if (regexSrc != null) {
+            sb.append(" /");
+            sb.append(regexSrc.getPattern());
+            sb.append("/");
+            sb.append(regexSrc.getFlags());
+        }
+        if (reason != null) {
+            sb.append(": ");
+            sb.append(reason);
+        }
+        return sb.toString();
     }
 
     /**
@@ -35,7 +86,17 @@ public class UnsupportedRegexException extends RuntimeException {
      */
     @SuppressWarnings("sync-override")
     @Override
-    public Throwable fillInStackTrace() {
+    public final Throwable fillInStackTrace() {
+        return this;
+    }
+
+    @Override
+    public boolean isSyntaxError() {
+        return true;
+    }
+
+    @Override
+    public Node getLocation() {
         return null;
     }
 }

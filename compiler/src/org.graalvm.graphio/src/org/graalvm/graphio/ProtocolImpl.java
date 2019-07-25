@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -38,11 +40,11 @@ final class ProtocolImpl<Graph, Node, NodeClass, Port, Block, ResolvedJavaMethod
     private final GraphElements<ResolvedJavaMethod, ResolvedJavaField, Signature, NodeSourcePosition> elements;
     private final GraphLocations<ResolvedJavaMethod, NodeSourcePosition, Location> locations;
 
-    ProtocolImpl(int major, int minor, GraphStructure<Graph, Node, NodeClass, Port> structure, GraphTypes enums, GraphBlocks<Graph, Block, Node> blocks,
+    ProtocolImpl(int major, int minor, boolean embedded, GraphStructure<Graph, Node, NodeClass, Port> structure, GraphTypes enums, GraphBlocks<Graph, Block, Node> blocks,
                     GraphElements<ResolvedJavaMethod, ResolvedJavaField, Signature, NodeSourcePosition> elements,
                     GraphLocations<ResolvedJavaMethod, NodeSourcePosition, Location> locs,
                     WritableByteChannel channel) throws IOException {
-        super(channel, major, minor);
+        super(channel, major, minor, embedded);
         this.structure = structure;
         this.types = enums;
         this.blocks = blocks;

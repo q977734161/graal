@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,14 +32,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.graalvm.nativeimage.Platform;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.util.FileUtils;
 
 public class CCompilerInvoker {
-
-    private static final String C_COMPILER = "gcc";
 
     protected final NativeLibraries nativeLibs;
     protected final Path tempDirectory;
@@ -50,7 +51,7 @@ public class CCompilerInvoker {
 
     public Process startPreprocessor(List<String> options, Path sourceFile) throws IOException {
         List<String> command = new ArrayList<>();
-        command.add(C_COMPILER);
+        command.add(Platform.includedIn(Platform.WINDOWS.class) ? "CL" : "gcc");
         command.add("-E");
         command.add(sourceFile.normalize().toString());
         command.addAll(options);
@@ -61,8 +62,10 @@ public class CCompilerInvoker {
         try {
             Process compilingProcess = startCompiler(options, source.normalize(), target.normalize());
             InputStream es = compilingProcess.getErrorStream();
+            InputStream is = compilingProcess.getInputStream();
 
             List<String> lines = FileUtils.readAllLines(es);
+            FileUtils.readAllLines(is);
             int status = compilingProcess.waitFor();
 
             boolean errorReported = false;
@@ -87,12 +90,16 @@ public class CCompilerInvoker {
 
     public Process startCompiler(List<String> options, Path source, Path target) throws IOException {
         List<String> command = new ArrayList<>();
-        command.add(C_COMPILER);
+        command.add(Platform.includedIn(Platform.WINDOWS.class) ? "CL" : "gcc");
         command.addAll(options);
         command.add(source.normalize().toString());
         if (target != null) {
-            command.add("-o");
-            command.add(target.normalize().toString());
+            if (Platform.includedIn(Platform.WINDOWS.class)) {
+                command.add("/Fe" + target.normalize().toString());
+            } else {
+                command.add("-o");
+                command.add(target.normalize().toString());
+            }
         }
         return startCommand(command);
     }

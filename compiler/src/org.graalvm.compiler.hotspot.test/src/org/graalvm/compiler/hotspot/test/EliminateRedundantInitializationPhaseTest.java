@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -134,6 +136,24 @@ public class EliminateRedundantInitializationPhaseTest extends GraalCompilerTest
         X.z = 3;
     }
 
+    static class SomeClass {
+        @BytecodeParserNeverInline
+        static void method() {
+        }
+
+        @BytecodeParserForceInline
+        static void inlinedMethod() {
+        }
+    }
+
+    public static void invokestatic() {
+        SomeClass.method();
+    }
+
+    public static void invokestaticInlined() {
+        SomeClass.inlinedMethod();
+    }
+
     private void test(String name, int initNodesAfterParse, int initNodesAfterOpt) {
         StructuredGraph graph = parseEager(name, AllowAssumptions.NO);
         Assert.assertEquals(initNodesAfterParse, graph.getNodes().filter(InitializeKlassNode.class).count());
@@ -190,5 +210,15 @@ public class EliminateRedundantInitializationPhaseTest extends GraalCompilerTest
     @Test
     public void test10() {
         test("assignFieldsInBranchesMixed", 3, 2);
+    }
+
+    @Test
+    public void test11() {
+        test("invokestatic", 1, 0);
+    }
+
+    @Test
+    public void test12() {
+        test("invokestaticInlined", 1, 1);
     }
 }

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -546,5 +548,20 @@ class TestProtectedAssembler extends AArch64Assembler {
     @Override
     public void ensureUniquePC() {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void cnt(int size, Register dst, Register src) {
+        super.cnt(size, dst, src);
+    }
+
+    @Override
+    public void addv(int size, SIMDElementSize laneWidth, Register dst, Register src) {
+        super.addv(size, laneWidth, dst, src);
+    }
+
+    @Override
+    public void umov(int size, Register dst, int srcIdx, Register src) {
+        super.umov(size, dst, srcIdx, src);
     }
 }

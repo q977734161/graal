@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.graalvm.util.GuardedAnnotationAccess;
 import com.oracle.graal.pointsto.api.DefaultUnsafePartition;
 import com.oracle.graal.pointsto.api.HostVM;
 import com.oracle.graal.pointsto.api.PointstoOptions;
@@ -42,6 +45,7 @@ import com.oracle.graal.pointsto.typestate.TypeState;
 
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class AnalysisField implements ResolvedJavaField {
 
@@ -85,21 +89,21 @@ public class AnalysisField implements ResolvedJavaField {
     private final AnalysisType declaringClass;
     private final AnalysisType fieldType;
 
-    public AnalysisField(AnalysisUniverse universe, ResolvedJavaField wrapped) {
-        assert !wrapped.isInternal();
+    public AnalysisField(AnalysisUniverse universe, ResolvedJavaField wrappedField) {
+        assert !wrappedField.isInternal();
 
         this.position = -1;
         this.isUnsafeAccessed = new AtomicBoolean();
         this.unsafeFrozenTypeState = new AtomicBoolean();
 
-        this.wrapped = wrapped;
+        this.wrapped = wrappedField;
         this.id = universe.nextFieldId.getAndIncrement();
 
-        readBy = PointstoOptions.TrackAccessChain.getValue(universe.getHostVM().options()) ? new ConcurrentHashMap<>() : null;
+        readBy = PointstoOptions.TrackAccessChain.getValue(universe.hostVM().options()) ? new ConcurrentHashMap<>() : null;
         writtenBy = new ConcurrentHashMap<>();
 
-        declaringClass = universe.lookup(wrapped.getDeclaringClass());
-        fieldType = universe.lookup(wrapped.getType().resolve(universe.substitutions.resolve(wrapped.getDeclaringClass())));
+        declaringClass = universe.lookup(wrappedField.getDeclaringClass());
+        fieldType = getDeclaredType(universe, wrappedField);
 
         isUsedInComparison = false;
 
@@ -112,6 +116,21 @@ public class AnalysisField implements ResolvedJavaField {
             this.instanceFieldFlow = new FieldSinkTypeFlow(this, getType());
             this.initialInstanceFieldFlow = new FieldTypeFlow(this, getType());
         }
+    }
+
+    private static AnalysisType getDeclaredType(AnalysisUniverse universe, ResolvedJavaField wrappedField) {
+        ResolvedJavaType resolvedType;
+        try {
+            resolvedType = wrappedField.getType().resolve(universe.substitutions.resolve(wrappedField.getDeclaringClass()));
+        } catch (NoClassDefFoundError e) {
+            /*
+             * Type resolution fails if the declared type is missing. Just erase the type by
+             * returning the Object type.
+             */
+            return universe.objectType();
+        }
+
+        return universe.lookup(resolvedType);
     }
 
     public void copyAccessInfos(AnalysisField other) {
@@ -326,7 +345,7 @@ public class AnalysisField implements ResolvedJavaField {
     }
 
     public int getPosition() {
-        assert position != -1;
+        assert position != -1 : this;
         return position;
     }
 
@@ -338,6 +357,11 @@ public class AnalysisField implements ResolvedJavaField {
     @Override
     public int getModifiers() {
         return wrapped.getModifiers();
+    }
+
+    @Override
+    public int getOffset() {
+        return wrapped.getOffset();
     }
 
     @Override
@@ -362,17 +386,17 @@ public class AnalysisField implements ResolvedJavaField {
 
     @Override
     public Annotation[] getAnnotations() {
-        return wrapped.getAnnotations();
+        return GuardedAnnotationAccess.getAnnotations(wrapped);
     }
 
     @Override
     public Annotation[] getDeclaredAnnotations() {
-        return wrapped.getDeclaredAnnotations();
+        return GuardedAnnotationAccess.getDeclaredAnnotations(wrapped);
     }
 
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return wrapped.getAnnotation(annotationClass);
+        return GuardedAnnotationAccess.getAnnotation(wrapped, annotationClass);
     }
 
     @Override

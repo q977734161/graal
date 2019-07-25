@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package org.graalvm.compiler.hotspot.stubs;
 
+import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfig.INJECTED_OPTIONVALUES;
 import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfig.INJECTED_VMCONFIG;
 import static org.graalvm.compiler.hotspot.nodes.JumpToExceptionHandlerInCallerNode.jumpToExceptionHandlerInCaller;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.registerAsWord;
@@ -75,14 +78,13 @@ public class UnwindExceptionToCallerStub extends SnippetStub {
         if (index == 2) {
             return providers.getRegisters().getThreadRegister();
         }
-        assert index == 3;
-        return options;
+        throw new InternalError();
     }
 
     @Snippet
-    private static void unwindExceptionToCaller(Object exception, Word returnAddress, @ConstantParameter Register threadRegister, @ConstantParameter OptionValues options) {
+    private static void unwindExceptionToCaller(Object exception, Word returnAddress, @ConstantParameter Register threadRegister) {
         Pointer exceptionOop = Word.objectToTrackedPointer(exception);
-        if (logging(options)) {
+        if (logging(INJECTED_OPTIONVALUES)) {
             printf("unwinding exception %p (", exceptionOop.rawValue());
             decipher(exceptionOop.rawValue());
             printf(") at %p (", returnAddress.rawValue());
@@ -95,7 +97,7 @@ public class UnwindExceptionToCallerStub extends SnippetStub {
 
         Word handlerInCallerPc = exceptionHandlerForReturnAddress(EXCEPTION_HANDLER_FOR_RETURN_ADDRESS, thread, returnAddress);
 
-        if (logging(options)) {
+        if (logging(INJECTED_OPTIONVALUES)) {
             printf("handler for exception %p at return address %p is at %p (", exceptionOop.rawValue(), returnAddress.rawValue(), handlerInCallerPc.rawValue());
             decipher(handlerInCallerPc.rawValue());
             printf(")\n");
@@ -105,7 +107,7 @@ public class UnwindExceptionToCallerStub extends SnippetStub {
     }
 
     @Fold
-    static boolean logging(OptionValues options) {
+    static boolean logging(@Fold.InjectedParameter OptionValues options) {
         return StubOptions.TraceUnwindStub.getValue(options);
     }
 

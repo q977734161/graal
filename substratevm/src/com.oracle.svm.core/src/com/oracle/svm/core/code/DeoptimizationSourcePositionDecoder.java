@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,10 +24,14 @@
  */
 package com.oracle.svm.core.code;
 
-import org.graalvm.compiler.core.common.util.UnsafeArrayTypeReader;
 import org.graalvm.compiler.graph.NodeSourcePosition;
+import org.graalvm.nativeimage.c.function.CodePointer;
 
-import com.oracle.svm.core.util.ByteArrayReader;
+import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.c.NonmovableArray;
+import com.oracle.svm.core.c.NonmovableArrays;
+import com.oracle.svm.core.c.NonmovableObjectArray;
+import com.oracle.svm.core.util.NonmovableByteArrayTypeReader;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -34,37 +40,46 @@ public class DeoptimizationSourcePositionDecoder {
     static final int NO_SOURCE_POSITION = -1;
     static final int NO_CALLER = 0;
 
-    public static NodeSourcePosition decode(int deoptId, CodeInfoQueryResult codeInfo) {
-        if (!(codeInfo.data instanceof RuntimeMethodInfo)) {
-            /*
-             * We only store the information for runtime compiled code, not for native image code.
-             */
+    @Uninterruptible(reason = "Prevent invalidation of code while in this method.")
+    public static NodeSourcePosition decode(int deoptId, CodePointer ip) {
+        CodeInfo info = CodeInfoTable.lookupCodeInfo(ip);
+        if (info.isNull() || info.equal(CodeInfoTable.getImageCodeInfo())) {
+            /* We only have information for runtime compiled code, not for native image code. */
             return null;
         }
-        RuntimeMethodInfo methodInfo = (RuntimeMethodInfo) codeInfo.data;
-
-        return decode(deoptId, methodInfo.deoptimizationStartOffsets, methodInfo.deoptimizationEncodings, methodInfo.deoptimizationObjectConstants);
+        Object tether = CodeInfoAccess.acquireTether(info);
+        try {
+            return decode0(deoptId, info);
+        } finally {
+            CodeInfoAccess.releaseTether(info, tether);
+        }
     }
 
-    static NodeSourcePosition decode(int deoptId, int[] deoptimizationStartOffsets, byte[] deoptimizationEncodings, Object[] deoptimizationObjectConstants) {
-        if (deoptId < 0 || deoptId >= deoptimizationStartOffsets.length) {
+    @Uninterruptible(reason = "Wrap the now safe call to interruptibly decode the source position.", calleeMustBe = false)
+    private static NodeSourcePosition decode0(int deoptId, CodeInfo info) {
+        return decode(deoptId, CodeInfoAccess.getDeoptimizationStartOffsets(info), CodeInfoAccess.getDeoptimizationEncodings(info), CodeInfoAccess.getDeoptimizationObjectConstants(info));
+    }
+
+    static NodeSourcePosition decode(int deoptId, NonmovableArray<Integer> deoptimizationStartOffsets,
+                    NonmovableArray<Byte> deoptimizationEncodings, NonmovableObjectArray<Object> deoptimizationObjectConstants) {
+        if (deoptId < 0 || deoptId >= NonmovableArrays.lengthOf(deoptimizationStartOffsets)) {
             return null;
         }
 
-        int startOffset = deoptimizationStartOffsets[deoptId];
+        int startOffset = NonmovableArrays.getInt(deoptimizationStartOffsets, deoptId);
         if (startOffset == NO_SOURCE_POSITION) {
             return null;
         }
 
-        UnsafeArrayTypeReader readBuffer = UnsafeArrayTypeReader.create(deoptimizationEncodings, 0, ByteArrayReader.supportsUnalignedMemoryAccess());
+        NonmovableByteArrayTypeReader readBuffer = new NonmovableByteArrayTypeReader(deoptimizationEncodings, 0);
         return decodeSourcePosition(startOffset, deoptimizationObjectConstants, readBuffer);
     }
 
-    private static NodeSourcePosition decodeSourcePosition(long startOffset, Object[] deoptimizationObjectConstants, UnsafeArrayTypeReader readBuffer) {
+    private static NodeSourcePosition decodeSourcePosition(long startOffset, NonmovableObjectArray<Object> deoptimizationObjectConstants, NonmovableByteArrayTypeReader readBuffer) {
         readBuffer.setByteIndex(startOffset);
         long callerRelativeOffset = readBuffer.getUV();
         int bci = readBuffer.getSVInt();
-        ResolvedJavaMethod method = (ResolvedJavaMethod) deoptimizationObjectConstants[readBuffer.getUVInt()];
+        ResolvedJavaMethod method = (ResolvedJavaMethod) NonmovableArrays.getObject(deoptimizationObjectConstants, readBuffer.getUVInt());
 
         NodeSourcePosition caller = null;
         if (callerRelativeOffset != NO_CALLER) {

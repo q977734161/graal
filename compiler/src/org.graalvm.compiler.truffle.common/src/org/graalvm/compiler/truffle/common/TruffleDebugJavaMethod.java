@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,9 +24,6 @@
  */
 package org.graalvm.compiler.truffle.common;
 
-import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.JavaMethodContext;
-
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.JavaType;
@@ -33,9 +32,9 @@ import jdk.vm.ci.meta.Signature;
 
 /**
  * Enables a Truffle compilable to masquerade as a {@link JavaMethod} for use as a context value in
- * {@linkplain DebugContext#scope(Object) debug scopes}.
+ * debug scopes.
  */
-public class TruffleDebugJavaMethod implements JavaMethod, JavaMethodContext {
+public class TruffleDebugJavaMethod implements JavaMethod {
     private final CompilableTruffleAST compilable;
 
     private static final JavaType declaringClass = new JavaType() {
@@ -98,6 +97,10 @@ public class TruffleDebugJavaMethod implements JavaMethod, JavaMethodContext {
         this.compilable = compilable;
     }
 
+    public CompilableTruffleAST getCompilable() {
+        return compilable;
+    }
+
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof TruffleDebugJavaMethod) {
@@ -130,10 +133,5 @@ public class TruffleDebugJavaMethod implements JavaMethod, JavaMethodContext {
     @Override
     public String toString() {
         return format("Truffle<%n(%p)>");
-    }
-
-    @Override
-    public JavaMethod asJavaMethod() {
-        return this;
     }
 }

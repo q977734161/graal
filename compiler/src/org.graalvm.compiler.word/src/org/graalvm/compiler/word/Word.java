@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,7 @@
  */
 package org.graalvm.compiler.word;
 
-import static org.graalvm.compiler.word.UnsafeAccess.UNSAFE;
+import static org.graalvm.compiler.serviceprovider.GraalUnsafeAccess.getUnsafe;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -57,7 +59,11 @@ import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 import org.graalvm.word.impl.WordBoxFactory;
 
+import sun.misc.Unsafe;
+
 public abstract class Word implements SignedWord, UnsignedWord, Pointer {
+
+    private static final Unsafe UNSAFE = getUnsafe();
 
     static {
         BoxFactoryImpl.initialize();
@@ -88,6 +94,7 @@ public abstract class Word implements SignedWord, UnsignedWord, Pointer {
      */
     public enum Opcode {
         NODE_CLASS,
+        NODE_CLASS_WITH_GUARD,
         COMPARISON,
         IS_NULL,
         IS_NON_NULL,
@@ -248,69 +255,69 @@ public abstract class Word implements SignedWord, UnsignedWord, Pointer {
     }
 
     @Override
-    @Operation(node = SignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedDivNode.class)
     public Word signedDivide(SignedWord val) {
         return signedDivide((Word) val);
     }
 
     @Override
-    @Operation(node = SignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedDivNode.class)
     public Word signedDivide(int val) {
         return signedDivide(intParam(val));
     }
 
-    @Operation(node = SignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedDivNode.class)
     public Word signedDivide(Word val) {
         return box(unbox() / val.unbox());
     }
 
     @Override
-    @Operation(node = UnsignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedDivNode.class)
     public Word unsignedDivide(UnsignedWord val) {
         return unsignedDivide((Word) val);
     }
 
     @Override
-    @Operation(node = UnsignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedDivNode.class)
     public Word unsignedDivide(int val) {
         return signedDivide(intParam(val));
     }
 
-    @Operation(node = UnsignedDivNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedDivNode.class)
     public Word unsignedDivide(Word val) {
         return box(Long.divideUnsigned(unbox(), val.unbox()));
     }
 
     @Override
-    @Operation(node = SignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedRemNode.class)
     public Word signedRemainder(SignedWord val) {
         return signedRemainder((Word) val);
     }
 
     @Override
-    @Operation(node = SignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedRemNode.class)
     public Word signedRemainder(int val) {
         return signedRemainder(intParam(val));
     }
 
-    @Operation(node = SignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = SignedRemNode.class)
     public Word signedRemainder(Word val) {
         return box(unbox() % val.unbox());
     }
 
     @Override
-    @Operation(node = UnsignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedRemNode.class)
     public Word unsignedRemainder(UnsignedWord val) {
         return unsignedRemainder((Word) val);
     }
 
     @Override
-    @Operation(node = UnsignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedRemNode.class)
     public Word unsignedRemainder(int val) {
         return signedRemainder(intParam(val));
     }
 
-    @Operation(node = UnsignedRemNode.class)
+    @Operation(opcode = Opcode.NODE_CLASS_WITH_GUARD, node = UnsignedRemNode.class)
     public Word unsignedRemainder(Word val) {
         return box(Long.remainderUnsigned(unbox(), val.unbox()));
     }

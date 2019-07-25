@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,7 @@ import com.oracle.svm.core.heap.FeebleReferenceList;
 import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.util.VMError;
 
 public class DiscoverableReferenceProcessing {
 
@@ -40,17 +43,29 @@ public class DiscoverableReferenceProcessing {
      * Public methods for collectors.
      */
     public static void discoverDiscoverableReference(Object object) {
-        final Log trace = Log.noopLog();
-        /* TODO: What's the cost of this type test, since o will be a concrete subtype? */
-        Object obj = KnownIntrinsics.convertUnknownValue(object, Object.class);
+        final Object obj = KnownIntrinsics.convertUnknownValue(object, Object.class);
+        /* TODO: What's the cost of this type test, since it will be a concrete subtype? */
         if (obj instanceof DiscoverableReference) {
-            /* Add this DiscoverableReference to the discovered list. */
+            final Log trace = Log.noopLog().string("[DiscoverableReference.discoverDiscoverableReference:");
             final DiscoverableReference dr = (DiscoverableReference) obj;
-            trace.string("[DiscoverableReference.discoverDiscoverableReference:");
-            trace.string("  dr: ").object(dr).string("  referent: ").hex(DiscoverableReference.TestingBackDoor.getReferentPointer(dr)).string("]").newline();
-            addToDiscoveredReferences(dr);
+            trace.string("  dr: ").object(dr);
+            /*
+             * If the DiscoverableReference has been allocated but not initialized, do not do
+             * anything with it. The referent will be strongly-reachable because it is on the call
+             * stack to the constructor so the DiscoveredReference does not need to be put on the
+             * discovered list.
+             */
+            if (dr.isDiscoverableReferenceInitialized()) {
+                /* Add this DiscoverableReference to the discovered list. */
+                if (trace.isEnabled()) {
+                    trace.string("  referent: ").hex(DiscoverableReference.TestingBackDoor.getReferentPointer(dr));
+                }
+                addToDiscoveredReferences(dr);
+            } else {
+                trace.string("  uninitialized");
+            }
+            trace.string("]").newline();
         }
-
     }
 
     /** The first element of the discovered list, or null. */
@@ -101,11 +116,11 @@ public class DiscoverableReferenceProcessing {
              * about looking through the referent field.
              */
             if (!processReferent(current)) {
-                /* The referent isn't live: put it on the new list. */
+                /* The referent will not survive the collection: put it on the new list. */
                 trace.string("  unpromoted current: ").object(current).newline();
                 newList = current.prependToDiscoveredReference(newList);
             } else {
-                /* Referent did get promoted: don't add it to the new list. */
+                /* Referent will survive the collection: don't add it to the new list. */
                 trace.string("  promoted current: ").object(current).newline();
             }
         }
@@ -113,7 +128,11 @@ public class DiscoverableReferenceProcessing {
         trace.string("]").newline();
     }
 
-    /** Determine if a referent is live, and adjust it as necessary. */
+    /**
+     * Determine if a referent is live, and adjust it as necessary.
+     *
+     * Returns true if the referent will survive the collection, false otherwise.
+     */
     private static boolean processReferent(DiscoverableReference dr) {
         final Log trace = Log.noopLog().string("[DiscoverableReference.processReferent:").string("  this: ").object(dr);
         final Pointer refPointer = dr.getReferentPointer();
@@ -128,7 +147,7 @@ public class DiscoverableReferenceProcessing {
         /* It might be a forwarding pointer. */
         if (ObjectHeaderImpl.getObjectHeaderImpl().isForwardedHeader(header)) {
             /* If the referent got forwarded, then update the referent. */
-            final Pointer forwardedPointer = ObjectHeaderImpl.getObjectHeaderImpl().getForwardingPointer(header);
+            final Pointer forwardedPointer = ObjectHeaderImpl.getObjectHeaderImpl().getForwardingPointer(refPointer);
             dr.setReferentPointer(forwardedPointer);
             trace.string("  forwarded header: updated referent: ").hex(forwardedPointer).string("]").newline();
             return true;
@@ -190,22 +209,19 @@ public class DiscoverableReferenceProcessing {
         final boolean refYoung = (!refNull) && youngGen.slowlyFindPointer(refPointer);
         final boolean refOldFrom = (!refNull) && oldGen.slowlyFindPointerInFromSpace(refPointer);
         final boolean refOldTo = (!refNull) && oldGen.slowlyFindPointerInToSpace(refPointer);
-        final boolean refOldPinnedFrom = (!refNull) && oldGen.slowlyFindPointerInPinnedFromSpace(refPointer);
-        final boolean refOldPinnedTo = (!refNull) && oldGen.slowlyFindPointerInPinnedToSpace(refPointer);
         /* The referent might already have survived, or might not have. */
-        if (!(refNull || refYoung || refBootImage || refOldFrom || refOldPinnedFrom)) {
+        if (!(refNull || refYoung || refBootImage || refOldFrom)) {
             final Log witness = Log.log();
             witness.string("[DiscoverableReference.verify:");
             witness.string("  epoch: ").unsigned(HeapImpl.getHeapImpl().getGCImpl().getCollectionEpoch());
             witness.string("  refBootImage: ").bool(refBootImage);
             witness.string("  refYoung: ").bool(refYoung);
             witness.string("  refOldFrom: ").bool(refOldFrom);
-            witness.string("  refOldPinnedFrom: ").bool(refOldPinnedFrom);
             witness.string("  referent should be in heap.");
             witness.string("]").newline();
             return false;
         }
-        assert (!(refOldTo || refOldPinnedTo)) : "referent should be in the heap.";
+        assert !refOldTo : "referent should be in the heap.";
         return true;
     }
 
@@ -219,27 +235,46 @@ public class DiscoverableReferenceProcessing {
 
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate during a collection.")
         static void distributeReferences() {
-            final Log trace = Log.noopLog().string("[FeebleReferenceScatterer.distributeReferences:").newline();
+            final Log trace = Log.noopLog().string("[DiscoverableReferenceProcessing.Scatterer.distributeReferences:").newline();
             /*
              * Walk down the discovered references looking for FeebleReferences, and put them on
-             * their lists.
+             * their lists, if any.
              */
             for (DiscoverableReference dr = DiscoverableReferenceProcessing.getDiscoveredList(); dr != null; dr = dr.getNextDiscoverableReference()) {
                 trace.string("  dr: ").object(dr).newline();
-                if (dr instanceof FeebleReference) {
+                if (dr instanceof FeebleReference<?>) {
                     final FeebleReference<?> fr = (FeebleReference<?>) dr;
                     /*
-                     * Policy choice: This clears the FeebleReference's list field when it pushes
-                     * the FeebleReference list onto the list. That means that a FeebleReference
-                     * will only be put on its list once, rather than each time it is discovered.
+                     * For GR-14335: Rather than getting a NullPointerException, print out some
+                     * values.
                      */
-                    final FeebleReferenceList<?> frList = fr.getList();
-                    fr.clearList();
-                    if (frList != null) {
-                        trace.string("  frList: ").object(frList).newline();
-                        frList.push(fr);
+                    if (fr.hasList()) {
+                        final FeebleReferenceList<?> frList = fr.getList();
+                        if (frList != null) {
+                            trace.string("  frList: ").object(frList).newline();
+                            frList.push(fr);
+                        } else {
+                            trace.string("  frList is null").newline();
+                        }
                     } else {
-                        trace.string("  frList is null").newline();
+                        /*
+                         * GR-14335: The DiscoverableReference should be initialized, but the
+                         * FeebleReference has an `AtomicReference list` field containing `null`,
+                         * not even a list field that points to a `null`. This should not be
+                         * possible, but I see it when the VM crashes. Before crashing the VM print
+                         * out some values.
+                         */
+                        final Log failureLog = Log.log().string("[DiscoverableReferenceProcessing.Scatterer.distributeReferences:").indent(true);
+                        failureLog.string("  dr: ").object(dr)
+                                        .string("  .referent (should be null): ").hex(dr.getReferentPointer())
+                                        .string("  .isDiscovered (should be true): ").bool(dr.getIsDiscovered())
+                                        .string("  .isDiscoverableReferenceInitialized (should be true): ").bool(dr.isDiscoverableReferenceInitialized())
+                                        .newline();
+                        failureLog.string("  fr: ").object(fr)
+                                        .string("  .isFeebleReferenceInitialized (should be true): ").bool(fr.isFeeblReferenceInitialized())
+                                        .string("  .hasList (should be true): ").bool(fr.hasList());
+                        failureLog.string("]").indent(false);
+                        throw VMError.shouldNotReachHere("DiscoverableReferenceProcessing.Scatterer.distributeReferences: FeebleReference with null list");
                     }
                 }
             }

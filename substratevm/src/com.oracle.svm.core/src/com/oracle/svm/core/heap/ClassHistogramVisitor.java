@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -68,13 +70,6 @@ public class ClassHistogramVisitor implements ObjectVisitor {
      */
 
     @Override
-    /** Clear all the counters. */
-    public boolean prologue() {
-        reset();
-        return true;
-    }
-
-    @Override
     /** Accumulate information about this instance. */
     public boolean visitObject(Object o) {
         final HistogramEntry entry = findEntry(o.getClass().getName());
@@ -91,6 +86,13 @@ public class ClassHistogramVisitor implements ObjectVisitor {
     /*
      * Additional methods.
      */
+
+    public void prologue() {
+        reset();
+    }
+
+    public void epilogue() {
+    }
 
     private HistogramEntry findEntry(String s) {
         for (int index = 0; index < entryArray.length; index += 1) {

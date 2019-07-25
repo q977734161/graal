@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,15 +32,14 @@ import java.util.Arrays;
 import java.util.function.BooleanSupplier;
 
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
+import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.RuntimeReflection;
+import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
-
-import jdk.vm.ci.meta.MetaAccessProvider;
 
 // Checkstyle: resume
 @AutomaticFeature
@@ -64,7 +65,7 @@ public class ScalaFeature implements GraalFeature {
     }
 
     @Override
-    public void registerNodePlugins(MetaAccessProvider metaAccess, Plugins plugins, boolean analysis, boolean hosted) {
+    public void registerGraphBuilderPlugins(Providers providers, Plugins plugins, boolean analysis, boolean hosted) {
         if (hosted && analysis) {
             plugins.appendNodePlugin(new ScalaAnalysisPlugin());
         }

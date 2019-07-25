@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,10 +37,6 @@ public abstract class DebuggerDomain extends Domain {
 
     protected DebuggerDomain() {
     }
-
-    public abstract void enable();
-
-    public abstract void disable();
 
     public abstract void setAsyncCallStackDepth(int maxDepth);
 
@@ -81,6 +77,8 @@ public abstract class DebuggerDomain extends Domain {
     public abstract Params restartFrame(long cmdId, String callFrameId, CommandPostProcessor postProcessor) throws CommandProcessException;
 
     public abstract void setVariableValue(int scopeNumber, String variableName, CallArgument newValue, String callFrameId) throws CommandProcessException;
+
+    public abstract void setReturnValue(CallArgument newValue) throws CommandProcessException;
 
     protected final void resumed() {
         eventHandler.event(new Event("Debugger.resumer", null));

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,10 +24,11 @@
  */
 package com.oracle.svm.hosted.meta;
 
+import org.graalvm.compiler.word.WordTypes;
 import org.graalvm.word.WordBase;
 
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.amd64.FrameAccess;
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.graal.meta.SubstrateSnippetReflectionProvider;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
@@ -39,7 +42,8 @@ public class HostedSnippetReflectionProvider extends SubstrateSnippetReflectionP
 
     private final SVMHost hostVM;
 
-    public HostedSnippetReflectionProvider(SVMHost hostVM) {
+    public HostedSnippetReflectionProvider(SVMHost hostVM, WordTypes wordTypes) {
+        super(wordTypes);
         this.hostVM = hostVM;
     }
 
@@ -53,7 +57,7 @@ public class HostedSnippetReflectionProvider extends SubstrateSnippetReflectionP
 
     @Override
     public <T> T asObject(Class<T> type, JavaConstant constant) {
-        if (type == Class.class && constant instanceof SubstrateObjectConstant) {
+        if ((type == Class.class || type == Object.class) && constant instanceof SubstrateObjectConstant) {
             Object objectValue = SubstrateObjectConstant.asObject(constant);
             if (objectValue instanceof DynamicHub) {
                 return type.cast(interceptClass((DynamicHub) objectValue));

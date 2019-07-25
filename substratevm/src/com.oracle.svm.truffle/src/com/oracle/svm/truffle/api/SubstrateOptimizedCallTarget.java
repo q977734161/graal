@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,11 +26,15 @@ package com.oracle.svm.truffle.api;
 
 import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
+import org.graalvm.compiler.truffle.common.TruffleCompiler;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.InvokeJavaFunctionPointer;
+import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.deopt.SubstrateSpeculationLog;
@@ -36,6 +42,7 @@ import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.truffle.api.nodes.RootNode;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.SpeculationLog;
 
 public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements SubstrateInstalledCode, OptimizedAssumptionDependency {
 
@@ -52,6 +59,11 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
     }
 
     @Override
+    public SpeculationLog getCompilationSpeculationLog() {
+        return getSpeculationLog();
+    }
+
+    @Override
     public void invalidate() {
         invalidate(null, null);
     }
@@ -62,13 +74,28 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
     }
 
     @Override
-    protected void invalidateCode() {
+    public void invalidateCode() {
         CodeInfoTable.invalidateInstalledCode(this);
     }
 
     @Override
     public boolean isValid() {
         return address != 0;
+    }
+
+    @Override
+    public boolean isValidLastTier() {
+        long address0 = getAddress();
+        return (address0 != 0) && isValidLastTier0(address0);
+    }
+
+    @Uninterruptible(reason = "Prevent invalidation of code while in this method.")
+    private static boolean isValidLastTier0(long address0) {
+        CodeInfo codeInfo = CodeInfoTable.lookupCodeInfo(WordFactory.pointer(address0));
+        if (codeInfo.isNonNull() && codeInfo.notEqual(CodeInfoTable.getImageCodeInfo())) {
+            return CodeInfoAccess.getTier(codeInfo) == TruffleCompiler.LAST_TIER_INDEX;
+        }
+        return false;
     }
 
     @Override
@@ -81,9 +108,6 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
         return getAddress();
     }
 
-    /**
-     * @param method
-     */
     @Override
     public void setAddress(long address, ResolvedJavaMethod method) {
         this.address = address;

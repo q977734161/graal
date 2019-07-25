@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,13 +33,14 @@ import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport.NativeLibrary;
 
@@ -86,11 +89,6 @@ public final class NativeLibrarySupport {
     }
 
     public void loadLibrary(String name, boolean isAbsolute) {
-        if (paths == null) {
-            String[] tokens = System.getProperty("java.library.path", "").split(File.pathSeparator);
-            paths = Arrays.stream(tokens).map(t -> t.isEmpty() ? "." : t).toArray(String[]::new);
-        }
-
         if (isAbsolute) {
             if (loadLibrary0(new File(name), false)) {
                 return;
@@ -102,6 +100,10 @@ public final class NativeLibrarySupport {
             return;
         }
         String libname = System.mapLibraryName(name);
+        if (paths == null) {
+            String[] tokens = SubstrateUtil.split(System.getProperty("java.library.path", ""), File.pathSeparator);
+            paths = Arrays.stream(tokens).map(t -> t.isEmpty() ? "." : t).toArray(String[]::new);
+        }
         for (String path : paths) {
             File libpath = new File(path, libname);
             if (loadLibrary0(libpath, false)) {
@@ -143,7 +145,9 @@ public final class NativeLibrarySupport {
             NativeLibrary lib = PlatformNativeLibrarySupport.singleton().createLibrary(canonical, asBuiltin);
             currentLoadContext.push(lib);
             try {
-                lib.load();
+                if (!lib.load()) {
+                    return false;
+                }
                 if (libraryInitializer != null) {
                     libraryInitializer.initialize(lib);
                 }

@@ -1,19 +1,16 @@
 # overlay version
-overlay = 6ddf46f87d7f961a9a823b544c481daa1cb1407e
+overlay = 24a9cd249544a2c8b61e225aa1f02c85db569fc4
 
 # oraclejdk* are released OracleJDK binaries
-# labsjdk* are JDKs based on OracleJDK binaries
-# openjdk* are JDKs based on OpenJDK binaries
+# oraclejdk* are JDKs based on OracleJDK binaries
+# openjdk8 JDKs on Linux are built by Oracle Labs
+# openjdk8 JDKs on macOS are based on AdoptOpenJDK binaries
 jdks: {
-  labsjdk8 : {name : labsjdk, version : "8u171-jvmci-0.43", platformspecific: true}
-  labsjdk8Debug : {name : labsjdk, version : "8u171-jvmci-0.43-fastdebug", platformspecific: true}
-  oraclejdk9 : {name : oraclejdk, version : "9.0.4+11", platformspecific: true}
-  oraclejdk10 : {name : oraclejdk, version : "10+46", platformspecific: true}
-
-  # Snapshot of http://hg.openjdk.java.net/jdk/jdk
-  oraclejdkSNAPSHOT : {name : labsjdk, version : "20180522-073957", platformspecific: true}
-
-  openjdk8 : {name : openjdk, version : "8u171-jvmci-0.43", platformspecific: true}
+  oraclejdk8:      {name : oraclejdk, version : "8u221-jvmci-19.2-b02", platformspecific: true}
+  openjdk8:        {name : openjdk,   version : "8u222-jvmci-19.2-b02", platformspecific: true}
+  oraclejdk8Debug: {name : oraclejdk, version : "8u221-jvmci-19.2-b02-fastdebug", platformspecific: true}
+  oraclejdk11:     {name : oraclejdk, version : "11.0.3+12", platformspecific: true}
+  openjdk11:       {name : openjdk,   version : "11.0.3+7", platformspecific: true}
 }
 
 # This must always point to HEAD in the master branch but can be used to point
@@ -24,28 +21,37 @@ mx : {
   }
 }
 
-labsjdk8 :      { downloads : { JAVA_HOME : ${jdks.labsjdk8},      EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk9} ]} }}
-labsjdk8Debug : { downloads : { JAVA_HOME : ${jdks.labsjdk8Debug}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk9} ]} }}
+download-hsdis : {
+  setup : [
+    ["mx", "hsdis", "||", "true"]
+  ]
+}
+
+oraclejdk8 :      { downloads : { JAVA_HOME : ${jdks.oraclejdk8},      EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
+oraclejdk8Debug : { downloads : { JAVA_HOME : ${jdks.oraclejdk8Debug}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
 
 openjdk8 :        { downloads : { JAVA_HOME : ${jdks.openjdk8} }}
 
-oraclejdk9 :      { downloads : { JAVA_HOME : ${jdks.oraclejdk9},        EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk8} ]} }}
-oraclejdk10 :     { downloads : { JAVA_HOME : ${jdks.oraclejdk10},       EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk8}, ${jdks.oraclejdk9} ]} }}
-oraclejdk11 :     { downloads : { JAVA_HOME : ${jdks.oraclejdkSNAPSHOT}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk8}, ${jdks.oraclejdk10} ]} }}
+oraclejdk11 :     { downloads : { JAVA_HOME : ${jdks.oraclejdk11} }}
+openjdk11 :       { downloads : { JAVA_HOME : ${jdks.openjdk11} }}
 
 common : ${mx} {
   timelimit : "30:00"
   catch_files : [
     "Graal diagnostic output saved in (?P<filename>.+\.zip)"
   ]
+  packages : {
+    "pip:astroid" : "==1.1.0"
+    "pip:pylint" : "==1.1.0"
+    "pip:ninja_syntax" : "==1.7.2"
+  }
 }
 
 linux : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
+    "apache/ant": ">=1.9.4"
   }
 }
 
@@ -53,19 +59,14 @@ solaris : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
+    "apache/ant": ">=1.9.4"
   }
 }
 
 darwin : ${common} {
-  packages : {
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
-  }
-  environment : {
-    PATH : "/usr/local/bin:$PATH"
-  }
+}
+
+windows : ${common} {
 }
 
 linux-amd64 : ${linux} {
@@ -73,7 +74,11 @@ linux-amd64 : ${linux} {
 }
 
 darwin-amd64 : ${darwin} {
-  capabilities : [darwin_next, amd64]
+  capabilities : [darwin, amd64]
+}
+
+windows-amd64 : ${windows} {
+  capabilities : [windows, amd64]
 }
 
 solaris-sparcv9 : ${solaris} {
@@ -87,6 +92,10 @@ linux-sparcv9 : ${linux} {
 linux-aarch64 : ${linux} {
   capabilities : [linux, aarch64]
 }
+
+DEFAULT_HEAP_SIZE : "8G"
+LARGE_HEAP_SIZE : "31G"
+LARGE_YOUNG_GEN_SIZE : "27G"
 
 eclipse : {
   downloads : {
@@ -104,7 +113,7 @@ jdt : {
 }
 
 # for cases where a maven package is not easily accessible
-maven-download-unix : ${labsjdk8} {
+maven-download-unix : {
   downloads : {
     MAVEN_HOME: {name: maven, version: "3.3.9", platformspecific: false}
   }
@@ -127,29 +136,13 @@ darwin-deploy : ${darwin} ${maven-download-unix} {
   }
 }
 
-deploy-binaries : ${labsjdk8} {
-  targets : [post-merge, deploy]
-  run : [
-    ["mx", "--strict-compliance", "build"]
-    ["mx", "deploy-binary", "--all-suites", "--skip-existing", ${binaries-repository}]
-  ]
-}
-
-maven-deploy-dry-run : ${labsjdk8} {
-  targets : [gate]
-  run : [
-    ["mx", "--strict-compliance", "build"]
-    ["mx", "maven-deploy", "--validate", "full", "--licenses", "GPLv2-CPE,UPL", "--dry-run", "ossrh", "https://this-is-only-a-test"]
-  ]
-}
-
 svm-common: ${mx} {
   environment: {
     DEFAULT_VM: "server"
     LANG: "en_US.UTF-8"
   }
   logs: [
-    "*/native_image_server.log"
+    "../.native-image/*/*/*/*.log"
     "*/svmbuild/*.log"
     "*/svmbuild/images/*.log"
     "*/*/stripped/*.map"
@@ -158,7 +151,18 @@ svm-common: ${mx} {
   ]
 }
 
-svm-common-linux: ${svm-common} ${linux-amd64} {
+svm-common-linux-amd64: ${svm-common} ${linux-amd64} {
+  packages: {
+    make: ">=3.83"
+    gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
+    binutils: ">=2.30"
+    ruby: ">=2.1.0"
+    valgrind: ">=3.9.0"
+  }
+  timelimit: "55:00"
+}
+
+svm-common-linux-aarch64: ${svm-common} ${linux-aarch64} {
   packages: {
     make: ">=3.83"
     gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
@@ -168,25 +172,33 @@ svm-common-linux: ${svm-common} ${linux-amd64} {
   timelimit: "55:00"
 }
 
-svm-capabilities-fast : {
-  capabilities : [linux, amd64, fast]
+# fast is necessary here as slow machines don't handle image builds well
+svm-capabilities: [linux, amd64, fast]
+svm-capabilities-base : {
+  capabilities : ${svm-capabilities}
 }
 
 svm-capabilities-avx2 : {
-  capabilities : [linux, amd64, avx2]
+  capabilities : ${svm-capabilities} [avx2]
 }
 
 svm-capabilities-manycores : {
-  capabilities : [linux, amd64, manycores, fast]
+  capabilities : ${svm-capabilities} [manycores]
 }
 
 svm-common-darwin: ${svm-common} ${darwin-amd64} {
   timelimit: "45:00"
 }
 
-svm-common-sulong: {
-  packages: {
-    llvm: "==3.8"
+svm-common-windows: ${svm-common} ${windows-amd64} {
+  packages : {
+    msvc : "==10.0"
   }
+  timelimit: "45:00"
 }
 
+svm-common-sulong: {
+  packages: {
+    llvm: "==6.0.1"
+  }
+}

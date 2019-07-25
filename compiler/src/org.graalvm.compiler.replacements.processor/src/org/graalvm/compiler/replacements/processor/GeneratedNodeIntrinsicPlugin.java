@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -73,7 +75,7 @@ public abstract class GeneratedNodeIntrinsicPlugin extends GeneratedPlugin {
                 break;
             }
 
-            out.printf("            %s arg%d = %s;\n", param.asType(), idx, deps.use(processor, (DeclaredType) param.asType()));
+            out.printf("        %s arg%d = %s;\n", param.asType(), idx, deps.use(processor, (DeclaredType) param.asType()));
         }
 
         for (int i = 0; i < signature.length; i++, idx++) {
@@ -81,9 +83,9 @@ public abstract class GeneratedNodeIntrinsicPlugin extends GeneratedPlugin {
                 constantArgument(processor, out, deps, idx, signature[i], i);
             } else {
                 if (signature[i].equals(processor.getType(VALUE_NODE_CLASS_NAME))) {
-                    out.printf("            ValueNode arg%d = args[%d];\n", idx, i);
+                    out.printf("        ValueNode arg%d = args[%d];\n", idx, i);
                 } else {
-                    out.printf("            %s arg%d = (%s) args[%d];\n", signature[i], idx, signature[i], i);
+                    out.printf("        %s arg%d = (%s) args[%d];\n", signature[i], idx, signature[i], i);
                 }
             }
         }
@@ -116,7 +118,7 @@ public abstract class GeneratedNodeIntrinsicPlugin extends GeneratedPlugin {
 
         @Override
         protected void factoryCall(AbstractProcessor processor, PrintWriter out, InjectedDependencies deps, int argCount) {
-            out.printf("            %s node = new %s(", constructor.getEnclosingElement(), constructor.getEnclosingElement());
+            out.printf("        %s node = new %s(", constructor.getEnclosingElement(), constructor.getEnclosingElement());
             if (argCount > 0) {
                 out.printf("arg0");
                 for (int i = 1; i < argCount; i++) {
@@ -126,11 +128,11 @@ public abstract class GeneratedNodeIntrinsicPlugin extends GeneratedPlugin {
             out.printf(");\n");
 
             if (intrinsicMethod.getReturnType().getKind() == TypeKind.VOID) {
-                out.printf("            b.add(node);\n");
+                out.printf("        b.add(node);\n");
             } else {
-                out.printf("            b.addPush(JavaKind.%s, node);\n", getReturnKind(intrinsicMethod));
+                out.printf("        b.addPush(JavaKind.%s, node);\n", getReturnKind(intrinsicMethod));
             }
-            out.printf("            return true;\n");
+            out.printf("        return true;\n");
         }
     }
 
@@ -156,7 +158,7 @@ public abstract class GeneratedNodeIntrinsicPlugin extends GeneratedPlugin {
 
         @Override
         protected void factoryCall(AbstractProcessor processor, PrintWriter out, InjectedDependencies deps, int argCount) {
-            out.printf("            return %s.%s(b, targetMethod", customFactory.getEnclosingElement(), customFactory.getSimpleName());
+            out.printf("        return %s.%s(b, targetMethod", customFactory.getEnclosingElement(), customFactory.getSimpleName());
             for (int i = 0; i < argCount; i++) {
                 out.printf(", arg%d", i);
             }

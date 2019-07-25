@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,11 +41,11 @@ import static com.oracle.svm.core.posix.headers.UnistdNoTransitions.sysconf;
 import static org.graalvm.word.WordFactory.nullPointer;
 
 import org.graalvm.compiler.word.Word;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platform.LINUX;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.type.WordPointer;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
@@ -55,16 +57,13 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
-import com.oracle.svm.core.posix.linux.LinuxVirtualMemoryProvider;
 
 @AutomaticFeature
+@Platforms({InternalPlatform.LINUX_AND_JNI.class, InternalPlatform.DARWIN_AND_JNI.class})
 class PosixVirtualMemoryProviderFeature implements Feature {
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        if (!ImageSingletons.contains(VirtualMemoryProvider.class)) {
-            VirtualMemoryProvider provider = Platform.includedIn(LINUX.class) ? new LinuxVirtualMemoryProvider() : new PosixVirtualMemoryProvider();
-            ImageSingletons.add(VirtualMemoryProvider.class, provider);
-        }
+        ImageSingletons.add(VirtualMemoryProvider.class, new PosixVirtualMemoryProvider());
     }
 }
 
@@ -121,7 +120,8 @@ public class PosixVirtualMemoryProvider implements VirtualMemoryProvider {
             flags |= MAP_FIXED();
         }
         int fd = (int) fileHandle.rawValue();
-        return mmap(start, nbytes, accessAsProt(access), flags, fd, offset.rawValue());
+        Pointer result = mmap(start, nbytes, accessAsProt(access), flags, fd, offset.rawValue());
+        return result.notEqual(MAP_FAILED()) ? result : WordFactory.nullPointer();
     }
 
     @Override

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,10 +24,13 @@
  */
 package com.oracle.svm.core.jdk;
 
+//Checkstyle: allow reflection
+
 import java.lang.ref.PhantomReference;
 import java.lang.ref.Reference;
+import java.lang.reflect.Field;
 
-import jdk.vm.ci.meta.MetaAccessProvider;
+import org.graalvm.compiler.api.directives.GraalDirectives;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
@@ -35,11 +40,14 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.CustomFieldValueComputer;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.heap.FeebleReference;
 import com.oracle.svm.core.heap.FeebleReferenceList;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.ReflectionUtil;
 
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 class ReferenceWrapper extends FeebleReference<Object> {
@@ -57,6 +65,9 @@ class ReferenceWrapper extends FeebleReference<Object> {
 
 @Platforms(Platform.HOSTED_ONLY.class)
 class ComputeReferenceValue implements CustomFieldValueComputer {
+
+    private static final Field REFERENT_FIELD = ReflectionUtil.lookupField(Reference.class, "referent");
+
     @Override
     public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
         if (receiver instanceof PhantomReference) {
@@ -64,14 +75,18 @@ class ComputeReferenceValue implements CustomFieldValueComputer {
              * PhantomReference does not allow access to its object, so it is mostly useless to have
              * a PhantomReference on the image heap. But some JDK code uses it, e.g., for marker
              * values, so we cannot disallow PhantomReference for the image heap.
-             *
-             * Some subclasses of PhantomReference override the get() method to throw an error
-             * (instead of the default implementation that returns null), so we need to manually
-             * check that here.
              */
             return null;
         }
-        return ((Reference<?>) receiver).get();
+        try {
+            /*
+             * Some subclasses of Reference overwrite Reference.get() to throw an error. Therefore,
+             * we need to access the field directly using reflection.
+             */
+            return REFERENT_FIELD.get(receiver);
+        } catch (ReflectiveOperationException ex) {
+            throw VMError.shouldNotReachHere(ex);
+        }
     }
 }
 
@@ -118,9 +133,49 @@ final class Target_java_lang_ref_Reference {
     }
 
     @Substitute
+    public boolean enqueue() {
+        if (feeble != null) {
+            final FeebleReferenceList<?> frList = feeble.getList();
+            if (frList != null) {
+                return frList.push(feeble);
+            }
+        }
+        return false;
+    }
+
+    @Substitute
+    public boolean isEnqueued() {
+        if (feeble != null) {
+            return feeble.isEnlisted();
+        }
+        return false;
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     @SuppressWarnings("unused")
     private static boolean tryHandlePending(boolean waitForNotify) {
         throw VMError.unimplemented();
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = JDK11OrLater.class)
+    @SuppressWarnings("unused")
+    private static boolean waitForReferenceProcessing() {
+        throw VMError.unimplemented();
+    }
+
+    @Override
+    @KeepOriginal //
+    @TargetElement(onlyWith = JDK11OrLater.class) //
+    protected native Object clone() throws CloneNotSupportedException;
+
+    @Substitute //
+    @TargetElement(onlyWith = JDK11OrLater.class) //
+    // @ForceInline
+    @SuppressWarnings("unused")
+    public static void reachabilityFence(Object ref) {
+        GraalDirectives.blackhole(ref);
     }
 }
 
@@ -159,6 +214,10 @@ final class Target_java_lang_ref_ReferenceQueue {
 
     @KeepOriginal
     native boolean enqueue(Reference<?> r);
+
+    public boolean isEmpty() {
+        return feeble.isEmpty();
+    }
 }
 
 /** SubstrateVM does not support Finalizer references. */

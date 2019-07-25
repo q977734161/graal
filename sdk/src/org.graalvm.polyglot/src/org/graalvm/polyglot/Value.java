@@ -1,33 +1,57 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.polyglot;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -40,7 +64,7 @@ import org.graalvm.polyglot.proxy.Proxy;
  * values are bound to a {@link Context context}. If the context is closed then all value operations
  * throw an {@link IllegalStateException}.
  * <p>
- * Polyglot values have one of the following types:
+ * Polyglot values have one of the following type combinations:
  * <ul>
  * <li>{@link #isNull() Null}: This value represents a <code>null</code> like value. Certain
  * languages might use a different name or use multiple values to represent <code>null</code> like
@@ -52,6 +76,11 @@ import org.graalvm.polyglot.proxy.Proxy;
  * accessed using {@link #asBoolean()}.
  * <li>{@link #isString() String}: This value represents a string value. The string value can be
  * accessed using {@link #asString()}.
+ * <li>{@link #isDate() Date}, {@link #isTime() Time} or {@link #isTimeZone() Timezone}: This value
+ * represents a date, time or timezone. Multiple types may return <code>true</code> at the same
+ * time.
+ * <li>{@link #isDuration() Duration}: This value represents a duration value. The duration value
+ * can be accessed using {@link #asDuration()}.
  * <li>{@link #isHostObject() Host Object}: This value represents a value of the host language
  * (Java). The original Java value can be accessed using {@link #asHostObject()}.
  * <li>{@link #isProxyObject() Proxy Object}: This value represents a {@link Proxy proxy} value.
@@ -66,8 +95,8 @@ import org.graalvm.polyglot.proxy.Proxy;
  * elements of an object. For example, the members of a Java object are all public methods and
  * fields. Members are accessible using {@link #getMember(String)}.
  * <li>{@link #canExecute() Executable}: This value can be {@link #execute(Object...) executed}.
- * This indicates that the value represents that can be executed. Guest language examples for
- * executable elements are functions, methods, closures or promises.
+ * This indicates that the value represents an element that can be executed. Guest language examples
+ * for executable elements are functions, methods, closures or promises.
  * <li>{@link #canInstantiate() Instantiable}: This value can be {@link #newInstance(Object...)
  * instantiated}. For example, Java classes are instantiable.
  * </ul>
@@ -80,12 +109,28 @@ import org.graalvm.polyglot.proxy.Proxy;
  * {@link #toString() string} for debugging, formatted by the original language.
  * <p>
  * Polyglot values may be converted to host objects using {@link #as(Class)}. In addition values may
- * be created form Java values using {@link Context#asValue(Object)}.
+ * be created from Java values using {@link Context#asValue(Object)}.
+ *
+ * <h3>Naive and aware dates and times</h3>
+ * <p>
+ * If a date or time value has a {@link #isTimeZone() timezone} then it is called <i>aware</i>,
+ * otherwise <i>naive</i>.
+ * <p>
+ * An aware time and date has sufficient knowledge of applicable algorithmic and political time
+ * adjustments, such as time zone and daylight saving time information, to locate itself relative to
+ * other aware objects. An aware object is used to represent a specific moment in time that is not
+ * open to interpretation.
+ * <p>
+ * A naive time and date does not contain enough information to unambiguously locate itself relative
+ * to other date/time objects. Whether a naive object represents Coordinated Universal Time (UTC),
+ * local time, or time in some other timezone is purely up to the program, just like it is up to the
+ * program whether a particular number represents metres, miles, or mass. Naive objects are easy to
+ * understand and to work with, at the cost of ignoring some aspects of reality.
  *
  * @see Context
  * @see Engine
  * @see PolyglotException
- * @since 1.0
+ * @since 19.0
  */
 public final class Value {
 
@@ -104,7 +149,7 @@ public final class Value {
      * language does not provide any meta object information, <code>null</code> is returned.
      *
      * @throws IllegalStateException if the context is already closed.
-     * @since 1.0
+     * @since 19.0
      */
     public Value getMetaObject() {
         return impl.getMetaObject(receiver);
@@ -118,7 +163,7 @@ public final class Value {
      *
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean hasArrayElements() {
         return impl.hasArrayElements(receiver);
@@ -126,7 +171,7 @@ public final class Value {
 
     /**
      * Returns the array element of a given index. Polyglot arrays start with index <code>0</code>,
-     * independent of the guest language. The given array index must be greater or equal 0.
+     * independent of the guest language. The given array index must be greater or equal to 0.
      *
      * @throws ArrayIndexOutOfBoundsException if the array index does not exist.
      * @throws UnsupportedOperationException if the value does not have any
@@ -134,14 +179,14 @@ public final class Value {
      *             readable.
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public Value getArrayElement(long index) {
         return impl.getArrayElement(receiver, index);
     }
 
     /**
-     * Sets the value at a given index. Polyglot array start with index <code>0</code>, independent
+     * Sets the value at a given index. Polyglot arrays start with index <code>0</code>, independent
      * of the guest language. The array element value is subject to polyglot value mapping rules as
      * described in {@link Context#asValue(Object)}.
      *
@@ -151,7 +196,7 @@ public final class Value {
      *             modifiable.
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public void setArrayElement(long index, Object value) {
         impl.setArrayElement(receiver, index, value);
@@ -167,7 +212,7 @@ public final class Value {
      *             removable.
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean removeArrayElement(long index) {
         return impl.removeArrayElement(receiver, index);
@@ -180,7 +225,7 @@ public final class Value {
      *             {@link #hasArrayElements() array elements}.
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public long getArraySize() {
         return impl.getArraySize(receiver);
@@ -200,7 +245,7 @@ public final class Value {
      * @see #getMemberKeys() For a list of members.
      * @throws IllegalStateException if the context is already closed.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean hasMembers() {
         return impl.hasMembers(receiver);
@@ -212,9 +257,11 @@ public final class Value {
      * <code>false</code>.
      *
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @throws NullPointerException if the identifier is null.
+     * @since 19.0
      */
     public boolean hasMember(String identifier) {
+        Objects.requireNonNull(identifier, "identifier");
         return impl.hasMember(receiver, identifier);
     }
 
@@ -225,24 +272,26 @@ public final class Value {
      * @throws UnsupportedOperationException if the value {@link #hasMembers() has no members} or
      *             the given identifier exists but is not readable.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @throws NullPointerException if the identifier is null.
+     * @since 19.0
      */
     public Value getMember(String identifier) {
+        Objects.requireNonNull(identifier, "identifier");
         return impl.getMember(receiver, identifier);
     }
 
     /**
      * Returns a set of all member keys. Calling {@link Set#contains(Object)} with a string key is
-     * equivalent of calling {@link #hasMember(String)}. Removing an element from the returned set
+     * equivalent to calling {@link #hasMember(String)}. Removing an element from the returned set
      * is equivalent to calling {@link #removeMember(String)}. Adding an element to the set is
      * equivalent to calling {@linkplain #putMember(String, Object) putMember(key, null)}. If the
      * value does not support {@link #hasMembers() members} then an empty unmodifiable set is
      * returned. If the context gets closed while the returned set is still alive, then the set will
-     * throw an {@link IllegalStateException} if any method except Object methods is invoked.
+     * throw an {@link IllegalStateException} if any methods except Object methods are invoked.
      *
      * @throws IllegalStateException if the context is already {@link Context#close() closed}.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public Set<String> getMemberKeys() {
         return impl.getMemberKeys(receiver);
@@ -257,9 +306,11 @@ public final class Value {
      *             members}, the key does not exist and new members cannot be added, or the existing
      *             member is not modifiable.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @throws NullPointerException if the identifier is null.
+     * @since 19.0
      */
     public void putMember(String identifier, Object value) {
+        Objects.requireNonNull(identifier, "identifier");
         impl.putMember(receiver, identifier, value);
     }
 
@@ -271,9 +322,11 @@ public final class Value {
      *             members} or if the key {@link #hasMember(String) exists} but cannot be removed.
      * @throws IllegalStateException if the context is already {@link Context#close() closed}.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @throws NullPointerException if the identifier is null.
+     * @since 19.0
      */
     public boolean removeMember(String identifier) {
+        Objects.requireNonNull(identifier, "identifier");
         return impl.removeMember(receiver, identifier);
     }
 
@@ -284,7 +337,7 @@ public final class Value {
      *
      * @throws IllegalStateException if the underlying context was closed.
      * @see #execute(Object...)
-     * @since 1.0
+     * @since 19.0
      */
     public boolean canExecute() {
         return impl.canExecute(receiver);
@@ -301,8 +354,9 @@ public final class Value {
      *             arguments was not applicable.
      * @throws UnsupportedOperationException if this value cannot be executed.
      * @throws PolyglotException if a guest language error occurred during execution.
+     * @throws NullPointerException if the arguments array is null.
      * @see #executeVoid(Object...)
-     * @since 1.0
+     * @since 19.0
      */
     public Value execute(Object... arguments) {
         if (arguments.length == 0) {
@@ -322,8 +376,9 @@ public final class Value {
      *             arguments was not applicable.
      * @throws UnsupportedOperationException if this value cannot be executed.
      * @throws PolyglotException if a guest language error occurred during execution.
+     * @throws NullPointerException if the arguments array is null.
      * @see #execute(Object...)
-     * @since 1.0
+     * @since 19.0
      */
     public void executeVoid(Object... arguments) {
         if (arguments.length == 0) {
@@ -338,7 +393,7 @@ public final class Value {
      * Returns <code>true</code> if the value can be instantiated. This indicates that the
      * {@link #newInstance(Object...)} can be used with this value.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean canInstantiate() {
         return impl.canInstantiate(receiver);
@@ -353,10 +408,54 @@ public final class Value {
      *             arguments was not applicable.
      * @throws UnsupportedOperationException if this value cannot be instantiated.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @throws NullPointerException if the arguments array is null.
+     * @since 19.0
      */
     public Value newInstance(Object... arguments) {
+        Objects.requireNonNull(arguments, "arguments");
         return impl.newInstance(receiver, arguments);
+    }
+
+    /**
+     * Returns <code>true</code> if the given member exists and can be invoked. Returns
+     * <code>false</code> if the member does not exist ({@link #hasMember(String)} returns
+     * <code>false</code>), or is not invocable.
+     *
+     * @param identifier the member identifier
+     * @throws IllegalStateException if the context is already closed.
+     * @throws PolyglotException if a guest language error occurred.
+     * @see #getMemberKeys() For a list of members.
+     * @see #invokeMember(String, Object...)
+     * @since 19.0
+     */
+    public boolean canInvokeMember(String identifier) {
+        Objects.requireNonNull(identifier, "identifier");
+        return impl.canInvoke(identifier, receiver);
+    }
+
+    /**
+     * Invokes the given member of this value. Unlike {@link #execute(Object...)}, this is an object
+     * oriented execution of a member of an object. To test whether invocation is supported, call
+     * {@link #canInvokeMember(String)}. When object oriented semantics are not supported, use
+     * <code>{@link #getMember(String)}.{@link #execute(Object...) execute(Object...)}</code>
+     * instead.
+     *
+     * @param identifier the member identifier to invoke
+     * @param arguments the invocation arguments
+     * @throws UnsupportedOperationException if this member cannot be invoked.
+     * @throws PolyglotException if a guest language error occurred during invocation.
+     * @throws NullPointerException if the arguments array is null.
+     * @see #canInvokeMember(String)
+     * @since 19.0
+     */
+    public Value invokeMember(String identifier, Object... arguments) {
+        Objects.requireNonNull(identifier, "identifier");
+        if (arguments.length == 0) {
+            // specialized entry point for zero argument invoke calls
+            return impl.invoke(receiver, identifier);
+        } else {
+            return impl.invoke(receiver, identifier, arguments);
+        }
     }
 
     /**
@@ -364,7 +463,7 @@ public final class Value {
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isString() {
         return impl.isString(receiver);
@@ -377,7 +476,7 @@ public final class Value {
      * @throws ClassCastException if this value could not be converted to string.
      * @throws UnsupportedOperationException if this value does not represent a string.
      * @throws PolyglotException if a guest language error occurred during execution.
-     * @since 1.0
+     * @since 19.0
      */
     public String asString() {
         return impl.asString(receiver);
@@ -390,21 +489,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asInt()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInInt() {
         return impl.fitsInInt(receiver);
     }
 
     /**
-     * Returns an <code>int</code> representation if this value if it is {@link #isNumber() number}
+     * Returns an <code>int</code> representation of this value if it is {@link #isNumber() number}
      * and the value {@link #fitsInInt() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public int asInt() {
         return impl.asInt(receiver);
@@ -416,21 +515,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asBoolean()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isBoolean() {
         return impl.isBoolean(receiver);
     }
 
     /**
-     * Returns an <code>boolean</code> representation if this value if it is {@link #isBoolean()
+     * Returns a <code>boolean</code> representation of this value if it is {@link #isBoolean()
      * boolean}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean asBoolean() {
         return impl.asBoolean(receiver);
@@ -444,7 +543,7 @@ public final class Value {
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isNumber() {
         return impl.isNumber(receiver);
@@ -457,21 +556,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asLong()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInLong() {
         return impl.fitsInLong(receiver);
     }
 
     /**
-     * Returns an <code>long</code> representation if this value if it is {@link #isNumber() number}
+     * Returns a <code>long</code> representation of this value if it is {@link #isNumber() number}
      * and the value {@link #fitsInLong() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted to long.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public long asLong() {
         return impl.asLong(receiver);
@@ -484,21 +583,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asDouble()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInDouble() {
         return impl.fitsInDouble(receiver);
     }
 
     /**
-     * Returns an <code>double</code> representation if this value if it is {@link #isNumber()
+     * Returns a <code>double</code> representation of this value if it is {@link #isNumber()
      * number} and the value {@link #fitsInDouble() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public double asDouble() {
         return impl.asDouble(receiver);
@@ -511,21 +610,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asFloat()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInFloat() {
         return impl.fitsInFloat(receiver);
     }
 
     /**
-     * Returns an <code>float</code> representation if this value if it is {@link #isNumber()
-     * number} and the value {@link #fitsInFloat() fits}.
+     * Returns a <code>float</code> representation of this value if it is {@link #isNumber() number}
+     * and the value {@link #fitsInFloat() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public float asFloat() {
         return impl.asFloat(receiver);
@@ -538,21 +637,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asByte()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInByte() {
         return impl.fitsInByte(receiver);
     }
 
     /**
-     * Returns an <code>byte</code> representation if this value if it is {@link #isNumber() number}
+     * Returns a <code>byte</code> representation of this value if it is {@link #isNumber() number}
      * and the value {@link #fitsInByte() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public byte asByte() {
         return impl.asByte(receiver);
@@ -565,21 +664,21 @@ public final class Value {
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
      * @see #asShort()
-     * @since 1.0
+     * @since 19.0
      */
     public boolean fitsInShort() {
         return impl.fitsInShort(receiver);
     }
 
     /**
-     * Returns an <code>short</code> representation if this value if it is {@link #isNumber()
-     * number} and the value {@link #fitsInShort() fits}.
+     * Returns a <code>short</code> representation of this value if it is {@link #isNumber() number}
+     * and the value {@link #fitsInShort() fits}.
      *
      * @throws NullPointerException if this value represents {@link #isNull() null}.
      * @throws ClassCastException if this value could not be converted.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public short asShort() {
         return impl.asShort(receiver);
@@ -590,7 +689,7 @@ public final class Value {
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isNull() {
         return impl.isNull(receiver);
@@ -602,7 +701,7 @@ public final class Value {
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isNativePointer() {
         return impl.isNativePointer(receiver);
@@ -614,7 +713,7 @@ public final class Value {
      * @throws UnsupportedOperationException if the value is not a pointer.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public long asNativePointer() {
         return impl.asNativePointer(receiver);
@@ -626,7 +725,7 @@ public final class Value {
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isHostObject() {
         return impl.isHostObject(receiver);
@@ -638,7 +737,7 @@ public final class Value {
      * @throws UnsupportedOperationException if {@link #isHostObject()} is <code>false</code>.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     @SuppressWarnings("unchecked")
     public <T> T asHostObject() {
@@ -646,12 +745,12 @@ public final class Value {
     }
 
     /**
-     * Returns <code>true</code> whether this value represents a {@link Proxy}. The proxy instance
-     * can be unboxed using {@link #asProxyObject()}.
+     * Returns <code>true</code> if this value represents a {@link Proxy}. The proxy instance can be
+     * unboxed using {@link #asProxyObject()}.
      *
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isProxyObject() {
         return impl.isProxyObject(receiver);
@@ -664,7 +763,7 @@ public final class Value {
      * @throws UnsupportedOperationException if a value is not a proxy object.
      * @throws PolyglotException if a guest language error occurred during execution.
      * @throws IllegalStateException if the underlying context was closed.
-     * @since 1.0
+     * @since 19.0
      */
     @SuppressWarnings("unchecked")
     public <T extends Proxy> T asProxyObject() {
@@ -678,13 +777,18 @@ public final class Value {
      * <p>
      * The following target types are supported and interpreted in the following order:
      * <ul>
+     * <li>Custom
+     * {@link HostAccess.Builder#targetTypeMapping(Class, Class, java.util.function.Predicate, Function)
+     * target type mappings} specified in the {@link HostAccess} configuration when the context is
+     * constructed. Custom target type mappings may override all the type mappings below. This
+     * allows for customization if one of the below type mappings is not suitable.
      * <li><code>{@link Value}.class</code> is always supported and returns this instance.
      * <li>If the value represents a {@link #isHostObject() host object} then all classes
      * implemented or extended by the host object can be used as target type.
      * <li><code>{@link String}.class</code> is supported if the value is a {@link #isString()
      * string}.
      * <li><code>{@link Character}.class</code> is supported if the value is a {@link #isString()
-     * string} of length one.
+     * string} of length one or if a number can be safely be converted to a character.
      * <li><code>{@link Number}.class</code> is supported if the value is a {@link #isNumber()
      * number}. {@link Byte}, {@link Short}, {@link Integer}, {@link Long}, {@link Float} and
      * {@link Double} are allowed if they fit without conversion. If a conversion is necessary then
@@ -694,6 +798,20 @@ public final class Value {
      * boolean}. Primitive {@link Boolean boolean.class} literal is also supported. The primitive
      * class literal throws a {@link NullPointerException} if the value represents {@link #isNull()
      * null}.
+     * <li><code>{@link LocalDate}.class</code> is supported if the value is a {@link #isDate()
+     * date}</li>
+     * <li><code>{@link LocalTime}.class</code> is supported if the value is a {@link #isTime()
+     * time}</li>
+     * <li><code>{@link LocalDateTime}.class</code> is supported if the value is a {@link #isDate()
+     * date} and {@link #isTime() time}.</li>
+     * <li><code>{@link Instant}.class</code> is supported if the value is an {@link #isInstant()
+     * instant}.</li>
+     * <li><code>{@link ZonedDateTime}.class</code> is supported if the value is a {@link #isDate()
+     * date}, {@link #isTime() time} and {@link #isTimeZone() timezone}.</li>
+     * <li><code>{@link ZoneId}.class</code> is supported if the value is a {@link #isTimeZone()
+     * timezone}.</li>
+     * <li><code>{@link Duration}.class</code> is supported if the value is a {@link #isDuration()
+     * duration}.</li>
      * <li>Any Java type in the type hierarchy of a {@link #isHostObject() host object}.
      * <li><code>{@link Object}.class</code> is always supported. See section Object mapping rules.
      * <li><code>{@link Map}.class</code> is supported if the value has {@link #hasMembers()
@@ -718,18 +836,21 @@ public final class Value {
      * might be an expensive operation it is recommended to use the `List` or `Collection` target
      * type if possible.
      * <li>Any {@link FunctionalInterface functional} interface if the value can be
-     * {@link #canExecute() executed} or {@link #canInstantiate() instantiated}. In case a value can
-     * be executed and instantiated then the returned implementation of the interface will be
-     * {@link #execute(Object...) executed}. The coercion to the parameter types of functional
-     * interface method is converted using the semantics of {@link #as(Class)}. If a standard
-     * functional interface like {@link Function} are used, is recommended to use
+     * {@link #canExecute() executed} or {@link #canInstantiate() instantiated} and the interface
+     * type is {@link HostAccess implementable}. Note that {@link FunctionalInterface} are
+     * implementable by default in with the {@link HostAccess#EXPLICIT explicit} host access policy.
+     * In case a value can be executed and instantiated then the returned implementation of the
+     * interface will be {@link #execute(Object...) executed}. The coercion to the parameter types
+     * of functional interface method is converted using the semantics of {@link #as(Class)}. If a
+     * standard functional interface like {@link Function} is used, it is recommended to use
      * {@link #as(TypeLiteral) type literals} to specify the expected generic method parameter and
      * return type.
-     * <li>Any interface if the value {@link #hasMembers()}. Each method or field name maps to one
+     * <li>Any interface if the value {@link #hasMembers() has members} and the interface type is
+     * {@link HostAccess.Implementable implementable}. Each interface method maps to one
      * {@link #getMember(String) member} of the value. Whenever a method of the interface is
      * executed a member with the method or field name must exist otherwise a
-     * {@link UnsupportedOperationException} is thrown when the method is executed. If one of the
-     * parameters cannot be mapped to the target type a {@link ClassCastException} or a
+     * {@link UnsupportedOperationException} is thrown when the method is executed. A member If one
+     * of the parameters cannot be mapped to the target type a {@link ClassCastException} or a
      * {@link NullPointerException} is thrown.
      * </ul>
      * A {@link ClassCastException} is thrown for other unsupported target types.
@@ -737,13 +858,13 @@ public final class Value {
      * <b>JavaScript Usage Examples:</b>
      *
      * <pre>
-     * Context context = Context.create();
+     * Context context = Context.newBuilder().allowHostAccess(HostAccess.ALL).build();
      * assert context.eval("js", "undefined").as(Object.class) == null;
      * assert context.eval("js", "'foobar'").as(String.class).equals("foobar");
      * assert context.eval("js", "42").as(Integer.class) == 42;
      * assert context.eval("js", "{foo:'bar'}").as(Map.class).get("foo").equals("bar");
      * assert context.eval("js", "[42]").as(List.class).get(0).equals(42);
-     * assert ((Map<String, Object>)context.eval("js", "[{foo:'bar'}]").as(List.class).get(0)).get("foo").equals("bar");
+     * assert ((Map&lt;String, Object>)context.eval("js", "[{foo:'bar'}]").as(List.class).get(0)).get("foo").equals("bar");
      *
      * &#64;FunctionalInterface interface IntFunction { int foo(int value); }
      * assert context.eval("js", "(function(a){a})").as(IntFunction.class).foo(42) == 42;
@@ -786,8 +907,8 @@ public final class Value {
      * <li>If the value can be {@link #canExecute() executed} or {@link #canInstantiate()
      * instantiated} then the result value implements {@link Function Function}. By default the
      * argument of the function will be used as single argument to the function when executed. If a
-     * value of type {@link Object Object[]} is provided then the function will executed with those
-     * arguments. The returned function may also implement {@link Map} if the value has
+     * value of type {@link Object Object[]} is provided then the function will be executed with
+     * those arguments. The returned function may also implement {@link Map} if the value has
      * {@link #hasArrayElements() array elements} or {@link #hasMembers() members}.
      * <li>If none of the above rules apply then this {@link Value} instance is returned.
      * </ol>
@@ -809,7 +930,7 @@ public final class Value {
      * assert context.eval("js", "42").as(Object.class) instanceof Number;
      * assert context.eval("js", "[]").as(Object.class) instanceof Map;
      * assert context.eval("js", "{}").as(Object.class) instanceof Map;
-     * assert ((Map<Object, Object>) context.eval("js", "[{}]").as(Object.class)).get(0) instanceof Map;
+     * assert ((Map&lt;Object, Object>) context.eval("js", "[{}]").as(Object.class)).get(0) instanceof Map;
      * assert context.eval("js", "(function(){})").as(Object.class) instanceof Function;
      * </pre>
      *
@@ -827,7 +948,7 @@ public final class Value {
      *
      * <pre>
      * Context context = Context.create();
-     * Map<Object, Object> javaMap = context.eval("js", "{}").as(Map.class);
+     * Map&lt;Object, Object> javaMap = context.eval("js", "{}").as(Map.class);
      * Value polyglotValue = context.asValue(javaMap);
      * </pre>
      *
@@ -836,11 +957,14 @@ public final class Value {
      * @throws ClassCastException if polyglot value could not be mapped to the target type.
      * @throws PolyglotException if the conversion triggered a guest language error.
      * @throws IllegalStateException if the underlying context is already closed.
-     * @since 1.0
+     * @throws NullPointerException if the target type is null.
+     * @since 19.0
      */
+    @SuppressWarnings("unchecked")
     public <T> T as(Class<T> targetType) throws ClassCastException, IllegalStateException, PolyglotException {
+        Objects.requireNonNull(targetType, "targetType");
         if (targetType == Value.class) {
-            return targetType.cast(this);
+            return (T) this;
         }
         return impl.as(receiver, targetType);
     }
@@ -852,25 +976,29 @@ public final class Value {
      * Usage example:
      *
      * <pre>
-     * static final TypeLiteral<List<String>> STRING_LIST = new TypeLiteral<List<String>>() {
+     * static final TypeLiteral&lt;List&lt;String>> STRING_LIST = new TypeLiteral&lt;List&lt;String>>() {
      * };
      *
-     * Context context = Context.create();
-     * List<String> javaList = context.eval("js", "['foo', 'bar', 'bazz']").as(STRING_LIST);
-     * assert javaList.get(0).equals("foo");
+     * public static void main(String[] args) {
+     *     Context context = Context.create();
+     *     List&lt;String> javaList = context.eval("js", "['foo', 'bar', 'bazz']").as(STRING_LIST);
+     *     assert javaList.get(0).equals("foo");
+     * }
      * </pre>
      *
+     * @throws NullPointerException if the target type is null.
      * @see #as(Class)
-     * @since 1.0
+     * @since 19.0
      */
     public <T> T as(TypeLiteral<T> targetType) {
+        Objects.requireNonNull(targetType, "targetType");
         return impl.as(receiver, targetType);
     }
 
     /**
      * A string representation of the value formatted by the original language.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public String toString() {
@@ -881,9 +1009,201 @@ public final class Value {
      * Returns the declared source location of the value.
      *
      * @return the {@link SourceSection} or null if unknown
-     * @since 1.0
+     * @since 19.0
      */
     public SourceSection getSourceLocation() {
         return impl.getSourceLocation(receiver);
     }
+
+    /**
+     * Returns <code>true</code> if this object represents a date, else <code>false</code>. If the
+     * receiver is also a {@link #isTimeZone() timezone} then the date is aware, otherwise it is
+     * naive.
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws NullPointerException if the target type is null.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #asDate()
+     * @since 20.0.0 beta 2
+     */
+    public boolean isDate() {
+        return impl.isDate(receiver);
+    }
+
+    /**
+     * Returns the receiver as date if this object represents a {@link #isDate() date}. The returned
+     * date is either aware if the receiver has a {@link #isTimeZone() timezone} otherwise it is
+     * naive.
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws NullPointerException if the target type is null.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #isDate()
+     * @since 20.0.0 beta 2
+     */
+    public LocalDate asDate() {
+        return impl.asDate(receiver);
+    }
+
+    /**
+     * Returns <code>true</code> if this object represents a time, else <code>false</code>. If the
+     * receiver is also a {@link #isTimeZone() timezone} then the time is aware, otherwise it is
+     * naive.
+     *
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #asTime()
+     * @since 20.0.0 beta 2
+     */
+    public boolean isTime() {
+        return impl.isTime(receiver);
+    }
+
+    /**
+     * Returns the receiver as time if this object represents a {@link #isTime() time}. The returned
+     * time is either aware if the receiver has a {@link #isTimeZone() timezone} otherwise it is
+     * naive.
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws NullPointerException if the target type is null.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #isTime()
+     * @since 20.0.0 beta 2
+     */
+    public LocalTime asTime() {
+        return impl.asTime(receiver);
+    }
+
+    /**
+     * Returns <code>true</code> if the receiver represents an instant. If a value is an instant
+     * then it is also a {@link #isDate() date}, {@link #isTime() time} and {@link #isTimeZone()
+     * timezone}.
+     *
+     * This method is short-hand for:
+     *
+     * <pre>
+     * v.{@linkplain #isDate() isDate}() && v.{@link #isTime() isTime}() && v.{@link #isTimeZone() isTimeZone}()
+     * </pre>
+     *
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #isDate()
+     * @see #isTime()
+     * @see #isInstant()
+     * @see #asInstant()
+     * @since 20.0.0 beta 2
+     */
+    public boolean isInstant() {
+        return isDate() && isTime() && isTimeZone();
+    }
+
+    /**
+     * Returns the receiver as instant if this object represents an {@link #isInstant() instant}. If
+     * a value is an instant then it is also a {@link #isDate() date}, {@link #isTime() time} and
+     * {@link #isTimeZone() timezone}. Using this method may be more efficient than reconstructing
+     * the timestamp from the date, time and timezone data.
+     * <p>
+     * The following assertion always holds if {@link #isInstant()} returns <code>true</code>:
+     *
+     * <pre>
+     * ZoneId zone = getTimeZone(receiver);
+     * LocalDate date = getDate(receiver);
+     * LocalTime time = getTime(receiver);
+     * assert ZonedDateTime.of(date, time, zone).toInstant().equals(getInstant(receiver));
+     * </pre>
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws NullPointerException if the target type is null.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #isDate()
+     * @see #isTime()
+     * @see #isTimeZone()
+     * @since 20.0.0 beta 2
+     */
+    public Instant asInstant() {
+        return impl.asInstant(receiver);
+    }
+
+    /**
+     * Returns <code>true</code> if this object represents a timezone, else <code>false</code>. The
+     * interpretation of timezone objects may vary:
+     * <ul>
+     * <li>If {@link #isDate()} and {@link #isTime()} return <code>true</code>, then the returned
+     * date or time information is aware of this timezone.
+     * <li>If {@link #isDate()} and {@link #isTime()} returns <code>false</code>, then it represents
+     * just timezone information.
+     * </ul>
+     * Objects with only time or only date information must not have timezone information attached,
+     * as aware date or time information always consist of both date and time. If this rule is
+     * violated then an {@link AssertionError} is thrown if assertions are enabled.
+     * <p>
+     * If this method is implemented then also {@link #asTimeZone()} must be implemented.
+     *
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see #asTimeZone()
+     * @see #asInstant()
+     * @since 20.0.0 beta 2
+     */
+    public boolean isTimeZone() {
+        return impl.isTimeZone(receiver);
+    }
+
+    /**
+     * Returns the receiver as timestamp if this object represents a {@link #isTimeZone() timezone}.
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @throws NullPointerException if the target type is null.
+     * @see #isTimeZone()
+     * @since 20.0.0 beta 2
+     */
+    public ZoneId asTimeZone() {
+        return impl.asTimeZone(receiver);
+    }
+
+    /**
+     * Returns <code>true</code> if this object represents a duration, else <code>false</code>.
+     *
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @see Duration
+     * @see #asDate()
+     * @since 20.0.0 beta 2
+     */
+    public boolean isDuration() {
+        return impl.isDuration(receiver);
+    }
+
+    /**
+     * Returns the receiver as duration if this object represents a {@link #isDuration() duration}.
+     *
+     * @throws ClassCastException if polyglot value could not be mapped to the target type.
+     * @throws PolyglotException if the conversion triggered a guest language error.
+     * @throws IllegalStateException if the underlying context is already closed.
+     * @throws NullPointerException if the target type is null.
+     * @see #isDuration()
+     * @since 20.0.0 beta 2
+     */
+    public Duration asDuration() {
+        return impl.asDuration(receiver);
+    }
+
+    /**
+     * Converts a Java host value to a polyglot value. Returns a value for any host or guest value.
+     * If there is a context available use {@link Context#asValue(Object)} for efficiency instead.
+     *
+     * @param o the object to convert
+     * @throws IllegalStateException if no context is currently entered.
+     * @see Context#asValue(Object) Conversion rules.
+     * @since 19.0
+     */
+    public static Value asValue(Object o) {
+        if (o instanceof Value) {
+            return (Value) o;
+        }
+        return Engine.getImpl().asValue(o);
+    }
+
 }

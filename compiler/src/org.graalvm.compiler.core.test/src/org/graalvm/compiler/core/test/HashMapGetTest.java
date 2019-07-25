@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -46,7 +48,7 @@ public class HashMapGetTest extends GraalCompilerTest {
             map.put(i, i);
             mapGet(map, i);
         }
-        test(get, null, map, new Integer(0));
+        test(get, null, map, 0);
         for (IfNode ifNode : lastCompiledGraph.getNodes(IfNode.TYPE)) {
             LogicNode condition = ifNode.condition();
             if (ifNode.getTrueSuccessorProbability() < 0.4 && condition instanceof ObjectEqualsNode) {

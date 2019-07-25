@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -186,17 +188,19 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
                 JavaKind accessKind = load.accessKind();
                 JavaKind componentKind = type.getComponentType().getJavaKind();
                 long offset = load.offset().asJavaConstant().asLong();
-                int index = VirtualArrayNode.entryIndexForOffset(tool.getArrayOffsetProvider(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
-                ValueNode object = GraphUtil.unproxify(load.object());
-                LocationIdentity location = NamedLocationIdentity.getArrayLocation(componentKind);
-                ValueNode cachedValue = state.getReadCache(object, location, index, accessKind, this);
-                assert cachedValue == null || load.stamp(NodeView.DEFAULT).isCompatible(cachedValue.stamp(NodeView.DEFAULT)) : "The RawLoadNode's stamp is not compatible with the cached value.";
-                if (cachedValue != null) {
-                    effects.replaceAtUsages(load, cachedValue, load);
-                    addScalarAlias(load, cachedValue);
-                    return true;
-                } else {
-                    state.addReadCache(object, location, index, accessKind, isOverflowAccess(accessKind, componentKind), load, this);
+                int index = VirtualArrayNode.entryIndexForOffset(tool.getMetaAccess(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
+                if (index >= 0) {
+                    ValueNode object = GraphUtil.unproxify(load.object());
+                    LocationIdentity location = NamedLocationIdentity.getArrayLocation(componentKind);
+                    ValueNode cachedValue = state.getReadCache(object, location, index, accessKind, this);
+                    assert cachedValue == null || load.stamp(NodeView.DEFAULT).isCompatible(cachedValue.stamp(NodeView.DEFAULT)) : "The RawLoadNode's stamp is not compatible with the cached value.";
+                    if (cachedValue != null) {
+                        effects.replaceAtUsages(load, cachedValue, load);
+                        addScalarAlias(load, cachedValue);
+                        return true;
+                    } else {
+                        state.addReadCache(object, location, index, accessKind, isOverflowAccess(accessKind, componentKind), load, this);
+                    }
                 }
             }
         }
@@ -212,8 +216,12 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
             if (store.offset().isConstant()) {
                 long offset = store.offset().asJavaConstant().asLong();
                 boolean overflowAccess = isOverflowAccess(accessKind, componentKind);
-                int index = overflowAccess ? -1 : VirtualArrayNode.entryIndexForOffset(tool.getArrayOffsetProvider(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
-                return processStore(store, store.object(), location, index, accessKind, overflowAccess, store.value(), state, effects);
+                int index = overflowAccess ? -1 : VirtualArrayNode.entryIndexForOffset(tool.getMetaAccess(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
+                if (index != -1) {
+                    return processStore(store, store.object(), location, index, accessKind, overflowAccess, store.value(), state, effects);
+                } else {
+                    state.killReadCache(location, index);
+                }
             } else {
                 processIdentity(state, location);
             }
@@ -244,29 +252,9 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
         return processLoad(load, load.object(), new FieldLocationIdentity(load.field()), -1, load.field().getJavaKind(), state, effects);
     }
 
-    private static JavaKind getElementKindFromStamp(ValueNode array) {
-        ResolvedJavaType type = StampTool.typeOrNull(array);
-        if (type != null && type.isArray()) {
-            return type.getComponentType().getJavaKind();
-        } else {
-            // It is likely an OSRLocal without valid stamp
-            return JavaKind.Illegal;
-        }
-    }
-
     private boolean processStoreIndexed(StoreIndexedNode store, PEReadEliminationBlockState state, GraphEffectList effects) {
         int index = store.index().isConstant() ? ((JavaConstant) store.index().asConstant()).asInt() : -1;
-        // BASTORE (with elementKind being Byte) can be used to store values in boolean arrays.
         JavaKind elementKind = store.elementKind();
-        if (elementKind == JavaKind.Byte) {
-            elementKind = getElementKindFromStamp(store.array());
-            if (elementKind == JavaKind.Illegal) {
-                // Could not determine the actual access kind from stamp. Hence kill both.
-                state.killReadCache(NamedLocationIdentity.getArrayLocation(JavaKind.Boolean), index);
-                state.killReadCache(NamedLocationIdentity.getArrayLocation(JavaKind.Byte), index);
-                return false;
-            }
-        }
         LocationIdentity arrayLocation = NamedLocationIdentity.getArrayLocation(elementKind);
         if (index != -1) {
             return processStore(store, store.array(), arrayLocation, index, elementKind, false, store.value(), state, effects);
@@ -279,15 +267,7 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
     private boolean processLoadIndexed(LoadIndexedNode load, PEReadEliminationBlockState state, GraphEffectList effects) {
         if (load.index().isConstant()) {
             int index = ((JavaConstant) load.index().asConstant()).asInt();
-            // BALOAD (with elementKind being Byte) can be used to retrieve values from boolean
-            // arrays.
             JavaKind elementKind = load.elementKind();
-            if (elementKind == JavaKind.Byte) {
-                elementKind = getElementKindFromStamp(load.array());
-                if (elementKind == JavaKind.Illegal) {
-                    return false;
-                }
-            }
             LocationIdentity arrayLocation = NamedLocationIdentity.getArrayLocation(elementKind);
             return processLoad(load, load.array(), arrayLocation, index, elementKind, state, effects);
         }

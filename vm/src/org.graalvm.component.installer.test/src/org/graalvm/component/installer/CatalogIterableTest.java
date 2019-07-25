@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package org.graalvm.component.installer;
 
+import org.graalvm.component.installer.remote.CatalogIterable;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,16 +33,15 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
-import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.graalvm.component.installer.CatalogIterable.RemoteComponentParam;
+import org.graalvm.component.installer.DownloadURLIterable.DownloadURLParam;
+import org.graalvm.component.installer.jar.JarArchive;
 import org.graalvm.component.installer.model.ComponentInfo;
-import org.graalvm.component.installer.model.ComponentRegistry;
+import org.graalvm.component.installer.remote.FileDownloader;
 import org.graalvm.component.installer.persist.MetadataLoader;
 import org.graalvm.component.installer.persist.ProxyResource;
-import org.graalvm.component.installer.persist.RemoteStorage;
+import org.graalvm.component.installer.remote.RemotePropertiesStorage;
 import org.graalvm.component.installer.persist.test.Handler;
 import org.junit.After;
 import static org.junit.Assert.assertEquals;
@@ -52,7 +53,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
-public class CatalogIterableTest extends CommandTestBase implements Supplier<ComponentRegistry> {
+public class CatalogIterableTest extends CommandTestBase {
     @Rule public final ProxyResource proxyResource = new ProxyResource();
 
     @Override
@@ -112,7 +113,6 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
 
         assertEquals("ruby", meta.getId());
         assertNull(meta.getInfoPath());
-        assertNotNull(meta.getLicensePath());
         assertFalse(meta.getPaths().isEmpty());
         assertEquals("TruffleRuby 0.33-dev", meta.getName());
         assertEquals("0.33-dev", meta.getVersionString());
@@ -123,7 +123,7 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     @Test
     public void testVerifyRemoteJars() throws Exception {
         initRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", "testComponent", "test");
-        info.setShaDigest(RemoteStorage.toHashBytes(null, "d3a45ea326b379cc3d543cc56130ee9bd395fd1c1d51a470e8c2c8af1129829c", this));
+        info.setShaDigest(RemotePropertiesStorage.toHashBytes(null, "d3a45ea326b379cc3d543cc56130ee9bd395fd1c1d51a470e8c2c8af1129829c", this));
 
         try {
             exception.expect(IOException.class);
@@ -135,23 +135,19 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     }
 
     void addRemoteComponent(String relative, String u, boolean addParam) throws IOException {
+        storage.graalInfo.put(BundleConstants.GRAAL_VERSION, "0.33-dev");
         initRemoteComponent(relative, u, null, null);
-        storage.installed.add(info);
+        catalogStorage.installed.add(info);
         if (addParam) {
             components.add(param);
         }
-    }
-
-    @Override
-    public ComponentRegistry get() {
-        return registry;
     }
 
     @Test
     public void testReadComponentMetadataNoNetwork() throws Exception {
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
         textParams.add("ruby");
-        CatalogIterable cit = new CatalogIterable(this, this, this);
+        CatalogIterable cit = new CatalogIterable(this, this, getRegistry(), this);
         assertTrue(cit.iterator().hasNext());
         for (ComponentParam p : cit) {
             URL remoteU = p.createMetaLoader().getComponentInfo().getRemoteURL();
@@ -166,7 +162,23 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
         exception.expectMessage("REMOTE_UnknownComponentId");
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
         textParams.add("r");
-        CatalogIterable cit = new CatalogIterable(this, this, this);
+        CatalogIterable cit = new CatalogIterable(this, this, getRegistry(), this);
+        assertTrue(cit.iterator().hasNext());
+        cit.iterator().next();
+    }
+
+    /**
+     * Checks that if user mistypes a filename instead of component ID, an informative note is
+     * printed.
+     */
+    @Test
+    public void testUnknownComponentButExistingFile() throws Exception {
+        exception.expect(FailedOperationException.class);
+        exception.expectMessage("REMOTE_UnknownComponentMaybeFile");
+        addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
+        File mistyped = folder.newFile("mistyped-component.jar");
+        textParams.add(mistyped.getPath());
+        CatalogIterable cit = new CatalogIterable(this, this, getRegistry(), this);
         assertTrue(cit.iterator().hasNext());
         cit.iterator().next();
     }
@@ -174,7 +186,7 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     @Test
     public void testMetaAccessesDirectURL() throws Exception {
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
-        rparam = new RemoteComponentParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
+        rparam = new DownloadURLParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
         components.add(param);
 
         URL remoteU = rparam.createMetaLoader().getComponentInfo().getRemoteURL();
@@ -186,7 +198,7 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     @Test
     public void testDirectURLAccessedJustOnce() throws Exception {
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
-        rparam = new RemoteComponentParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
+        rparam = new DownloadURLParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
         components.add(param);
 
         URL remoteU = rparam.createMetaLoader().getComponentInfo().getRemoteURL();
@@ -196,7 +208,7 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
 
         Handler.clearVisited();
 
-        JarFile jf = rparam.getJarFile();
+        Archive jf = rparam.getArchive();
         assertNotNull(jf);
         assertFalse(Handler.isVisited(url));
     }
@@ -204,12 +216,12 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     @Test
     public void testDirectURLJarClosedAfterMeta() throws Exception {
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
-        rparam = new RemoteComponentParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
+        rparam = new DownloadURLParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
         components.add(param);
 
         URL remoteU = rparam.createMetaLoader().getComponentInfo().getRemoteURL();
         assertEquals(url, remoteU);
-        JarFile jf = rparam.getJarFile();
+        JarArchive jf = (JarArchive) rparam.getArchive();
         assertNotNull(jf.getEntry("META-INF"));
 
         rparam.close();
@@ -221,9 +233,9 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
     @Test
     public void testDirectURLJarClosedAfterJar() throws Exception {
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
-        rparam = new RemoteComponentParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
+        rparam = new DownloadURLParam(url, rparam.getDisplayName(), rparam.getSpecification(), this, false);
         components.add(param);
-        JarFile jf = rparam.getJarFile();
+        JarArchive jf = (JarArchive) rparam.getArchive();
         assertNotNull(jf.getEntry("META-INF"));
         rparam.close();
         exception.expect(IllegalStateException.class);
@@ -232,6 +244,7 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
 
     @Test
     public void testURLDoesNotExist() throws Exception {
+        storage.graalInfo.put(BundleConstants.GRAAL_VERSION, "0.33-dev");
         addRemoteComponent("persist/data/truffleruby3.jar", "test://graalvm.io/download/truffleruby.zip", false);
         textParams.add("ruby");
         Handler.bind(url.toString(), new URLConnection(url) {
@@ -267,12 +280,17 @@ public class CatalogIterableTest extends CommandTestBase implements Supplier<Com
             }
         });
 
-        CatalogIterable cit = new CatalogIterable(this, this, this);
+        CatalogIterable cit = new CatalogIterable(this, this, getRegistry(), this);
         ComponentParam rubyComp = cit.iterator().next();
 
         exception.expect(FailedOperationException.class);
         exception.expectMessage("REMOTE_ErrorDownloadingNotExist");
 
         rubyComp.createFileLoader().getComponentInfo();
+    }
+
+    @Override
+    public FileDownloader configureDownloader(ComponentInfo ci, FileDownloader dn) {
+        return dn;
     }
 }

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -97,7 +99,7 @@ public class RawLoadNode extends UnsafeAccessNode implements Lowerable, Virtuali
             ValueNode offsetValue = tool.getAlias(offset());
             if (offsetValue.isConstant()) {
                 long off = offsetValue.asJavaConstant().asLong();
-                int entryIndex = virtual.entryIndexForOffset(tool.getArrayOffsetProvider(), off, accessKind());
+                int entryIndex = virtual.entryIndexForOffset(tool.getMetaAccess(), off, accessKind());
 
                 if (entryIndex != -1) {
                     ValueNode entry = tool.getEntry(virtual, entryIndex);
@@ -158,8 +160,8 @@ public class RawLoadNode extends UnsafeAccessNode implements Lowerable, Virtuali
     }
 
     @Override
-    protected ValueNode cloneAsFieldAccess(Assumptions assumptions, ResolvedJavaField field) {
-        return LoadFieldNode.create(assumptions, object(), field);
+    protected ValueNode cloneAsFieldAccess(Assumptions assumptions, ResolvedJavaField field, boolean volatileAccess) {
+        return LoadFieldNode.create(assumptions, object(), field, volatileAccess);
     }
 
     @Override

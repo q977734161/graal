@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,31 +26,30 @@ package com.oracle.svm.truffle.nfi;
 
 import static com.oracle.svm.truffle.nfi.Target_com_oracle_truffle_nfi_impl_NativeArgumentBuffer_TypeTag.getOffset;
 import static com.oracle.svm.truffle.nfi.Target_com_oracle_truffle_nfi_impl_NativeArgumentBuffer_TypeTag.getTag;
+import static com.oracle.svm.truffle.nfi.TruffleNFISupport.ErrnoMirrorContext;
 import static com.oracle.svm.truffle.nfi.libffi.LibFFI.ffi_closure_alloc;
 
 import java.nio.ByteBuffer;
 
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
+import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.c.function.CEntryPointActions;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.Publish;
-import com.oracle.svm.core.posix.headers.Errno;
-import com.oracle.svm.core.posix.headers.LibC;
 import com.oracle.svm.truffle.nfi.LibFFI.ClosureData;
 import com.oracle.svm.truffle.nfi.LibFFI.NativeClosureHandle;
 import com.oracle.svm.truffle.nfi.libffi.LibFFI;
@@ -56,7 +57,6 @@ import com.oracle.svm.truffle.nfi.libffi.LibFFI.ffi_arg;
 import com.oracle.svm.truffle.nfi.libffi.LibFFI.ffi_cif;
 import com.oracle.svm.truffle.nfi.libffi.LibFFI.ffi_closure_callback;
 import com.oracle.truffle.api.CallTarget;
-import org.graalvm.nativeimage.c.type.CIntPointer;
 
 final class NativeClosure {
 
@@ -83,7 +83,7 @@ final class NativeClosure {
         if (size < SizeOf.get(ffi_arg.class)) {
             size = SizeOf.get(ffi_arg.class);
         }
-        return SubstrateUtil.wrapAsByteBuffer(buffer, size);
+        return CTypeConversion.asByteBuffer(buffer, size);
     }
 
     static Target_com_oracle_truffle_nfi_impl_ClosureNativePointer prepareClosure(Target_com_oracle_truffle_nfi_impl_NFIContext ctx,
@@ -91,10 +91,10 @@ final class NativeClosure {
         NativeClosure closure = new NativeClosure(callTarget, signature);
         NativeClosureHandle handle = ImageSingletons.lookup(TruffleNFISupport.class).createClosureHandle(closure);
 
-        WordPointer codePtr = StackValue.get(SizeOf.get(WordPointer.class));
+        WordPointer codePtr = StackValue.get(WordPointer.class);
         ClosureData data = ffi_closure_alloc(SizeOf.unsigned(ClosureData.class), codePtr);
         data.setNativeClosureHandle(handle);
-        data.setIsolate(CEntryPointContext.getCurrentIsolate());
+        data.setIsolate(CurrentIsolate.getIsolate());
 
         PointerBase code = codePtr.read();
         LibFFI.ffi_prep_closure_loc(data.ffiClosure(), WordFactory.pointer(signature.cif), callback, data, code);
@@ -123,7 +123,7 @@ final class NativeClosure {
                 // skip
             } else {
                 WordPointer argPtr = argPointers.read(i);
-                args[argIdx++] = SubstrateUtil.wrapAsByteBuffer(argPtr, argTypes[i].size);
+                args[argIdx++] = CTypeConversion.asByteBuffer(argPtr, argTypes[i].size);
             }
         }
 
@@ -148,7 +148,7 @@ final class NativeClosure {
             byte[] utf8 = TruffleNFISupport.javaStringToUtf8((String) retValue);
             try (PinnedObject pinned = PinnedObject.create(utf8)) {
                 CCharPointer source = pinned.addressOfArrayElement(0);
-                return LibC.strdup(source);
+                return TruffleNFISupport.strdup(source);
             }
         } else {
             // unsupported type
@@ -156,13 +156,11 @@ final class NativeClosure {
         }
     }
 
+    @SuppressWarnings("try")
     @CEntryPoint
     @CEntryPointOptions(prologue = EnterClosureDataIsolatePrologue.class, publishAs = Publish.NotPublished, include = CEntryPointOptions.NotIncludedAutomatically.class)
     static void invokeClosureBufferRet(@SuppressWarnings("unused") ffi_cif cif, Pointer ret, WordPointer args, ClosureData user) {
-        CIntPointer errnoMirror = ErrnoMirror.getErrnoMirrorLocation();
-        errnoMirror.write(Errno.errno());
-
-        try {
+        try (ErrnoMirrorContext mirror = new ErrnoMirrorContext()) {
             NativeClosure closure = lookup(user);
             ByteBuffer retBuffer = closure.createRetBuffer(ret);
             Target_com_oracle_truffle_nfi_impl_LibFFIClosure_RetPatches patches = (Target_com_oracle_truffle_nfi_impl_LibFFIClosure_RetPatches) closure.call(args, retBuffer);
@@ -183,45 +181,33 @@ final class NativeClosure {
                     }
                 }
             }
-        } finally {
-            Errno.set_errno(errnoMirror.read());
         }
     }
 
+    @SuppressWarnings("try")
     @CEntryPoint
     @CEntryPointOptions(prologue = EnterClosureDataIsolatePrologue.class, publishAs = Publish.NotPublished, include = CEntryPointOptions.NotIncludedAutomatically.class)
     static void invokeClosureVoidRet(@SuppressWarnings("unused") ffi_cif cif, @SuppressWarnings("unused") WordPointer ret, WordPointer args, ClosureData user) {
-        CIntPointer errnoMirror = ErrnoMirror.getErrnoMirrorLocation();
-        errnoMirror.write(Errno.errno());
-
-        try {
+        try (ErrnoMirrorContext mirror = new ErrnoMirrorContext()) {
             lookup(user).call(args, null);
-        } finally {
-            Errno.set_errno(errnoMirror.read());
         }
     }
 
+    @SuppressWarnings("try")
     @CEntryPoint
     @CEntryPointOptions(prologue = EnterClosureDataIsolatePrologue.class, publishAs = Publish.NotPublished, include = CEntryPointOptions.NotIncludedAutomatically.class)
     static void invokeClosureStringRet(@SuppressWarnings("unused") ffi_cif cif, WordPointer ret, WordPointer args, ClosureData user) {
-        CIntPointer errnoMirror = ErrnoMirror.getErrnoMirrorLocation();
-        errnoMirror.write(Errno.errno());
-
-        try {
+        try (ErrnoMirrorContext mirror = new ErrnoMirrorContext()) {
             Object retValue = lookup(user).call(args, null);
             ret.write(serializeStringRet(retValue));
-        } finally {
-            Errno.set_errno(errnoMirror.read());
         }
     }
 
+    @SuppressWarnings("try")
     @CEntryPoint
     @CEntryPointOptions(prologue = EnterClosureDataIsolatePrologue.class, publishAs = Publish.NotPublished, include = CEntryPointOptions.NotIncludedAutomatically.class)
     static void invokeClosureObjectRet(@SuppressWarnings("unused") ffi_cif cif, WordPointer ret, WordPointer args, ClosureData user) {
-        CIntPointer errnoMirror = ErrnoMirror.getErrnoMirrorLocation();
-        errnoMirror.write(Errno.errno());
-
-        try {
+        try (ErrnoMirrorContext mirror = new ErrnoMirrorContext()) {
             Object obj = lookup(user).call(args, null);
             if (obj == null) {
                 ret.write(WordFactory.zero());
@@ -229,8 +215,6 @@ final class NativeClosure {
                 TruffleObjectHandle handle = ImageSingletons.lookup(TruffleNFISupport.class).createGlobalHandle(obj);
                 ret.write(handle);
             }
-        } finally {
-            Errno.set_errno(errnoMirror.read());
         }
     }
 

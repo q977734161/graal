@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,7 +26,7 @@ package com.oracle.svm.core.option;
 
 import java.util.Arrays;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -144,7 +146,7 @@ public class XOptions {
     }
 
     /** Parse the "-X" options out of a String[], returning the ones that are not "-X" options. */
-    public String[] parse(String[] args) {
+    public String[] parse(String[] args, boolean exitOnError) {
         int newIdx = 0;
         for (int oldIdx = 0; oldIdx < args.length; oldIdx += 1) {
             final String arg = args[oldIdx];
@@ -153,8 +155,12 @@ public class XOptions {
                 try {
                     parsed |= parseWithNameAndPrefix(xFlag, arg);
                 } catch (NumberFormatException nfe) {
-                    Log.logStream().println("error: Wrong value for option '" + arg + "' is not a valid number.");
-                    System.exit(1);
+                    if (exitOnError) {
+                        Log.logStream().println("error: Wrong value for option '" + arg + "' is not a valid number.");
+                        System.exit(1);
+                    } else {
+                        throw new IllegalArgumentException("Illegal value for option '" + arg + "'", nfe);
+                    }
                 }
             }
             if (!parsed) {

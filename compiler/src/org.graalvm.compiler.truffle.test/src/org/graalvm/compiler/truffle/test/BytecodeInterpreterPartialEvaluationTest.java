@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -95,7 +97,7 @@ public class BytecodeInterpreterPartialEvaluationTest extends PartialEvaluationT
         }
     }
 
-    @TruffleBoundary(throwsControlFlowException = true)
+    @TruffleBoundary(transferToInterpreterOnException = false)
     static void boundary() {
     }
 
@@ -113,11 +115,11 @@ public class BytecodeInterpreterPartialEvaluationTest extends PartialEvaluationT
             stack = new FrameSlot[maxStack];
             for (int i = 0; i < maxLocals; ++i) {
                 locals[i] = this.getFrameDescriptor().addFrameSlot("local" + i);
-                locals[i].setKind(FrameSlotKind.Int);
+                this.getFrameDescriptor().setFrameSlotKind(locals[i], FrameSlotKind.Int);
             }
             for (int i = 0; i < maxStack; ++i) {
                 stack[i] = this.getFrameDescriptor().addFrameSlot("stack" + i);
-                stack[i].setKind(FrameSlotKind.Int);
+                this.getFrameDescriptor().setFrameSlotKind(stack[i], FrameSlotKind.Int);
             }
         }
 
@@ -543,7 +545,6 @@ public class BytecodeInterpreterPartialEvaluationTest extends PartialEvaluationT
 
     @Test(timeout = 5000)
     public void manyIfsProgram() {
-        initializeForTimeout();
         byte[] bytecodes = new byte[]{
                         /* 0: */Bytecode.CONST,
                         /* 1: */40,

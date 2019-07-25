@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api;
 
@@ -44,21 +60,43 @@ public final class Scope {
     private final Node node;
     private final Object arguments;
     private final Object variables;
+    private final Object receiver;
+    private final String receiverName;
 
     private Scope() {
         name = null;
         node = null;
         arguments = null;
         variables = null;
+        receiver = null;
+        receiverName = null;
     }
 
-    Scope(String name, Node node, Object arguments, Object variables) {
+    Scope(String name, Node node, Object arguments, Object variables, Object receiver, String receiverName) {
         this.name = name;
         this.node = node;
-        assert arguments == null || TruffleLanguage.AccessAPI.interopAccess().isTruffleObject(arguments) : Objects.toString(arguments);
+        assertNullOrTruffleObject(arguments);
         this.arguments = arguments;
-        assert TruffleLanguage.AccessAPI.interopAccess().isTruffleObject(variables) : Objects.toString(variables);
+        assertTruffleObject(variables);
         this.variables = variables;
+        assertNullOrInteropType(receiver);
+        this.receiver = receiver;
+        this.receiverName = receiverName;
+    }
+
+    private static boolean assertTruffleObject(Object obj) {
+        assert LanguageAccessor.interopAccess().isTruffleObject(obj) : Objects.toString(obj);
+        return true;
+    }
+
+    private static void assertNullOrTruffleObject(Object obj) {
+        assert obj == null || assertTruffleObject(obj);
+    }
+
+    private static void assertNullOrInteropType(Object obj) {
+        if (obj != null) {
+            LanguageAccessor.interopAccess().checkInteropType(obj);
+        }
     }
 
     /**
@@ -134,6 +172,32 @@ public final class Scope {
     }
 
     /**
+     * Get a receiver object of this scope. The receiver object is represented as <code>this</code>
+     * in Java or JavaScript and <code>self</code> in Ruby, for instance.
+     * <p>
+     * The scope that represents the function provide receiver object, if there is one, other scopes
+     * do not provide it, unless they override it.
+     *
+     * @return the receiver object, or <code>null</code> when there is no receiver
+     * @since 19.0
+     * @see #getReceiverName()
+     */
+    public Object getReceiver() {
+        return receiver;
+    }
+
+    /**
+     * Get code name of the receiver object, if there is any.
+     *
+     * @return the code name of {@link #getReceiver() receiver object}, or <code>null</code>.
+     * @since 19.0
+     * @see #getReceiver()
+     */
+    public String getReceiverName() {
+        return receiverName;
+    }
+
+    /**
      * Builder to create a new {@link Scope} object.
      *
      * @since 0.30
@@ -144,10 +208,12 @@ public final class Scope {
         private Node node;
         private Object arguments;
         private final Object variables;
+        private Object receiver;
+        private String receiverName;
 
         Builder(String name, Object variables) {
             assert name != null;
-            assert TruffleLanguage.AccessAPI.interopAccess().isTruffleObject(variables) : Objects.toString(variables);
+            assertTruffleObject(variables);
             this.name = name;
             this.variables = variables;
         }
@@ -176,8 +242,27 @@ public final class Scope {
          */
         @SuppressWarnings("hiding")
         public Builder arguments(Object arguments) {
-            assert arguments == null || TruffleLanguage.AccessAPI.interopAccess().isTruffleObject(arguments) : Objects.toString(arguments);
+            assertNullOrTruffleObject(arguments);
             this.arguments = arguments;
+            return this;
+        }
+
+        /**
+         * Set a receiver object of this scope. The receiver object is represented as
+         * <code>this</code> in Java or JavaScript and <code>self</code> in Ruby, for instance.
+         * <p>
+         * The scope that represents the function provide receiver object, if there is one, other
+         * scopes do not provide it, unless they override it.
+         *
+         * @param name code name of the receiver object
+         * @param receiver the receiver object
+         * @since 19.0
+         */
+        @SuppressWarnings("hiding")
+        public Builder receiver(String name, Object receiver) {
+            assertNullOrInteropType(receiver);
+            this.receiverName = name;
+            this.receiver = receiver;
             return this;
         }
 
@@ -187,7 +272,7 @@ public final class Scope {
          * @since 0.30
          */
         public Scope build() {
-            return new Scope(name, node, arguments, variables);
+            return new Scope(name, node, arguments, variables, receiver, receiverName);
         }
     }
 }

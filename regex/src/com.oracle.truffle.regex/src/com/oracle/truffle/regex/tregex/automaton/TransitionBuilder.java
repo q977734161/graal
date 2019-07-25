@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,27 +24,86 @@
  */
 package com.oracle.truffle.regex.tregex.automaton;
 
-import com.oracle.truffle.regex.tregex.matchers.MatcherBuilder;
+import com.oracle.truffle.regex.charset.CharSet;
+import com.oracle.truffle.regex.tregex.util.json.Json;
+import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
+import com.oracle.truffle.regex.tregex.util.json.JsonValue;
 
-public abstract class TransitionBuilder<SS> {
+import static com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 
-    private TransitionBuilder<SS> next;
+/**
+ * This class represents a power-set automaton state transition fragment to be used by
+ * {@link StateTransitionCanonicalizer}.<br>
+ * A transition in a power-set automaton consists of a set of transitions of the NFA that the
+ * power-set automaton is being built from.
+ *
+ * @param <TS> a type that should represent the set of NFA transitions currently contained in this
+ *            fragment.
+ */
+public class TransitionBuilder<TS extends TransitionSet> implements JsonConvertible {
 
-    public TransitionBuilder<SS> getNext() {
+    private final TS transitionSet;
+    private CharSet matcherBuilder;
+    private TransitionBuilder<TS> next;
+
+    public TransitionBuilder(TS transitionSet, CharSet matcherBuilder) {
+        this.transitionSet = transitionSet;
+        this.matcherBuilder = matcherBuilder;
+    }
+
+    /**
+     * Represents the set of NFA transitions currently contained in this transition fragment.
+     */
+    public TS getTransitionSet() {
+        return transitionSet;
+    }
+
+    /**
+     * Represents the character set matched by this transition fragment.
+     */
+    public CharSet getMatcherBuilder() {
+        return matcherBuilder;
+    }
+
+    public void setMatcherBuilder(CharSet matcherBuilder) {
+        this.matcherBuilder = matcherBuilder;
+    }
+
+    /**
+     * Used by {@link StateTransitionCanonicalizer} for creating linked lists of
+     * {@link TransitionBuilder} instances on the fly.
+     */
+    public TransitionBuilder<TS> getNext() {
         return next;
     }
 
-    public void setNext(TransitionBuilder<SS> next) {
+    /**
+     * Used by {@link StateTransitionCanonicalizer} for creating linked lists of
+     * {@link TransitionBuilder} instances on the fly.
+     */
+    public void setNext(TransitionBuilder<TS> next) {
         this.next = next;
     }
 
-    public abstract MatcherBuilder getMatcherBuilder();
+    /**
+     * Merge {@code this} and {@code other} into a newly created {@link TransitionBuilder} . The new
+     * {@code transitionSet} is created by calling {@link TransitionSet#createMerged(TransitionSet)}
+     * on {@code this.transitionSet} with {@code other.transitionSet} as parameter. The
+     * {@code matcherBuilder} of the new {@link TransitionBuilder} will be set to
+     * {@code mergedMatcher} directly.
+     * 
+     * @return the newly created {@link TransitionBuilder}. Overriding classes are expected to
+     *         return an instance of their own type!
+     */
+    @SuppressWarnings("unchecked")
+    public TransitionBuilder<TS> createMerged(TransitionBuilder<TS> other, CharSet mergedMatcher) {
+        return new TransitionBuilder<>((TS) transitionSet.createMerged(other.transitionSet), mergedMatcher);
+    }
 
-    public abstract void setMatcherBuilder(MatcherBuilder matcherBuilder);
-
-    public abstract SS getTransitionSet();
-
-    public abstract TransitionBuilder<SS> createMerged(TransitionBuilder<SS> other, MatcherBuilder mergedMatcher);
-
-    public abstract void mergeInPlace(TransitionBuilder<SS> other, MatcherBuilder mergedMatcher);
+    @TruffleBoundary
+    @Override
+    public JsonValue toJson() {
+        return Json.obj(Json.prop("matcherBuilder", getMatcherBuilder()),
+                        Json.prop("transitionSet", getTransitionSet()));
+    }
 }

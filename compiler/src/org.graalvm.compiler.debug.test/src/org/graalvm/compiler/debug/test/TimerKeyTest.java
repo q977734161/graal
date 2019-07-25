@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -37,6 +39,7 @@ import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.serviceprovider.GraalServices;
 import org.junit.Assume;
+import org.junit.AssumptionViolatedException;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -45,7 +48,18 @@ public class TimerKeyTest {
 
     @Before
     public void checkCapabilities() {
+        assumeManagementLibraryIsLoadable();
         Assume.assumeTrue("skipping management interface test", GraalServices.isCurrentThreadCpuTimeSupported());
+    }
+
+    /** @see <a href="https://bugs.openjdk.java.net/browse/JDK-8076557">JDK-8076557</a> */
+    static void assumeManagementLibraryIsLoadable() {
+        try {
+            /* Trigger loading of the management library using the bootstrap class loader. */
+            GraalServices.getCurrentThreadAllocatedBytes();
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError | UnsupportedOperationException e) {
+            throw new AssumptionViolatedException("Management interface is unavailable: " + e);
+        }
     }
 
     /**

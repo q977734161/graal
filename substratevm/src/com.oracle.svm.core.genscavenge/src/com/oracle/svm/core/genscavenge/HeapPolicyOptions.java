@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -35,6 +37,12 @@ public class HeapPolicyOptions {
     @Option(help = "The maximum heap size as percent of physical memory") //
     public static final RuntimeOptionKey<Integer> MaximumHeapSizePercent = new RuntimeOptionKey<>(80);
 
+    @Option(help = "The maximum size of the young generation as a percent of the maximum heap size") //
+    public static final RuntimeOptionKey<Integer> MaximumYoungGenerationSizePercent = new RuntimeOptionKey<>(10);
+
+    @Option(help = "Bytes that can be allocated before asking what the physical memory size is") //
+    public static final HostedOptionKey<Long> AllocationBeforePhysicalMemorySize = new HostedOptionKey<>(1L * 1024L * 1024L);
+
     @Option(help = "The size of an aligned chunk.") //
     public static final HostedOptionKey<Long> AlignedHeapChunkSize = new HostedOptionKey<>(1L * 1024L * 1024L);
 
@@ -58,7 +66,7 @@ public class HeapPolicyOptions {
     public static final HostedOptionKey<Boolean> ZapConsumedHeapChunks = new HostedOptionKey<>(false);
 
     /* Should heap chunks be traced during collections? */
-    @Option(help = "Trace heap chunks during collections") //
+    @Option(help = "Trace heap chunks during collections, if +VerboseGC and +PrintHeapShape.") //
     public static final RuntimeOptionKey<Boolean> TraceHeapChunks = new RuntimeOptionKey<>(false);
 
     @Option(help = "Policy used when users request garbage collection.")//

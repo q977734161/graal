@@ -1,30 +1,54 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.tck.tests;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -32,14 +56,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyArray;
+import org.graalvm.polyglot.proxy.ProxyDate;
+import org.graalvm.polyglot.proxy.ProxyDuration;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyObject;
+import org.graalvm.polyglot.proxy.ProxyTime;
+import org.graalvm.polyglot.proxy.ProxyTimeZone;
 import org.graalvm.polyglot.tck.LanguageProvider;
 import org.graalvm.polyglot.tck.Snippet;
 import org.graalvm.polyglot.tck.TypeDescriptor;
@@ -63,15 +92,37 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
         primitives.put(Byte.class, Primitive.create("byte", Byte.MIN_VALUE, TypeDescriptor.NUMBER));
         primitives.put(Short.class, Primitive.create("short", Short.MIN_VALUE, TypeDescriptor.NUMBER));
         primitives.put(Character.class, Primitive.create("char", ' ', TypeDescriptor.STRING));
-        primitives.put(Integer.class, Primitive.create("int", Integer.MAX_VALUE, TypeDescriptor.NUMBER));   // Integer.MIN_VALUE
-                                                                                                            // is
-                                                                                                            // NA
-                                                                                                            // for
-                                                                                                            // fast-r
+        primitives.put(Integer.class, Primitive.create("int", Integer.MIN_VALUE, TypeDescriptor.NUMBER));
         primitives.put(Long.class, Primitive.create("long", Long.MIN_VALUE, TypeDescriptor.NUMBER));
         primitives.put(Float.class, Primitive.create("float", Float.MAX_VALUE, TypeDescriptor.NUMBER));
         primitives.put(Double.class, Primitive.create("double", Double.MAX_VALUE, TypeDescriptor.NUMBER));
         primitives.put(String.class, Primitive.create("java.lang.String", "TEST", TypeDescriptor.STRING));
+
+        primitives.put(Instant.class, Primitive.create("java.time.Instant", Instant.now(),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.DATE, TypeDescriptor.TIME, TypeDescriptor.TIME_ZONE)));
+        primitives.put(LocalDate.class, Primitive.create("java.time.LocalDate", LocalDate.now(), TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.DATE)));
+        primitives.put(LocalTime.class, Primitive.create("java.time.LocalTime", LocalTime.now(), TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.TIME)));
+        primitives.put(LocalDateTime.class, Primitive.create("java.time.LocalDateTime", LocalDateTime.now(),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.TIME, TypeDescriptor.DATE)));
+        primitives.put(ZonedDateTime.class, Primitive.create("java.time.ZonedDateTime", ZonedDateTime.now(),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.TIME, TypeDescriptor.DATE, TypeDescriptor.TIME_ZONE)));
+        primitives.put(ZoneId.class,
+                        Primitive.create("java.time.ZoneId", ZoneId.systemDefault(),
+                                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.TIME_ZONE)));
+        primitives.put(Duration.class,
+                        Primitive.create("java.time.Duration", Duration.ofMillis(42), TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.DURATION)));
+        primitives.put(ProxyDate.class,
+                        Primitive.create("ProxyDate", ProxyDate.from(LocalDate.now()),
+                                        TypeDescriptor.intersection(TypeDescriptor.DATE)));
+        primitives.put(ProxyTime.class,
+                        Primitive.create("ProxyTime", ProxyTime.from(LocalTime.now()),
+                                        TypeDescriptor.intersection(TypeDescriptor.TIME)));
+        primitives.put(ProxyTimeZone.class,
+                        Primitive.create("ProxyTimeZone", ProxyTimeZone.from(ZoneId.of("UTC")),
+                                        TypeDescriptor.intersection(TypeDescriptor.TIME_ZONE)));
+        primitives.put(ProxyDuration.class,
+                        Primitive.create("ProxyDuration", ProxyDuration.from(Duration.ofMillis(100)),
+                                        TypeDescriptor.intersection(TypeDescriptor.DURATION)));
 
         // Java primitives
         for (Primitive primitive : primitives.values()) {
@@ -82,10 +133,6 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
                         TypeDescriptor.array(TypeDescriptor.NUMBER)).build());
         result.add(Snippet.newBuilder("Array<java.lang.Object>", export(context, new ValueSupplier<>(new Object[]{1, "TEST"})),
                         TypeDescriptor.array(TypeDescriptor.union(TypeDescriptor.NUMBER, TypeDescriptor.STRING))).build());
-        // Primitive Proxies
-        for (Primitive primitive : primitives.values()) {
-            result.add(createProxyPrimitive(context, primitive));
-        }
         // Array Proxies
         result.add(createProxyArray(context, null));
         for (Primitive primitive : primitives.values()) {
@@ -113,6 +160,33 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
                         primitives.get(String.class)}) {
             result.add(createProxyExecutable(context, primitive));
         }
+        result.add(Snippet.newBuilder(
+                        "java.lang.Object",
+                        export(context, new ValueSupplier<>(new Object())),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT)).build());
+        result.add(Snippet.newBuilder(
+                        "POJO",
+                        export(context, new ValueSupplier<>(new Complex(1, 2))),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT)).build());
+        result.add(Snippet.newBuilder(
+                        "java.util.List<Integer>",
+                        export(context, new ValueSupplier<>(new ArrayList<>(Arrays.asList(1, 2)))),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.array(TypeDescriptor.NUMBER))).build());
+        Function<Object, Object> func = new Function<Object, Object>() {
+            @Override
+            public Object apply(Object t) {
+                return t;
+            }
+        };
+        result.add(Snippet.newBuilder(
+                        "java.util.function.Function<Object,Object>",
+                        export(context, new ValueSupplier<>(func)),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT, TypeDescriptor.executable(TypeDescriptor.ANY, false, TypeDescriptor.ANY))).build());
+        result.add(Snippet.newBuilder(
+                        "java.lang.Class<java.lang.Object>",
+                        export(context, new ValueSupplier<>(Object.class)),
+                        TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT,
+                                        TypeDescriptor.instantiable(TypeDescriptor.intersection(TypeDescriptor.HOST_OBJECT, TypeDescriptor.OBJECT), false))).build());
         return Collections.unmodifiableCollection(result);
     }
 
@@ -155,15 +229,6 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
                         primitive.type).build();
     }
 
-    private static Snippet createProxyPrimitive(
-                    final Context context,
-                    final Primitive primitive) {
-        return Snippet.newBuilder(
-                        String.format("Proxy<%s>", primitive.name),
-                        export(context, new ValueSupplier<>(new ProxyPrimitiveImpl(primitive.value))),
-                        primitive.type).build();
-    }
-
     private static Snippet createProxyArray(
                     final Context context,
                     final Primitive primitive) {
@@ -187,21 +252,6 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
 
     private static Value export(final Context context, final Supplier<Object> s) {
         return context.asValue(s);
-    }
-
-    @SuppressWarnings("deprecation")
-    private static final class ProxyPrimitiveImpl implements org.graalvm.polyglot.proxy.ProxyPrimitive {
-        private final Object primitiveValue;
-
-        ProxyPrimitiveImpl(final Object primitiveValue) {
-            Objects.requireNonNull(primitiveValue);
-            this.primitiveValue = primitiveValue;
-        }
-
-        @Override
-        public Object asPrimitive() {
-            return primitiveValue;
-        }
     }
 
     private static final class ValueSupplier<T> implements Supplier<T> {
@@ -322,6 +372,20 @@ public final class JavaHostLanguageProvider implements LanguageProvider {
             } else {
                 return EMPTY;
             }
+        }
+    }
+
+    public static final class Complex {
+        public double real;
+        public double imag;
+
+        Complex(double real, double imag) {
+            this.real = real;
+            this.imag = imag;
+        }
+
+        public double abs() {
+            return Math.sqrt(real * real + imag * imag);
         }
     }
 }

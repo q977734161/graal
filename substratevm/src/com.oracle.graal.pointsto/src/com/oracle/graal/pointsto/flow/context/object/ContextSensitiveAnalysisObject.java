@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,7 @@ import com.oracle.graal.pointsto.flow.ArrayElementsTypeFlow;
 import com.oracle.graal.pointsto.flow.FieldFilterTypeFlow;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.typestore.FieldTypeStore;
@@ -44,7 +47,7 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
 
     public ContextSensitiveAnalysisObject(AnalysisUniverse universe, AnalysisType type, AnalysisObjectKind kind) {
         super(universe, type, kind);
-        assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(universe.getHostVM().options());
+        assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(universe.hostVM().options());
     }
 
     /** The object has been in contact with an context insensitive object in an union operation. */
@@ -121,10 +124,10 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
 
     /** Returns the filter field flow corresponding to an unsafe accessed field. */
     @Override
-    public FieldFilterTypeFlow getInstanceFieldFilterFlow(BigBang bb, AnalysisField field) {
+    public FieldFilterTypeFlow getInstanceFieldFilterFlow(BigBang bb, AnalysisMethod context, AnalysisField field) {
         assert !Modifier.isStatic(field.getModifiers()) && field.isUnsafeAccessed() && PointstoOptions.AllocationSiteSensitiveHeap.getValue(bb.getOptions());
 
-        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, field);
+        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, context, field);
 
         if (merged) {
             /*
@@ -138,10 +141,10 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
     }
 
     @Override
-    public FieldTypeFlow getInstanceFieldFlow(BigBang bb, AnalysisField field, boolean isStore) {
+    public FieldTypeFlow getInstanceFieldFlow(BigBang bb, AnalysisMethod context, AnalysisField field, boolean isStore) {
         assert !Modifier.isStatic(field.getModifiers()) && PointstoOptions.AllocationSiteSensitiveHeap.getValue(bb.getOptions());
 
-        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, field);
+        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, context, field);
 
         if (merged) {
             /*

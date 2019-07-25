@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,7 +36,7 @@ import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import org.graalvm.nativeimage.IsolateThread;
 
-import com.oracle.svm.core.amd64.FrameAccess;
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 
 @NodeInfo(cycles = NodeCycles.CYCLES_1, size = NodeSize.SIZE_1)
@@ -52,7 +54,7 @@ public class WriteCurrentVMThreadNode extends FixedWithNextNode implements LIRLo
     public void generate(NodeLIRBuilderTool gen) {
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
         SubstrateRegisterConfig registerConfig = (SubstrateRegisterConfig) tool.getRegisterConfig();
-        gen.getLIRGeneratorTool().emitMove(registerConfig.getThreadRegister().asValue(tool.getLIRKind(FrameAccess.getWordStamp())), gen.operand(value));
+        gen.getLIRGeneratorTool().emitWriteRegister(registerConfig.getThreadRegister(), gen.operand(value), tool.getLIRKind(FrameAccess.getWordStamp()));
     }
 
     @NodeIntrinsic

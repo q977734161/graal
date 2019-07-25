@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,7 +34,7 @@ import org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage;
 import org.graalvm.compiler.hotspot.meta.HotSpotProviders;
 import org.graalvm.compiler.hotspot.nodes.AllocaNode;
 import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.serviceprovider.GraalServices;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.compiler.word.Word;
 
 import jdk.vm.ci.code.Register;
@@ -46,7 +48,7 @@ public class OutOfBoundsExceptionStub extends CreateExceptionStub {
     }
 
     // JDK-8201593: Print array length in ArrayIndexOutOfBoundsException.
-    private static final boolean PRINT_LENGTH_IN_EXCEPTION = GraalServices.JAVA_SPECIFICATION_VERSION >= 11;
+    private static final boolean PRINT_LENGTH_IN_EXCEPTION = JavaVersionUtil.JAVA_SPEC >= 11;
     private static final int MAX_INT_STRING_SIZE = Integer.toString(Integer.MIN_VALUE).length();
     private static final String STR_INDEX = "Index ";
     private static final String STR_OUTOFBOUNDSFORLENGTH = " out of bounds for length ";

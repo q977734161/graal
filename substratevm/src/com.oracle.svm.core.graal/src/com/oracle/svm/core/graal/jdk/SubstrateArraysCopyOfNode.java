@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -114,7 +116,7 @@ public final class SubstrateArraysCopyOfNode extends DeoptimizingFixedWithNextNo
 
         /* from index is always 0 for Arrays.copyOf. */
         ValueNode from = ConstantNode.forInt(0);
-        ResolvedJavaType newComponentType = tool.getConstantReflectionProvider().asJavaType(newArrayType.asConstant()).getComponentType();
+        ResolvedJavaType newComponentType = tool.getConstantReflection().asJavaType(newArrayType.asConstant()).getComponentType();
         GraphUtil.virtualizeArrayCopy(tool, original, originalLength, newLength, from, newComponentType, JavaKind.Object, graph(),
                         (componentType, length) -> new SubstrateVirtualArrayNode(componentType, length));
     }

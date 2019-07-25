@@ -2,25 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.instrumentation.test;
 
@@ -53,54 +69,68 @@ public class InstrumentationEventTest {
     protected ExecutionEventNodeFactory factory;
     protected Error error;
 
+    protected class CollectEventsNode extends ExecutionEventNode {
+
+        final EventContext c;
+
+        CollectEventsNode(EventContext context) {
+            for (int i = 0; i < getInputCount(); i++) {
+                Assert.assertNotNull(getInputContext(i));
+            }
+            this.c = context;
+        }
+
+        @Override
+        protected void onInputValue(VirtualFrame frame, EventContext inputContext, int inputIndex, Object inputValue) {
+            saveInputValue(frame, inputIndex, inputValue);
+
+            assertTrue(inputIndex < getInputCount());
+            assertSame(inputContext, getInputContext(inputIndex));
+
+            events.add(new Event(EventKind.INPUT_VALUE, c, frame, null, null, inputIndex, inputValue, createInputContexts(), null));
+        }
+
+        @Override
+        protected Object onUnwind(VirtualFrame frame, Object info) {
+            events.add(new Event(EventKind.UNWIND, c, frame, null, null, -1, null, createInputContexts(), info));
+            return super.onUnwind(frame, info);
+        }
+
+        @Override
+        public void onEnter(VirtualFrame frame) {
+            // Needs to be materialized because of running with immediate compilation
+            events.add(new Event(EventKind.ENTER, c, frame.materialize(), null, null, -1, null, createInputContexts(), null));
+        }
+
+        @Override
+        protected void onReturnValue(VirtualFrame frame, Object result) {
+            events.add(new Event(EventKind.RETURN_VALUE, c, frame, getSavedInputValues(frame), result, -1, null, createInputContexts(), null));
+        }
+
+        private EventContext[] createInputContexts() {
+            EventContext[] inputContexts = new EventContext[getInputCount()];
+            for (int i = 0; i < getInputCount(); i++) {
+                Assert.assertNotNull(getInputContext(i));
+                inputContexts[i] = getInputContext(i);
+            }
+            return inputContexts;
+        }
+    }
+
+    protected class CollectEventsFactory implements ExecutionEventNodeFactory {
+        @Override
+        public ExecutionEventNode create(EventContext c) {
+            return new CollectEventsNode(c);
+        }
+    }
+
     @Before
     public final void setUp() {
         this.context = Context.create();
         this.instrument = context.getEngine().getInstruments().get(InputFilterTestInstrument.ID).lookup(InputFilterTestInstrument.class);
         this.instrumenter = instrument.environment.getInstrumenter();
         this.events = new ArrayList<>();
-        this.factory = new ExecutionEventNodeFactory() {
-
-            public ExecutionEventNode create(EventContext c) {
-                return new ExecutionEventNode() {
-                    {
-                        for (int i = 0; i < getInputCount(); i++) {
-                            Assert.assertNotNull(getInputContext(i));
-                        }
-                    }
-
-                    @Override
-                    protected void onInputValue(VirtualFrame frame, EventContext inputContext, int inputIndex, Object inputValue) {
-                        saveInputValue(frame, inputIndex, inputValue);
-
-                        assertTrue(inputIndex < getInputCount());
-                        assertSame(inputContext, getInputContext(inputIndex));
-
-                        events.add(new Event(EventKind.INPUT_VALUE, c, frame, null, null, inputIndex, inputValue, createInputContexts()));
-                    }
-
-                    @Override
-                    public void onEnter(VirtualFrame frame) {
-                        events.add(new Event(EventKind.ENTER, c, frame, null, null, -1, null, createInputContexts()));
-                    }
-
-                    @Override
-                    protected void onReturnValue(VirtualFrame frame, Object result) {
-                        events.add(new Event(EventKind.RETURN_VALUE, c, frame, getSavedInputValues(frame), result, -1, null, createInputContexts()));
-                    }
-
-                    private EventContext[] createInputContexts() {
-                        EventContext[] inputContexts = new EventContext[getInputCount()];
-                        for (int i = 0; i < getInputCount(); i++) {
-                            Assert.assertNotNull(getInputContext(i));
-                            inputContexts[i] = getInputContext(i);
-                        }
-                        return inputContexts;
-                    }
-
-                };
-            }
-        };
+        this.factory = new CollectEventsFactory();
     }
 
     protected final void execute(org.graalvm.polyglot.Source source) {
@@ -147,7 +177,8 @@ public class InstrumentationEventTest {
     enum EventKind {
         ENTER,
         INPUT_VALUE,
-        RETURN_VALUE
+        RETURN_VALUE,
+        UNWIND,
     }
 
     protected static class Event {
@@ -160,8 +191,9 @@ public class InstrumentationEventTest {
         public final int inputValueIndex;
         public final Object inputValue;
         public final EventContext[] inputContexts;
+        public final Object unwindValue;
 
-        Event(EventKind kind, EventContext context, VirtualFrame frame, Object[] inputs, Object result, int index, Object inputValue, EventContext[] inputContexts) {
+        Event(EventKind kind, EventContext context, VirtualFrame frame, Object[] inputs, Object result, int index, Object inputValue, EventContext[] inputContexts, Object unwindValue) {
             this.kind = kind;
             this.context = context;
             this.frame = frame;
@@ -170,6 +202,7 @@ public class InstrumentationEventTest {
             this.inputValue = inputValue;
             this.inputValueIndex = index;
             this.inputContexts = inputContexts;
+            this.unwindValue = unwindValue;
         }
 
         @Override
